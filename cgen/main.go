@@ -83,6 +83,19 @@ func createValueRelName(value ssa.Value) string {
 	}
 }
 
+func createType(typ types.Type) string {
+	switch t := typ.(type) {
+	case *types.Basic:
+		switch t.Kind() {
+		case types.Bool, types.Int, types.Int8, types.Int16, types.Int32, types.Int64, types.Uint, types.Uint8, types.Uint16, types.Uint32, types.Uint64, types.Uintptr:
+			return "intptr_t"
+		}
+	case *types.Chan:
+		return "intptr_t"
+	}
+	panic("type not supported: " + typ.String())
+}
+
 func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 	fmt.Fprintf(ctx.stream, "\t// %T instruction\n", instruction)
 	switch instr := instruction.(type) {
@@ -267,7 +280,7 @@ func (ctx *Context) emitValueDeclaration(value ssa.Value) {
 
 	fmt.Fprintf(ctx.stream, "\t// found %T: %s, %s\n", value, createValueName(value), value.String())
 	if canEmit {
-		fmt.Fprintf(ctx.stream, "\tintptr_t %s; // %s\n", createValueName(value), value.String())
+		fmt.Fprintf(ctx.stream, "\t%s %s; // %s : %s\n", createType(value.Type()), createValueName(value), value.String(), value.Type())
 	}
 }
 
@@ -290,7 +303,7 @@ struct StackFrame_%s {
 	struct StackFrameCommon common;
 `, createFunctionName(function))
 	for i := len(function.Params) - 1; i >= 0; i-- {
-		fmt.Fprintf(ctx.stream, "\tintptr_t %s; // parameter[%d]: %s\n", createValueName(function.Params[i]), i, function.Params[i].String())
+		fmt.Fprintf(ctx.stream, "\t%s %s; // parameter[%d]: %s\n", createType(function.Params[i].Type()), createValueName(function.Params[i]), i, function.Params[i].String())
 	}
 
 	if function.Blocks != nil {
@@ -363,7 +376,7 @@ void* %s (struct LightWeightThreadContext* ctx) {
 				}
 			}
 			if requireLoadFunctionResult {
-				fmt.Fprintf(ctx.stream, "%s = *(%s*)(ctx->stack_pointer + sizeof(*frame)); // ATTENTION: return value\n", createValueRelName(instr.(ssa.Value)), "intptr_t")
+				fmt.Fprintf(ctx.stream, "%s = *(%s /* %s */ *)(ctx->stack_pointer + sizeof(*frame)); // ATTENTION: return value\n", createValueRelName(instr.(ssa.Value)), createType(instr.(ssa.Value).Type()), instr.(ssa.Value).Type())
 			}
 		}
 
