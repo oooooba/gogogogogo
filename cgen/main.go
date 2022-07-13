@@ -87,11 +87,13 @@ func createType(typ types.Type) string {
 	switch t := typ.(type) {
 	case *types.Basic:
 		switch t.Kind() {
-		case types.Bool, types.Int, types.Int8, types.Int16, types.Int32, types.Int64, types.Uint, types.Uint8, types.Uint16, types.Uint32, types.Uint64, types.Uintptr:
+		case types.Bool:
+			return "bool"
+		case types.Int, types.Int8, types.Int16, types.Int32, types.Int64, types.Uint, types.Uint8, types.Uint16, types.Uint32, types.Uint64, types.Uintptr:
 			return "intptr_t"
 		}
 	case *types.Chan:
-		return "intptr_t"
+		return "void*"
 	}
 	panic("type not supported: " + typ.String())
 }
@@ -412,13 +414,13 @@ void* gox5_make_chan (struct LightWeightThreadContext* ctx);
 
 struct StackFrameRecv {
 	struct StackFrameCommon common;
-	intptr_t channel; // ATTENTION
+	void* channel; // ATTENTION
 };
 void* gox5_recv (struct LightWeightThreadContext* ctx);
 
 struct StackFrameSend {
 	struct StackFrameCommon common;
-	intptr_t channel; // ATTENTION
+	void* channel; // ATTENTION
 	intptr_t data;
 };
 void* gox5_send (struct LightWeightThreadContext* ctx);
@@ -427,7 +429,7 @@ struct StackFrameSpawn {
 	struct StackFrameCommon common;
     void* func;
 	// ATTENTION: number of arguments fixed
-	intptr_t arg0; // ATTENTION: arg0 is treated as channel
+	void* arg0; // ATTENTION: arg0 is treated as channel
 	intptr_t arg1;
 	intptr_t arg2;
 };
