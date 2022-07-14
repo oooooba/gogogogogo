@@ -216,7 +216,7 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 	return gox5_recv;
 `, createInstructionName(instr), createValueRelName(instr.X))
 		} else {
-			fmt.Fprintf(ctx.stream, "%s = %s %s;\n", createValueRelName(instr), createValueRelName(instr.X), instr.Op.String())
+			fmt.Fprintf(ctx.stream, "%s = %s %s;\n", createValueRelName(instr), instr.Op.String(), createValueRelName(instr.X))
 		}
 
 	default:
