@@ -94,6 +94,25 @@ func createType(typ types.Type) string {
 		}
 	case *types.Chan:
 		return "void*"
+	case *types.Pointer:
+		return "void*"
+	}
+	panic("type not supported: " + typ.String())
+}
+
+func calculateTypeSize(typ types.Type) int64 {
+	switch t := typ.(type) {
+	case *types.Basic:
+		switch t.Kind() {
+		case types.Bool:
+			return 1
+		case types.Int, types.Int8, types.Int16, types.Int32, types.Int64, types.Uint, types.Uint8, types.Uint16, types.Uint32, types.Uint64, types.Uintptr:
+			return 8
+		}
+	case *types.Chan:
+		return 8
+	case *types.Pointer:
+		return 8
 	}
 	panic("type not supported: " + typ.String())
 }
@@ -101,6 +120,21 @@ func createType(typ types.Type) string {
 func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 	fmt.Fprintf(ctx.stream, "\t// %T instruction\n", instruction)
 	switch instr := instruction.(type) {
+	case *ssa.Alloc:
+		if instr.Heap {
+			size := calculateTypeSize(instr.Type().Underlying().(*types.Pointer).Elem())
+			fmt.Fprintf(ctx.stream, `
+	struct StackFrameNew* next_frame = (struct StackFrameNew*)(ctx->stack_pointer + sizeof(*frame));
+	next_frame->common.resume_func = %s;
+	next_frame->common.prev_stack_pointer = ctx->stack_pointer;
+	next_frame->size = %d;
+	ctx->stack_pointer = next_frame;
+	return gox5_new;
+`, createInstructionName(instr), size)
+		} else {
+			panic("unimplemented")
+		}
+
 	case *ssa.BinOp:
 		fmt.Fprintf(ctx.stream, "%s = %s %s %s;\n", createValueRelName(instr), createValueRelName(instr.X), instr.Op.String(), createValueRelName(instr.Y))
 
@@ -205,6 +239,9 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 	return gox5_send;
 `, createInstructionName(instr), createValueRelName(instr.Chan), createValueRelName(instr.X))
 
+	case *ssa.Store:
+		fmt.Fprintf(ctx.stream, "*(%s*)%s = %s;\n", createType(instr.Val.Type()), createValueRelName(instr.Addr), createValueRelName(instr.Val))
+
 	case *ssa.UnOp:
 		if instr.Op == token.ARROW {
 			fmt.Fprintf(ctx.stream, `
@@ -215,6 +252,8 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 	ctx->stack_pointer = next_frame;
 	return gox5_recv;
 `, createInstructionName(instr), createValueRelName(instr.X))
+		} else if instr.Op == token.MUL {
+			fmt.Fprintf(ctx.stream, "%s = * (%s*)%s;\n", createValueRelName(instr), instr.Type(), createValueRelName(instr.X))
 		} else {
 			fmt.Fprintf(ctx.stream, "%s = %s %s;\n", createValueRelName(instr), instr.Op.String(), createValueRelName(instr.X))
 		}
@@ -251,6 +290,13 @@ func (ctx *Context) emitValueDeclaration(value ssa.Value) {
 
 	canEmit := true
 	switch val := value.(type) {
+	case *ssa.Alloc:
+		if val.Heap {
+			// do nothing
+		} else {
+			panic("unimplemented")
+		}
+
 	case *ssa.BinOp:
 		ctx.emitValueDeclaration(val.X)
 		ctx.emitValueDeclaration(val.Y)
@@ -288,6 +334,8 @@ func (ctx *Context) emitValueDeclaration(value ssa.Value) {
 
 func requireSwitchFunction(instruction ssa.Instruction) bool {
 	switch instruction.(type) {
+	case *ssa.Alloc:
+		return instruction.(*ssa.Alloc).Heap
 	case *ssa.Call, *ssa.Go, *ssa.MakeChan, *ssa.Send:
 		return true
 	case *ssa.UnOp:
@@ -370,6 +418,8 @@ void* %s (struct LightWeightThreadContext* ctx) {
 
 			requireLoadFunctionResult := false
 			switch instr.(type) {
+			case *ssa.Alloc:
+				requireLoadFunctionResult = instr.(*ssa.Alloc).Heap
 			case *ssa.Call, *ssa.MakeChan:
 				requireLoadFunctionResult = true
 			case *ssa.UnOp:
@@ -411,6 +461,12 @@ struct StackFrameMakeChan {
 	intptr_t size;
 };
 void* gox5_make_chan (struct LightWeightThreadContext* ctx);
+
+struct StackFrameNew {
+	struct StackFrameCommon common;
+	intptr_t size;
+};
+void* gox5_new (struct LightWeightThreadContext* ctx);
 
 struct StackFrameRecv {
 	struct StackFrameCommon common;

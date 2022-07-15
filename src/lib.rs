@@ -45,6 +45,11 @@ pub extern "C" fn gox5_make_chan(ctx: &mut LightWeightThreadContext) -> NextUser
 }
 
 #[no_mangle]
+pub extern "C" fn gox5_new(ctx: &mut LightWeightThreadContext) -> NextUserFunctionType {
+    api::new(ctx)
+}
+
+#[no_mangle]
 pub extern "C" fn gox5_recv(_ctx: &mut LightWeightThreadContext) -> NextUserFunctionType {
     unreachable!()
 }

@@ -93,6 +93,26 @@ pub fn make_chan(ctx: &mut LightWeightThreadContext) -> NextUserFunctionType {
 }
 
 #[repr(C)]
+struct StackFrameNew {
+    common: StackFrameCommon,
+    size: usize,
+}
+
+pub fn new(ctx: &mut LightWeightThreadContext) -> NextUserFunctionType {
+    let size = unsafe {
+        let stack_frame = &mut ctx.stack_pointer.make_chan;
+        stack_frame.size
+    };
+    let ptr = ctx.global_context.process(|mut global_context| {
+        global_context
+            .allocator()
+            .allocate(size, |_ptr| {
+            })
+    });
+    leave_runtime_api(ctx, NextUserFunctionType(ptr as *mut ()))
+}
+
+#[repr(C)]
 struct StackFrameRecv {
     common: StackFrameCommon,
     channel: ObjectPtr,
@@ -179,6 +199,7 @@ pub union StackFrame {
     pub words: [*mut (); 0],
     common: ManuallyDrop<StackFrameCommon>,
     make_chan: ManuallyDrop<StackFrameMakeChan>,
+    new:  ManuallyDrop<StackFrameNew>,
     recv: ManuallyDrop<StackFrameRecv>,
     send: ManuallyDrop<StackFrameSend>,
     spawn: ManuallyDrop<StackFrameSpawn>,
