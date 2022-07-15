@@ -253,7 +253,7 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 	return gox5_recv;
 `, createInstructionName(instr), createValueRelName(instr.X))
 		} else if instr.Op == token.MUL {
-			fmt.Fprintf(ctx.stream, "%s = * (%s*)%s;\n", createValueRelName(instr), instr.Type(), createValueRelName(instr.X))
+			fmt.Fprintf(ctx.stream, "%s = * (%s*)%s;\n", createValueRelName(instr), createType(instr.Type()), createValueRelName(instr.X))
 		} else {
 			fmt.Fprintf(ctx.stream, "%s = %s %s;\n", createValueRelName(instr), instr.Op.String(), createValueRelName(instr.X))
 		}
