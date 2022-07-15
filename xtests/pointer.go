@@ -13,6 +13,21 @@ func Test1() int {
 	return *b
 }
 
+func Test2() int {
+	a := 2
+	b := &a
+	c := &b
+	return **c
+}
+
+func Test3() int {
+	a := 3
+	b := &a
+	c := &b
+	d := &c
+	return ***d
+}
+
 func main() {
 	runTest := func(test func() int) {
 		funcFullName := runtime.FuncForPC(reflect.ValueOf(test).Pointer()).Name()
@@ -20,4 +35,6 @@ func main() {
 		fmt.Printf("%s: %d\n", funcName, test())
 	}
 	runTest(Test1)
+	runTest(Test2)
+	runTest(Test3)
 }
