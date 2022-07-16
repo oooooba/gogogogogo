@@ -28,6 +28,25 @@ func Test3() int {
 	return ***d
 }
 
+func test4_f() *int {
+	a := 4
+	return &a
+}
+
+func Test4() int {
+	return *test4_f()
+}
+
+func test5_f() **int {
+	a := 5
+	b := &a
+	return &b
+}
+
+func Test5() int {
+	return **test5_f()
+}
+
 func main() {
 	runTest := func(test func() int) {
 		funcFullName := runtime.FuncForPC(reflect.ValueOf(test).Pointer()).Name()
@@ -37,4 +56,6 @@ func main() {
 	runTest(Test1)
 	runTest(Test2)
 	runTest(Test3)
+	runTest(Test4)
+	runTest(Test5)
 }
