@@ -66,6 +66,16 @@ func Test7() int {
 	return test7_f(&b)
 }
 
+func test8_f(p *int) {
+	*p = 8
+}
+
+func Test8() int {
+	a := 7
+	test8_f(&a)
+	return a
+}
+
 func main() {
 	runTest := func(test func() int) {
 		funcFullName := runtime.FuncForPC(reflect.ValueOf(test).Pointer()).Name()
@@ -79,4 +89,5 @@ func main() {
 	runTest(Test5)
 	runTest(Test6)
 	runTest(Test7)
+	runTest(Test8)
 }

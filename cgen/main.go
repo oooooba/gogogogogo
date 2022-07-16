@@ -152,8 +152,13 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 	struct StackFrame_%s* next_frame = (struct StackFrame_%s*)(ctx->stack_pointer + sizeof(*frame));
 	next_frame->common.resume_func = %s;
 	next_frame->common.prev_stack_pointer = ctx->stack_pointer;
-	next_frame->result_ptr = &%s;
-`, name, name, createInstructionName(instr), createValueRelName(instr))
+`, name, name, createInstructionName(instr))
+			if callee.Signature.Results().Len() > 0 {
+				if callee.Signature.Results().Len() != 1 {
+					panic("only 0 or 1 return value supported")
+				}
+				fmt.Fprintf(ctx.stream, "next_frame->result_ptr = &%s;\n", createValueRelName(instr))
+			}
 			for i, arg := range callCommon.Args {
 				param := callee.Params[i]
 				fmt.Fprintf(ctx.stream, "next_frame->%s = %s; // [%d]: param=%s, arg=%s\n", createValueName(param), createValueRelName(arg), i, param.String(), arg.String())
@@ -224,12 +229,14 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 		fmt.Fprintln(ctx.stream, "\t{ assert(false); }")
 
 	case *ssa.Return:
-		fmt.Fprintf(ctx.stream, `
-	void* resume_func = frame->common.resume_func;
-	ctx->stack_pointer = frame->common.prev_stack_pointer;
-	*frame->result_ptr = %s;
-	return resume_func;
-`, createValueRelName(instr.Results[0]))
+		fmt.Fprintf(ctx.stream, "ctx->stack_pointer = frame->common.prev_stack_pointer;\n")
+		if len(instr.Results) > 0 {
+			if len(instr.Results) != 1 {
+				panic("only 0 or 1 return value supported")
+			}
+			fmt.Fprintf(ctx.stream, "*frame->result_ptr = %s;\n", createValueRelName(instr.Results[0]))
+		}
+		fmt.Fprintf(ctx.stream, "return frame->common.resume_func;\n")
 
 	case *ssa.Send:
 		fmt.Fprintf(ctx.stream, `
@@ -330,6 +337,12 @@ func (ctx *Context) emitValueDeclaration(value ssa.Value) {
 		panic("unknown value: " + value.String())
 	}
 
+	if t, ok := value.Type().(*types.Tuple); ok {
+		if t.Len() == 0 {
+			canEmit = false
+		}
+	}
+
 	fmt.Fprintf(ctx.stream, "\t// found %T: %s, %s\n", value, createValueName(value), value.String())
 	if canEmit {
 		fmt.Fprintf(ctx.stream, "\t%s %s; // %s : %s\n", createType(value.Type()), createValueName(value), value.String(), value.Type())
@@ -352,11 +365,14 @@ func requireSwitchFunction(instruction ssa.Instruction) bool {
 
 func (ctx *Context) emitFunctionDeclaration(function *ssa.Function) {
 	fmt.Fprintf(ctx.stream, "void* %s (struct LightWeightThreadContext* ctx);\n", createFunctionName(function))
-	fmt.Fprintf(ctx.stream, `
-struct StackFrame_%s {
-	struct StackFrameCommon common;
-	%s* result_ptr;
-`, createFunctionName(function), createType(function.Signature.Results().At(0).Type()))
+	fmt.Fprintf(ctx.stream, "struct StackFrame_%s {\n", createFunctionName(function))
+	fmt.Fprintf(ctx.stream, "\tstruct StackFrameCommon common;\n")
+	if function.Signature.Results().Len() > 0 {
+		if function.Signature.Results().Len() != 1 {
+			panic("only 0 or 1 return value supported")
+		}
+		fmt.Fprintf(ctx.stream, "\t%s* result_ptr;\n", createType(function.Signature.Results().At(0).Type()))
+	}
 	for i := len(function.Params) - 1; i >= 0; i-- {
 		fmt.Fprintf(ctx.stream, "\t%s %s; // parameter[%d]: %s\n", createType(function.Params[i].Type()), createValueName(function.Params[i]), i, function.Params[i].String())
 	}
