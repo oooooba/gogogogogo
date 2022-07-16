@@ -127,10 +127,11 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 	struct StackFrameNew* next_frame = (struct StackFrameNew*)(ctx->stack_pointer + sizeof(*frame));
 	next_frame->common.resume_func = %s;
 	next_frame->common.prev_stack_pointer = ctx->stack_pointer;
+	next_frame->result_ptr = &%s;
 	next_frame->size = %d;
 	ctx->stack_pointer = next_frame;
 	return gox5_new;
-`, createInstructionName(instr), size)
+`, createInstructionName(instr), createValueRelName(instr), size)
 		} else {
 			panic("unimplemented")
 		}
@@ -151,7 +152,8 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 	struct StackFrame_%s* next_frame = (struct StackFrame_%s*)(ctx->stack_pointer + sizeof(*frame));
 	next_frame->common.resume_func = %s;
 	next_frame->common.prev_stack_pointer = ctx->stack_pointer;
-`, name, name, createInstructionName(instr))
+	next_frame->result_ptr = &%s;
+`, name, name, createInstructionName(instr), createValueRelName(instr))
 			for i, arg := range callCommon.Args {
 				param := callee.Params[i]
 				fmt.Fprintf(ctx.stream, "next_frame->%s = %s; // [%d]: param=%s, arg=%s\n", createValueName(param), createValueRelName(arg), i, param.String(), arg.String())
@@ -208,10 +210,11 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 	struct StackFrameMakeChan* next_frame = (struct StackFrameMakeChan*)(ctx->stack_pointer + sizeof(*frame));
 	next_frame->common.resume_func = %s;
 	next_frame->common.prev_stack_pointer = ctx->stack_pointer;
+	next_frame->result_ptr = &%s;
 	next_frame->size = %s;
 	ctx->stack_pointer = next_frame;
 	return gox5_make_chan;
-`, createInstructionName(instr), createValueRelName(instr.Size))
+`, createInstructionName(instr), createValueRelName(instr), createValueRelName(instr.Size))
 
 	case *ssa.Phi:
 		basicBlock := instr.Block()
@@ -224,7 +227,7 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 		fmt.Fprintf(ctx.stream, `
 	void* resume_func = frame->common.resume_func;
 	ctx->stack_pointer = frame->common.prev_stack_pointer;
-	frame->common.resume_func = (void*)%s; // ATTENTION: use resume_func to store return value
+	*frame->result_ptr = %s;
 	return resume_func;
 `, createValueRelName(instr.Results[0]))
 
@@ -248,10 +251,11 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 	struct StackFrameRecv* next_frame = (struct StackFrameRecv*)(ctx->stack_pointer + sizeof(*frame));
 	next_frame->common.resume_func = %s;
 	next_frame->common.prev_stack_pointer = ctx->stack_pointer;
+	next_frame->result_ptr = &%s;
 	next_frame->channel = %s;
 	ctx->stack_pointer = next_frame;
 	return gox5_recv;
-`, createInstructionName(instr), createValueRelName(instr.X))
+`, createInstructionName(instr), createValueRelName(instr), createValueRelName(instr.X))
 		} else if instr.Op == token.MUL {
 			fmt.Fprintf(ctx.stream, "%s = * (%s*)%s;\n", createValueRelName(instr), createType(instr.Type()), createValueRelName(instr.X))
 		} else {
@@ -351,7 +355,8 @@ func (ctx *Context) emitFunctionDeclaration(function *ssa.Function) {
 	fmt.Fprintf(ctx.stream, `
 struct StackFrame_%s {
 	struct StackFrameCommon common;
-`, createFunctionName(function))
+	%s* result_ptr;
+`, createFunctionName(function), createType(function.Signature.Results().At(0).Type()))
 	for i := len(function.Params) - 1; i >= 0; i-- {
 		fmt.Fprintf(ctx.stream, "\t%s %s; // parameter[%d]: %s\n", createType(function.Params[i].Type()), createValueName(function.Params[i]), i, function.Params[i].String())
 	}
@@ -415,21 +420,6 @@ void* %s (struct LightWeightThreadContext* ctx) {
 				ctx.emitFunctionDefinitionFooter(function)
 				ctx.emitFunctionDefinitionHeader(function, createInstructionName(instr))
 			}
-
-			requireLoadFunctionResult := false
-			switch instr.(type) {
-			case *ssa.Alloc:
-				requireLoadFunctionResult = instr.(*ssa.Alloc).Heap
-			case *ssa.Call, *ssa.MakeChan:
-				requireLoadFunctionResult = true
-			case *ssa.UnOp:
-				if instr.(*ssa.UnOp).Op == token.ARROW {
-					requireLoadFunctionResult = true
-				}
-			}
-			if requireLoadFunctionResult {
-				fmt.Fprintf(ctx.stream, "%s = *(%s /* %s */ *)(ctx->stack_pointer + sizeof(*frame)); // ATTENTION: return value\n", createValueRelName(instr.(ssa.Value)), createType(instr.(ssa.Value).Type()), instr.(ssa.Value).Type())
-			}
 		}
 
 		ctx.emitFunctionDefinitionFooter(function)
@@ -458,18 +448,21 @@ struct StackFrameCommon {
 
 struct StackFrameMakeChan {
 	struct StackFrameCommon common;
+	void** result_ptr;
 	intptr_t size;
 };
 void* gox5_make_chan (struct LightWeightThreadContext* ctx);
 
 struct StackFrameNew {
 	struct StackFrameCommon common;
+	void** result_ptr;
 	intptr_t size;
 };
 void* gox5_new (struct LightWeightThreadContext* ctx);
 
 struct StackFrameRecv {
 	struct StackFrameCommon common;
+	intptr_t* result_ptr;
 	void* channel; // ATTENTION
 };
 void* gox5_recv (struct LightWeightThreadContext* ctx);

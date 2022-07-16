@@ -77,13 +77,15 @@ async fn start_light_weight_thread<'a>(
     entry_func: UserFunctionType,
     ctx: &mut LightWeightThreadContext<'a>,
     args: Vec<ObjectPtr>,
-) {
+) -> isize {
+    let mut result: isize = 0;
     unsafe {
-        let words = slice::from_raw_parts_mut(ctx.stack_pointer.words.as_mut_ptr(), 5);
+        let words = slice::from_raw_parts_mut(ctx.stack_pointer.words.as_mut_ptr(), 6);
         words[0] = terminate as *mut ();
         words[1] = ptr::null_mut();
+        words[2] = &mut result as *mut isize as *mut ();
         for (i, arg) in args.into_iter().enumerate() {
-            words[i + 2] = arg.0;
+            words[i + 3] = arg.0;
         }
     }
 
@@ -103,6 +105,7 @@ async fn start_light_weight_thread<'a>(
         ctx.prev_func = func;
         func = unsafe { mem::transmute::<NextUserFunctionType, UserFunctionType>(next_func) }
     }
+    result
 }
 
 pub trait ObjectAllocator {
@@ -182,8 +185,7 @@ async fn main() {
     unsafe {
         for i in 0..test_entry_point_num() {
             let entry_func = test_entry_point_function(i);
-            start_light_weight_thread(entry_func, &mut ctx, vec![]).await;
-            let result = *(stack_pointer as *mut isize);
+            let result = start_light_weight_thread(entry_func, &mut ctx, vec![]).await;
             let name = ffi::CStr::from_ptr(test_entry_point_name(i))
                 .to_str()
                 .unwrap();

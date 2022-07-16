@@ -58,6 +58,7 @@ unsafe impl Send for StackFrameCommon {}
 #[repr(C)]
 struct StackFrameMakeChan {
     common: StackFrameCommon,
+    result_ptr: *mut ObjectPtr,
     size: usize,
 }
 
@@ -89,32 +90,41 @@ pub fn make_chan(ctx: &mut LightWeightThreadContext) -> NextUserFunctionType {
         stack_frame.size
     };
     let ptr = allocate_channel(ctx, size);
-    leave_runtime_api(ctx, NextUserFunctionType(ptr as *mut ()))
+    let ptr = ObjectPtr(ptr as *mut ());
+    unsafe {
+        let stack_frame = &mut ctx.stack_pointer.make_chan;
+        *stack_frame.result_ptr = ptr;
+    };
+    leave_runtime_api(ctx)
 }
 
 #[repr(C)]
 struct StackFrameNew {
     common: StackFrameCommon,
+    result_ptr: *mut ObjectPtr,
     size: usize,
 }
 
 pub fn new(ctx: &mut LightWeightThreadContext) -> NextUserFunctionType {
     let size = unsafe {
-        let stack_frame = &mut ctx.stack_pointer.make_chan;
+        let stack_frame = &mut ctx.stack_pointer.new;
         stack_frame.size
     };
-    let ptr = ctx.global_context.process(|mut global_context| {
-        global_context
-            .allocator()
-            .allocate(size, |_ptr| {
-            })
-    });
-    leave_runtime_api(ctx, NextUserFunctionType(ptr as *mut ()))
+    let ptr = ctx
+        .global_context
+        .process(|mut global_context| global_context.allocator().allocate(size, |_ptr| {}));
+    let ptr = ObjectPtr(ptr);
+    unsafe {
+        let stack_frame = &mut ctx.stack_pointer.new;
+        *stack_frame.result_ptr = ptr;
+    };
+    leave_runtime_api(ctx)
 }
 
 #[repr(C)]
 struct StackFrameRecv {
     common: StackFrameCommon,
+    result_ptr: *mut isize,
     channel: ObjectPtr,
 }
 
@@ -128,7 +138,11 @@ pub async fn recv(ctx: &mut LightWeightThreadContext<'_>) -> NextUserFunctionTyp
     let channel = channel.as_ref::<Channel>();
     let data = channel.recv().await;
     let data = data.unwrap();
-    leave_runtime_api(ctx, NextUserFunctionType(data as *mut ()))
+    unsafe {
+        let stack_frame = &mut ctx.stack_pointer.recv;
+        *stack_frame.result_ptr = data;
+    }
+    leave_runtime_api(ctx)
 }
 
 #[repr(C)]
@@ -147,7 +161,7 @@ pub async fn send(ctx: &mut LightWeightThreadContext<'_>) -> NextUserFunctionTyp
     };
     let channel = channel.as_ref::<Channel>();
     channel.send(data).await;
-    leave_runtime_api(ctx, NextUserFunctionType(ptr::null_mut()))
+    leave_runtime_api(ctx)
 }
 
 #[repr(C)]
@@ -178,19 +192,14 @@ pub async fn spawn(ctx: &mut LightWeightThreadContext<'_>) -> NextUserFunctionTy
             start_light_weight_thread(entry_func, &mut new_ctx, args).await;
         });
     }
-    leave_runtime_api(ctx, NextUserFunctionType(ptr::null_mut()))
+    leave_runtime_api(ctx)
 }
 
-fn leave_runtime_api(
-    ctx: &mut LightWeightThreadContext,
-    result: NextUserFunctionType,
-) -> NextUserFunctionType {
+fn leave_runtime_api(ctx: &mut LightWeightThreadContext) -> NextUserFunctionType {
     unsafe {
         let stack_frame = &mut ctx.stack_pointer.common;
-        let cont = stack_frame.resume_func;
         ctx.stack_pointer = &mut *stack_frame.prev_stack_pointer;
-        stack_frame.resume_func = result;
-        cont
+        stack_frame.resume_func
     }
 }
 
@@ -199,7 +208,7 @@ pub union StackFrame {
     pub words: [*mut (); 0],
     common: ManuallyDrop<StackFrameCommon>,
     make_chan: ManuallyDrop<StackFrameMakeChan>,
-    new:  ManuallyDrop<StackFrameNew>,
+    new: ManuallyDrop<StackFrameNew>,
     recv: ManuallyDrop<StackFrameRecv>,
     send: ManuallyDrop<StackFrameSend>,
     spawn: ManuallyDrop<StackFrameSpawn>,
