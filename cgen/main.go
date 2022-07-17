@@ -84,7 +84,7 @@ func createValueRelName(value ssa.Value) string {
 }
 
 func createType(typ types.Type) string {
-	switch t := typ.(type) {
+	switch t := typ.Underlying().(type) {
 	case *types.Basic:
 		switch t.Kind() {
 		case types.Bool:
@@ -96,6 +96,8 @@ func createType(typ types.Type) string {
 		return "void*"
 	case *types.Pointer:
 		return "void*"
+	case *types.Struct:
+		return fmt.Sprintf("struct t$%p", t)
 	}
 	panic("type not supported: " + typ.String())
 }
@@ -115,7 +117,10 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 	return gox5_new;
 `, createInstructionName(instr), createValueRelName(instr), createType(instr.Type().Underlying().(*types.Pointer).Elem()))
 		} else {
-			panic("unimplemented")
+			fmt.Fprintf(ctx.stream, `
+	%s = &%s_buf;
+	memset(%s, 0, sizeof(%s_buf));
+`, createValueRelName(instr), createValueRelName(instr), createValueRelName(instr), createValueRelName(instr))
 		}
 
 	case *ssa.BinOp:
@@ -287,7 +292,7 @@ func (ctx *Context) emitValueDeclaration(value ssa.Value) {
 		if val.Heap {
 			// do nothing
 		} else {
-			panic("unimplemented")
+			fmt.Fprintf(ctx.stream, "\t%s %s_buf;\n", createType(value.Type().(*types.Pointer).Elem()), createValueName(value))
 		}
 
 	case *ssa.BinOp:
@@ -424,6 +429,20 @@ void* %s (struct LightWeightThreadContext* ctx) {
 	}
 }
 
+func (ctx *Context) emitTypeDefinition(typ *ssa.Type) {
+	switch typ := typ.Type().Underlying().(type) {
+	case *types.Struct:
+		fmt.Fprintf(ctx.stream, "%s { // %s\n", createType(typ), typ)
+		for i := 0; i < typ.NumFields(); i++ {
+			field := typ.Field(i)
+			fmt.Fprintf(ctx.stream, "\t%s %s; // %s\n", createType(field.Type()), field.Name(), field)
+		}
+		fmt.Fprintf(ctx.stream, "};\n")
+	default:
+		panic("not implemented")
+	}
+}
+
 func (ctx *Context) emitPackage(pkg *ssa.Package) {
 	fmt.Fprint(ctx.stream, `
 #include <stdbool.h>
@@ -482,6 +501,14 @@ struct StackFrameSpawn {
 };
 void* gox5_spawn (struct LightWeightThreadContext* ctx);
 `)
+
+	for member := range pkg.Members {
+		typ, ok := pkg.Members[member].(*ssa.Type)
+		if !ok {
+			continue
+		}
+		ctx.emitTypeDefinition(typ)
+	}
 
 	for symbol := range pkg.Members {
 		function, ok := pkg.Members[symbol].(*ssa.Function)
