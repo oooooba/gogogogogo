@@ -100,38 +100,20 @@ func createType(typ types.Type) string {
 	panic("type not supported: " + typ.String())
 }
 
-func calculateTypeSize(typ types.Type) int64 {
-	switch t := typ.(type) {
-	case *types.Basic:
-		switch t.Kind() {
-		case types.Bool:
-			return 1
-		case types.Int, types.Int8, types.Int16, types.Int32, types.Int64, types.Uint, types.Uint8, types.Uint16, types.Uint32, types.Uint64, types.Uintptr:
-			return 8
-		}
-	case *types.Chan:
-		return 8
-	case *types.Pointer:
-		return 8
-	}
-	panic("type not supported: " + typ.String())
-}
-
 func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 	fmt.Fprintf(ctx.stream, "\t// %T instruction\n", instruction)
 	switch instr := instruction.(type) {
 	case *ssa.Alloc:
 		if instr.Heap {
-			size := calculateTypeSize(instr.Type().Underlying().(*types.Pointer).Elem())
 			fmt.Fprintf(ctx.stream, `
 	struct StackFrameNew* next_frame = (struct StackFrameNew*)(ctx->stack_pointer + sizeof(*frame));
 	next_frame->common.resume_func = %s;
 	next_frame->common.prev_stack_pointer = ctx->stack_pointer;
 	next_frame->result_ptr = &%s;
-	next_frame->size = %d;
+	next_frame->size = sizeof(%s);
 	ctx->stack_pointer = next_frame;
 	return gox5_new;
-`, createInstructionName(instr), createValueRelName(instr), size)
+`, createInstructionName(instr), createValueRelName(instr), createType(instr.Type().Underlying().(*types.Pointer).Elem()))
 		} else {
 			panic("unimplemented")
 		}
