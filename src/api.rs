@@ -113,6 +113,9 @@ pub fn new(ctx: &mut LightWeightThreadContext) -> NextUserFunctionType {
     let ptr = ctx
         .global_context
         .process(|mut global_context| global_context.allocator().allocate(size, |_ptr| {}));
+    unsafe {
+        ptr::write_bytes(ptr as *mut u8, 0, size);
+    }
     let ptr = ObjectPtr(ptr);
     unsafe {
         let stack_frame = &mut ctx.stack_pointer.new;
