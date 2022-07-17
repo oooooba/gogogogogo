@@ -4,6 +4,7 @@ set -e
 
 cargo build
 
+exit_status=0
 for path in xtests/*; do
     echo -n "[$path] "
 
@@ -20,5 +21,8 @@ for path in xtests/*; do
     else
         echo FAIL
         cat $compare_result
+        exit_status=1
     fi
 done
+
+exit $exit_status
