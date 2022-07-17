@@ -159,6 +159,9 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 			panic("unknown callee")
 		}
 
+	case *ssa.FieldAddr:
+		fmt.Fprintf(ctx.stream, "%s = &%s_buf.%s;\n", createValueRelName(instr), createValueRelName(instr.X), instr.X.Type().Underlying().(*types.Pointer).Elem().Underlying().(*types.Struct).Field(instr.Field).Name())
+
 	case *ssa.Go:
 		callCommon := instr.Common()
 		if callCommon.Method != nil {
@@ -304,6 +307,9 @@ func (ctx *Context) emitValueDeclaration(value ssa.Value) {
 
 	case *ssa.Const:
 		canEmit = false
+
+	case *ssa.FieldAddr:
+		ctx.emitValueDeclaration(val.X)
 
 	case *ssa.MakeChan:
 		ctx.emitValueDeclaration(val.Size)
