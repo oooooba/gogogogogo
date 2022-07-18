@@ -83,21 +83,21 @@ func createValueRelName(value ssa.Value) string {
 	}
 }
 
-func createType(typ types.Type) string {
+func createType(typ types.Type, id string) string {
 	switch t := typ.Underlying().(type) {
 	case *types.Basic:
 		switch t.Kind() {
 		case types.Bool:
-			return "bool"
+			return fmt.Sprintf("bool %s", id)
 		case types.Int, types.Int8, types.Int16, types.Int32, types.Int64, types.Uint, types.Uint8, types.Uint16, types.Uint32, types.Uint64, types.Uintptr:
-			return "intptr_t"
+			return fmt.Sprintf("intptr_t %s", id)
 		}
 	case *types.Chan:
-		return "struct Channel*"
+		return fmt.Sprintf("struct Channel* %s", id)
 	case *types.Pointer:
-		return fmt.Sprintf("%s*", createType(t.Elem()))
+		return fmt.Sprintf("%s* %s", createType(t.Elem(), ""), id)
 	case *types.Struct:
-		return fmt.Sprintf("struct t$%p", t)
+		return fmt.Sprintf("struct t$%p %s", t, id)
 	}
 	panic("type not supported: " + typ.String())
 }
@@ -115,7 +115,7 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 	next_frame->size = sizeof(%s);
 	ctx->stack_pointer = next_frame;
 	return gox5_new;
-`, createInstructionName(instr), createValueRelName(instr), createType(instr.Type().Underlying().(*types.Pointer).Elem()))
+`, createInstructionName(instr), createValueRelName(instr), createType(instr.Type().Underlying().(*types.Pointer).Elem(), ""))
 		} else {
 			fmt.Fprintf(ctx.stream, `
 	%s = &%s_buf;
@@ -293,7 +293,8 @@ func (ctx *Context) emitValueDeclaration(value ssa.Value) {
 		if val.Heap {
 			// do nothing
 		} else {
-			fmt.Fprintf(ctx.stream, "\t%s %s_buf;\n", createType(value.Type().(*types.Pointer).Elem()), createValueName(value))
+			id := fmt.Sprintf("%s_buf", createValueName(value))
+			fmt.Fprintf(ctx.stream, "\t%s;\n", createType(value.Type().(*types.Pointer).Elem(), id))
 		}
 
 	case *ssa.BinOp:
@@ -336,7 +337,8 @@ func (ctx *Context) emitValueDeclaration(value ssa.Value) {
 
 	fmt.Fprintf(ctx.stream, "\t// found %T: %s, %s\n", value, createValueName(value), value.String())
 	if canEmit {
-		fmt.Fprintf(ctx.stream, "\t%s %s; // %s : %s\n", createType(value.Type()), createValueName(value), value.String(), value.Type())
+		id := fmt.Sprintf("%s", createValueName(value))
+		fmt.Fprintf(ctx.stream, "\t%s; // %s : %s\n", createType(value.Type(), id), value.String(), value.Type())
 	}
 }
 
@@ -362,10 +364,11 @@ func (ctx *Context) emitFunctionDeclaration(function *ssa.Function) {
 		if function.Signature.Results().Len() != 1 {
 			panic("only 0 or 1 return value supported")
 		}
-		fmt.Fprintf(ctx.stream, "\t%s* result_ptr;\n", createType(function.Signature.Results().At(0).Type()))
+		fmt.Fprintf(ctx.stream, "\t%s* result_ptr;\n", createType(function.Signature.Results().At(0).Type(), ""))
 	}
 	for i := len(function.Params) - 1; i >= 0; i-- {
-		fmt.Fprintf(ctx.stream, "\t%s %s; // parameter[%d]: %s\n", createType(function.Params[i].Type()), createValueName(function.Params[i]), i, function.Params[i].String())
+		id := fmt.Sprintf("%s", createValueName(function.Params[i]))
+		fmt.Fprintf(ctx.stream, "\t%s; // parameter[%d]: %s\n", createType(function.Params[i].Type(), id), i, function.Params[i].String())
 	}
 
 	if function.Blocks != nil {
@@ -436,10 +439,11 @@ void* %s (struct LightWeightThreadContext* ctx) {
 func (ctx *Context) emitTypeDefinition(typ *ssa.Type) {
 	switch typ := typ.Type().Underlying().(type) {
 	case *types.Struct:
-		fmt.Fprintf(ctx.stream, "%s { // %s\n", createType(typ), typ)
+		fmt.Fprintf(ctx.stream, "%s { // %s\n", createType(typ, ""), typ)
 		for i := 0; i < typ.NumFields(); i++ {
 			field := typ.Field(i)
-			fmt.Fprintf(ctx.stream, "\t%s %s; // %s\n", createType(field.Type()), field.Name(), field)
+			id := fmt.Sprintf("%s", field.Name())
+			fmt.Fprintf(ctx.stream, "\t%s; // %s\n", createType(field.Type(), id), field)
 		}
 		fmt.Fprintf(ctx.stream, "};\n")
 	default:
