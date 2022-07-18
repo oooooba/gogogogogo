@@ -93,9 +93,9 @@ func createType(typ types.Type) string {
 			return "intptr_t"
 		}
 	case *types.Chan:
-		return "void*"
+		return "struct Channel*"
 	case *types.Pointer:
-		return "void*"
+		return fmt.Sprintf("%s*", createType(t.Elem()))
 	case *types.Struct:
 		return fmt.Sprintf("struct t$%p", t)
 	}
@@ -111,7 +111,7 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 	struct StackFrameNew* next_frame = (struct StackFrameNew*)(ctx->stack_pointer + sizeof(*frame));
 	next_frame->common.resume_func = %s;
 	next_frame->common.prev_stack_pointer = ctx->stack_pointer;
-	next_frame->result_ptr = &%s;
+	next_frame->result_ptr = (void**)&%s;
 	next_frame->size = sizeof(%s);
 	ctx->stack_pointer = next_frame;
 	return gox5_new;
@@ -240,7 +240,7 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 `, createInstructionName(instr), createValueRelName(instr.Chan), createValueRelName(instr.X))
 
 	case *ssa.Store:
-		fmt.Fprintf(ctx.stream, "*(%s*)%s = %s;\n", createType(instr.Val.Type()), createValueRelName(instr.Addr), createValueRelName(instr.Val))
+		fmt.Fprintf(ctx.stream, "*%s = %s;\n", createValueRelName(instr.Addr), createValueRelName(instr.Val))
 
 	case *ssa.UnOp:
 		if instr.Op == token.ARROW {
@@ -253,8 +253,6 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 	ctx->stack_pointer = next_frame;
 	return gox5_recv;
 `, createInstructionName(instr), createValueRelName(instr), createValueRelName(instr.X))
-		} else if instr.Op == token.MUL {
-			fmt.Fprintf(ctx.stream, "%s = * (%s*)%s;\n", createValueRelName(instr), createType(instr.Type()), createValueRelName(instr.X))
 		} else {
 			fmt.Fprintf(ctx.stream, "%s = %s %s;\n", createValueRelName(instr), instr.Op.String(), createValueRelName(instr.X))
 		}
@@ -464,6 +462,8 @@ struct LightWeightThreadContext {
 	intptr_t marker;
 };
 
+struct Channel;
+
 struct StackFrameCommon {
 	void* resume_func;
 	void* prev_stack_pointer;
@@ -471,7 +471,7 @@ struct StackFrameCommon {
 
 struct StackFrameMakeChan {
 	struct StackFrameCommon common;
-	void** result_ptr;
+	struct Channel** result_ptr;
 	intptr_t size;
 };
 void* gox5_make_chan (struct LightWeightThreadContext* ctx);
@@ -486,13 +486,13 @@ void* gox5_new (struct LightWeightThreadContext* ctx);
 struct StackFrameRecv {
 	struct StackFrameCommon common;
 	intptr_t* result_ptr;
-	void* channel; // ATTENTION
+	struct Channel* channel;
 };
 void* gox5_recv (struct LightWeightThreadContext* ctx);
 
 struct StackFrameSend {
 	struct StackFrameCommon common;
-	void* channel; // ATTENTION
+	struct Channel* channel;
 	intptr_t data;
 };
 void* gox5_send (struct LightWeightThreadContext* ctx);
@@ -501,7 +501,7 @@ struct StackFrameSpawn {
 	struct StackFrameCommon common;
     void* func;
 	// ATTENTION: number of arguments fixed
-	void* arg0; // ATTENTION: arg0 is treated as channel
+	struct Channel* arg0;
 	intptr_t arg1;
 	intptr_t arg2;
 };
