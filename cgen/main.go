@@ -85,6 +85,8 @@ func createValueRelName(value ssa.Value) string {
 
 func createType(typ types.Type, id string) string {
 	switch t := typ.Underlying().(type) {
+	case *types.Array:
+		return fmt.Sprintf("%s %s[%d]", createType(t.Elem(), ""), id, t.Len())
 	case *types.Basic:
 		switch t.Kind() {
 		case types.Bool:
@@ -95,7 +97,11 @@ func createType(typ types.Type, id string) string {
 	case *types.Chan:
 		return fmt.Sprintf("struct Channel* %s", id)
 	case *types.Pointer:
-		return fmt.Sprintf("%s* %s", createType(t.Elem(), ""), id)
+		elemType := t.Elem().Underlying()
+		if et, ok := elemType.(*types.Array); ok {
+			elemType = et.Elem()
+		}
+		return fmt.Sprintf("%s* %s", createType(elemType, ""), id)
 	case *types.Struct:
 		return fmt.Sprintf("struct t$%p %s", t, id)
 	}
@@ -117,10 +123,14 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 	return gox5_new;
 `, createInstructionName(instr), createValueRelName(instr), createType(instr.Type().Underlying().(*types.Pointer).Elem(), ""))
 		} else {
+			address_of_op := "&"
+			if _, ok := instr.Type().Underlying().(*types.Pointer).Elem().(*types.Array); ok {
+				address_of_op = ""
+			}
 			fmt.Fprintf(ctx.stream, `
-	%s = &%s_buf;
+	%s = %s%s_buf;
 	memset(%s, 0, sizeof(%s_buf));
-`, createValueRelName(instr), createValueRelName(instr), createValueRelName(instr), createValueRelName(instr))
+`, createValueRelName(instr), address_of_op, createValueRelName(instr), createValueRelName(instr), createValueRelName(instr))
 		}
 
 	case *ssa.BinOp:
@@ -253,6 +263,8 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 	ctx->stack_pointer = next_frame;
 	return gox5_recv;
 `, createInstructionName(instr), createValueRelName(instr), createValueRelName(instr.X))
+		} else if instr.Op == token.MUL {
+			fmt.Fprintf(ctx.stream, "memcpy(&%s, %s, sizeof(%s));\n", createValueRelName(instr), createValueRelName(instr.X), createType(instr.Type(), ""))
 		} else {
 			fmt.Fprintf(ctx.stream, "%s = %s %s;\n", createValueRelName(instr), instr.Op.String(), createValueRelName(instr.X))
 		}
