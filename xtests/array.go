@@ -13,6 +13,23 @@ func Test1() int {
 	return 1
 }
 
+func Test2() int {
+	var a [10]int
+	return a[0]
+}
+
+func Test3() int {
+	var a [10]int
+	a[0] = 3
+	return a[0]
+}
+
+func Test4() int {
+	var a [10]int
+	a[1] = 4
+	return a[1]
+}
+
 func main() {
 	runTest := func(test func() int) {
 		funcFullName := runtime.FuncForPC(reflect.ValueOf(test).Pointer()).Name()
@@ -20,4 +37,7 @@ func main() {
 		fmt.Printf("%s: %d\n", funcName, test())
 	}
 	runTest(Test1)
+	runTest(Test2)
+	runTest(Test3)
+	runTest(Test4)
 }

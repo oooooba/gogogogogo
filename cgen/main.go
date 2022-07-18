@@ -172,6 +172,9 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 	case *ssa.FieldAddr:
 		fmt.Fprintf(ctx.stream, "%s = &%s_buf.%s;\n", createValueRelName(instr), createValueRelName(instr.X), instr.X.Type().Underlying().(*types.Pointer).Elem().Underlying().(*types.Struct).Field(instr.Field).Name())
 
+	case *ssa.IndexAddr:
+		fmt.Fprintf(ctx.stream, "%s = &%s[%s];\n", createValueRelName(instr), createValueRelName(instr.X), createValueRelName(instr.Index))
+
 	case *ssa.Go:
 		callCommon := instr.Common()
 		if callCommon.Method != nil {
@@ -321,6 +324,10 @@ func (ctx *Context) emitValueDeclaration(value ssa.Value) {
 
 	case *ssa.FieldAddr:
 		ctx.emitValueDeclaration(val.X)
+
+	case *ssa.IndexAddr:
+		ctx.emitValueDeclaration(val.X)
+		ctx.emitValueDeclaration(val.Index)
 
 	case *ssa.MakeChan:
 		ctx.emitValueDeclaration(val.Size)
