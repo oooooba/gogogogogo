@@ -105,7 +105,7 @@ func createType(typ types.Type, id string) string {
 	case *types.Struct:
 		return fmt.Sprintf("struct t$%p %s", t, id)
 	}
-	panic("type not supported: " + typ.String())
+	panic(fmt.Sprintf("type not supported: %s", typ.String()))
 }
 
 func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
@@ -270,7 +270,7 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 		}
 
 	default:
-		panic("unknown instruction: " + instruction.String())
+		panic(fmt.Sprintf("unknown instruction: %s", instruction.String()))
 	}
 }
 
@@ -337,8 +337,7 @@ func (ctx *Context) emitValueDeclaration(value ssa.Value) {
 		ctx.emitValueDeclaration(val.X)
 
 	default:
-		fmt.Printf("type = %T\n", value)
-		panic("unknown value: " + value.String())
+		panic(fmt.Sprintf("unknown value: %s : %T", value.String(), value))
 	}
 
 	if t, ok := value.Type().(*types.Tuple); ok {
