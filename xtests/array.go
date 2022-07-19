@@ -42,6 +42,23 @@ func Test5() int {
 	return sum
 }
 
+type S struct {
+	x int
+	y int
+}
+
+func Test6() int {
+	var a [10]S
+	a[0].x = 6
+	return a[0].x
+}
+
+func Test7() int {
+	var a [10]S
+	a[0].y = 6
+	return a[0].y
+}
+
 func main() {
 	runTest := func(test func() int) {
 		funcFullName := runtime.FuncForPC(reflect.ValueOf(test).Pointer()).Name()
@@ -53,4 +70,6 @@ func main() {
 	runTest(Test3)
 	runTest(Test4)
 	runTest(Test5)
+	runTest(Test6)
+	runTest(Test7)
 }
