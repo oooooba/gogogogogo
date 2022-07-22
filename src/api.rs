@@ -171,6 +171,7 @@ pub async fn send(ctx: &mut LightWeightThreadContext<'_>) -> NextUserFunctionTyp
 struct StackFrameSpawn {
     common: StackFrameCommon,
     func: UserFunctionType,
+    result_size: usize,
     arg0: *mut (),
     arg1: *mut (),
     arg2: *mut (),
@@ -183,6 +184,7 @@ pub async fn spawn(ctx: &mut LightWeightThreadContext<'_>) -> NextUserFunctionTy
         let stack_frame = &mut ctx.stack_pointer.spawn;
 
         let entry_func = stack_frame.func;
+        let result_size = stack_frame.result_size;
         let args = vec![
             ObjectPtr(stack_frame.arg0),
             ObjectPtr(stack_frame.arg1),
@@ -192,7 +194,7 @@ pub async fn spawn(ctx: &mut LightWeightThreadContext<'_>) -> NextUserFunctionTy
 
         tokio::spawn(async move {
             let mut new_ctx = Box::new(create_light_weight_thread_context(global_context));
-            start_light_weight_thread(entry_func, &mut new_ctx, args).await;
+            start_light_weight_thread(entry_func, &mut new_ctx, result_size, args).await;
         });
     }
     leave_runtime_api(ctx)

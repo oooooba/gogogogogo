@@ -183,12 +183,20 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 		switch callee := callCommon.Value.(type) {
 		case *ssa.Function:
 			name := createFunctionName(callee)
+			resultSize := "0"
+			if callee.Signature.Results().Len() > 0 {
+				if callee.Signature.Results().Len() != 1 {
+					panic("only 0 or 1 return value supported")
+				}
+				resultSize = fmt.Sprintf("sizeof(%s)", createType(callee.Signature.Results().At(0).Type(), ""))
+			}
 			fmt.Fprintf(ctx.stream, `
 	struct StackFrameSpawn* next_frame = (struct StackFrameSpawn*)(ctx->stack_pointer + sizeof(*frame));
 	next_frame->common.resume_func = %s;
 	next_frame->common.prev_stack_pointer = ctx->stack_pointer;
 	next_frame->func = %s;
-`, createInstructionName(instr), name)
+	next_frame->result_size = %s;
+`, createInstructionName(instr), name, resultSize)
 			if len(callCommon.Args) > 3 {
 				panic("currently, support 3 parameters")
 			}
@@ -522,6 +530,7 @@ void* gox5_send (struct LightWeightThreadContext* ctx);
 struct StackFrameSpawn {
 	struct StackFrameCommon common;
     void* func;
+	intptr_t result_size;
 	// ATTENTION: number of arguments fixed
 	struct Channel* arg0;
 	intptr_t arg1;

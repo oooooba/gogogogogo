@@ -76,16 +76,23 @@ pub async fn spawn_wrapper(ctx: &mut LightWeightThreadContext<'_>) -> NextUserFu
 async fn start_light_weight_thread<'a>(
     entry_func: UserFunctionType,
     ctx: &mut LightWeightThreadContext<'a>,
+    result_size: usize,
     args: Vec<ObjectPtr>,
-) -> isize {
-    let mut result: isize = 0;
+) {
     unsafe {
+        let result_pointer = ctx.stack_pointer as *mut StackFrame as *mut ();
+        let stack_pointer = (result_pointer as *mut u8).add(result_size);
+        ctx.stack_pointer = &mut *(stack_pointer as *mut StackFrame);
         let words = slice::from_raw_parts_mut(ctx.stack_pointer.words.as_mut_ptr(), 6);
         words[0] = terminate as *mut ();
         words[1] = ptr::null_mut();
-        words[2] = &mut result as *mut isize as *mut ();
+        let mut arg_base = 2;
+        if result_size > 0 {
+            words[arg_base] = result_pointer;
+            arg_base += 1;
+        }
         for (i, arg) in args.into_iter().enumerate() {
-            words[i + 3] = arg.0;
+            words[i + arg_base] = arg.0;
         }
     }
 
@@ -105,7 +112,6 @@ async fn start_light_weight_thread<'a>(
         ctx.prev_func = func;
         func = unsafe { mem::transmute::<NextUserFunctionType, UserFunctionType>(next_func) }
     }
-    result
 }
 
 pub trait ObjectAllocator {
@@ -185,7 +191,8 @@ async fn main() {
     unsafe {
         for i in 0..test_entry_point_num() {
             let entry_func = test_entry_point_function(i);
-            let result = start_light_weight_thread(entry_func, &mut ctx, vec![]).await;
+            start_light_weight_thread(entry_func, &mut ctx, mem::size_of::<isize>(), vec![]).await;
+            let result = *(stack_pointer as *const isize);
             let name = ffi::CStr::from_ptr(test_entry_point_name(i))
                 .to_str()
                 .unwrap();

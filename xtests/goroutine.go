@@ -28,6 +28,17 @@ func Test2() int {
 	return v
 }
 
+func test3_f(ch chan int) {
+	ch <- 3
+}
+
+func Test3() int {
+	ch := make(chan int)
+	go test3_f(ch)
+	v := <-ch
+	return v
+}
+
 func main() {
 	runTest := func(test func() int) {
 		funcFullName := runtime.FuncForPC(reflect.ValueOf(test).Pointer()).Name()
@@ -36,4 +47,5 @@ func main() {
 	}
 	runTest(Test1)
 	runTest(Test2)
+	runTest(Test3)
 }
