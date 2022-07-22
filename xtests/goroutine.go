@@ -72,6 +72,24 @@ func Test6() int {
 	return v
 }
 
+func test7_f(ch chan int) {
+	for i := 0; i < 10; i++ {
+		ch <- i
+	}
+}
+
+func Test7() int {
+	ch := make(chan int, 1)
+	go test7_f(ch)
+	for i := 0; i < 10; i++ {
+		v := <-ch
+		if v != i {
+			return 0
+		}
+	}
+	return 7
+}
+
 func main() {
 	runTest := func(test func() int) {
 		funcFullName := runtime.FuncForPC(reflect.ValueOf(test).Pointer()).Name()
@@ -84,4 +102,5 @@ func main() {
 	runTest(Test4)
 	runTest(Test5)
 	runTest(Test6)
+	runTest(Test7)
 }

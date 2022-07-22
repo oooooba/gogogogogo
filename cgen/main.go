@@ -36,7 +36,8 @@ func main() {
 	}
 
 	ctx := Context{
-		stream: os.Stdout,
+		stream:        os.Stdout,
+		latestNameMap: make(map[*ssa.BasicBlock]string),
 	}
 	ctx.emitPackage(ssaPackage)
 }
@@ -44,6 +45,7 @@ func main() {
 type Context struct {
 	stream        *os.File
 	foundValueSet map[ssa.Value]struct{}
+	latestNameMap map[*ssa.BasicBlock]string
 }
 
 func extractTestTargetFunctions(f *ssa.Function) []*ssa.Function {
@@ -235,7 +237,7 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 	case *ssa.Phi:
 		basicBlock := instr.Block()
 		for i, edge := range instr.Edges {
-			fmt.Fprintf(ctx.stream, "\tif (ctx->prev_func == %s) { %s = %s; } else\n", createBasicBlockName(basicBlock.Preds[i]), createValueRelName(instr), createValueRelName(edge))
+			fmt.Fprintf(ctx.stream, "\tif (ctx->prev_func == %s) { %s = %s; } else\n", ctx.latestNameMap[basicBlock.Preds[i]], createValueRelName(instr), createValueRelName(edge))
 		}
 		fmt.Fprintln(ctx.stream, "\t{ assert(false); }")
 
@@ -415,10 +417,14 @@ func (ctx *Context) emitFunctionDeclaration(function *ssa.Function) {
 	}
 
 	for _, basicBlock := range function.DomPreorder() {
-		fmt.Fprintf(ctx.stream, "void* %s (struct LightWeightThreadContext* ctx);\n", createBasicBlockName(basicBlock))
+		name := createBasicBlockName(basicBlock)
+		fmt.Fprintf(ctx.stream, "void* %s (struct LightWeightThreadContext* ctx);\n", name)
+		ctx.latestNameMap[basicBlock] = name
 		for _, instr := range basicBlock.Instrs {
 			if requireSwitchFunction(instr) {
-				fmt.Fprintf(ctx.stream, "void* %s (struct LightWeightThreadContext* ctx);\n", createInstructionName(instr))
+				continuation_name := createInstructionName(instr)
+				fmt.Fprintf(ctx.stream, "void* %s (struct LightWeightThreadContext* ctx);\n", continuation_name)
+				ctx.latestNameMap[basicBlock] = continuation_name
 			}
 		}
 	}
