@@ -392,7 +392,7 @@ func (ctx *Context) emitFunctionDeclaration(function *ssa.Function) {
 		}
 		fmt.Fprintf(ctx.stream, "\t%s* result_ptr;\n", createType(function.Signature.Results().At(0).Type(), ""))
 	}
-	for i := len(function.Params) - 1; i >= 0; i-- {
+	for i := 0; i < len(function.Params); i++ {
 		id := fmt.Sprintf("%s", createValueName(function.Params[i]))
 		fmt.Fprintf(ctx.stream, "\t%s; // parameter[%d]: %s\n", createType(function.Params[i].Type(), id), i, function.Params[i].String())
 	}
