@@ -450,8 +450,6 @@ void* %s (struct LightWeightThreadContext* ctx) {
 }
 `, createFunctionName(function), createBasicBlockName(function.Blocks[0]))
 
-	ctx.foundValueSet = make(map[ssa.Value]struct{})
-
 	for _, basicBlock := range function.DomPreorder() {
 		ctx.emitFunctionDefinitionHeader(function, createBasicBlockName(basicBlock))
 
