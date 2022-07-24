@@ -104,6 +104,8 @@ func createType(typ types.Type, id string) string {
 			elemType = et.Elem()
 		}
 		return fmt.Sprintf("%s* %s", createType(elemType, ""), id)
+	case *types.Slice:
+		return fmt.Sprintf("struct Slice %s", id)
 	case *types.Struct:
 		return fmt.Sprintf("struct t$%p %s", t, id)
 	}
@@ -175,7 +177,11 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 		fmt.Fprintf(ctx.stream, "%s = &%s->%s;\n", createValueRelName(instr), createValueRelName(instr.X), instr.X.Type().Underlying().(*types.Pointer).Elem().Underlying().(*types.Struct).Field(instr.Field).Name())
 
 	case *ssa.IndexAddr:
-		fmt.Fprintf(ctx.stream, "%s = &%s[%s];\n", createValueRelName(instr), createValueRelName(instr.X), createValueRelName(instr.Index))
+		if _, ok := instr.X.Type().Underlying().(*types.Slice); ok {
+			fmt.Fprintf(ctx.stream, "%s = &((%s)%s.addr)[%s];\n", createValueRelName(instr), createType(instr.Type(), ""), createValueRelName(instr.X), createValueRelName(instr.Index))
+		} else {
+			fmt.Fprintf(ctx.stream, "%s = &%s[%s];\n", createValueRelName(instr), createValueRelName(instr.X), createValueRelName(instr.Index))
+		}
 
 	case *ssa.Go:
 		callCommon := instr.Common()
@@ -261,6 +267,14 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 	ctx->stack_pointer = next_frame;
 	return gox5_send;
 `, createInstructionName(instr), createValueRelName(instr.Chan), createValueRelName(instr.X))
+
+	case *ssa.Slice:
+		fmt.Fprintf(ctx.stream, "memset(&%s, 0, sizeof(struct Slice));\n", createValueRelName(instr))
+		startIndex := "0"
+		if instr.Low != nil {
+			startIndex = createValueRelName(instr.Low)
+		}
+		fmt.Fprintf(ctx.stream, "%s.addr = %s + %s;\n", createValueRelName(instr), createValueRelName(instr.X), startIndex)
 
 	case *ssa.Store:
 		fmt.Fprintf(ctx.stream, "*%s = %s;\n", createValueRelName(instr.Addr), createValueRelName(instr.Val))
@@ -348,6 +362,15 @@ func (ctx *Context) emitValueDeclaration(value ssa.Value) {
 	case *ssa.Phi:
 		for _, edge := range val.Edges {
 			ctx.emitValueDeclaration(edge)
+		}
+
+	case *ssa.Slice:
+		ctx.emitValueDeclaration(val.X)
+		if val.Low != nil {
+			ctx.emitValueDeclaration(val.Low)
+		}
+		if val.High != nil {
+			ctx.emitValueDeclaration(val.High)
 		}
 
 	case *ssa.UnOp:
@@ -497,6 +520,12 @@ struct LightWeightThreadContext {
 };
 
 struct Channel;
+
+struct Slice {
+	void* addr;
+	intptr_t size;
+	intptr_t capacity;
+};
 
 struct StackFrameCommon {
 	void* resume_func;
