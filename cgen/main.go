@@ -304,7 +304,11 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 		fmt.Fprintf(ctx.stream, "%s.capacity = %s - %s;\n", createValueRelName(instr), length, startIndex)
 
 	case *ssa.Store:
-		fmt.Fprintf(ctx.stream, "*%s = %s;\n", createValueRelName(instr.Addr), createValueRelName(instr.Val))
+		if _, ok := instr.Val.Type().Underlying().(*types.Array); ok {
+			fmt.Fprintf(ctx.stream, "memcpy(%s, %s, sizeof(%s));\n", createValueRelName(instr.Addr), createValueRelName(instr.Val), createValueRelName(instr.Val))
+		} else {
+			fmt.Fprintf(ctx.stream, "*%s = %s;\n", createValueRelName(instr.Addr), createValueRelName(instr.Val))
+		}
 
 	case *ssa.UnOp:
 		if instr.Op == token.ARROW {
