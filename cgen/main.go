@@ -149,6 +149,8 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 		switch callee := callCommon.Value.(type) {
 		case *ssa.Builtin:
 			switch callee.Name() {
+			case "cap":
+				fmt.Fprintf(ctx.stream, "%s = %s.capacity;\n", createValueRelName(instr), createValueRelName(callCommon.Args[0]))
 			case "len":
 				fmt.Fprintf(ctx.stream, "%s = %s.size;\n", createValueRelName(instr), createValueRelName(callCommon.Args[0]))
 			default:
@@ -284,19 +286,22 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 			startIndex = createValueRelName(instr.Low)
 		}
 
-		endIndex := "0"
+		length := "0"
 		switch elemType := instr.X.Type().(*types.Pointer).Elem().(type) {
 		case *types.Array:
-			endIndex = fmt.Sprintf("%d", elemType.Len())
+			length = fmt.Sprintf("%d", elemType.Len())
 		default:
 			panic(fmt.Sprintf("not implemented: %s", elemType))
 		}
+
+		endIndex := length
 		if instr.High != nil {
 			endIndex = createValueRelName(instr.High)
 		}
 
 		fmt.Fprintf(ctx.stream, "%s.addr = %s + %s;\n", createValueRelName(instr), createValueRelName(instr.X), startIndex)
 		fmt.Fprintf(ctx.stream, "%s.size = %s - %s;\n", createValueRelName(instr), endIndex, startIndex)
+		fmt.Fprintf(ctx.stream, "%s.capacity = %s - %s;\n", createValueRelName(instr), length, startIndex)
 
 	case *ssa.Store:
 		fmt.Fprintf(ctx.stream, "*%s = %s;\n", createValueRelName(instr.Addr), createValueRelName(instr.Val))
