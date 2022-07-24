@@ -147,6 +147,15 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 		}
 
 		switch callee := callCommon.Value.(type) {
+		case *ssa.Builtin:
+			switch callee.Name() {
+			case "len":
+				fmt.Fprintf(ctx.stream, "%s = %s.size;\n", createValueRelName(instr), createValueRelName(callCommon.Args[0]))
+			default:
+				panic(fmt.Sprintf("unsuported builtin function: %s", callee.Name()))
+			}
+			fmt.Fprintf(ctx.stream, "\treturn %s;\n", createInstructionName(instr))
+
 		case *ssa.Function:
 			name := createFunctionName(callee)
 			fmt.Fprintf(ctx.stream, `
@@ -274,7 +283,20 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 		if instr.Low != nil {
 			startIndex = createValueRelName(instr.Low)
 		}
+
+		endIndex := "0"
+		switch elemType := instr.X.Type().(*types.Pointer).Elem().(type) {
+		case *types.Array:
+			endIndex = fmt.Sprintf("%d", elemType.Len())
+		default:
+			panic(fmt.Sprintf("not implemented: %s", elemType))
+		}
+		if instr.High != nil {
+			endIndex = createValueRelName(instr.High)
+		}
+
 		fmt.Fprintf(ctx.stream, "%s.addr = %s + %s;\n", createValueRelName(instr), createValueRelName(instr.X), startIndex)
+		fmt.Fprintf(ctx.stream, "%s.size = %s - %s;\n", createValueRelName(instr), endIndex, startIndex)
 
 	case *ssa.Store:
 		fmt.Fprintf(ctx.stream, "*%s = %s;\n", createValueRelName(instr.Addr), createValueRelName(instr.Val))
