@@ -108,6 +108,20 @@ func Test11() int {
 	return sum
 }
 
+func Test12() int {
+	var a [5]int
+	for i := 0; i < len(a); i++ {
+		a[i] = i
+	}
+	b := a
+	for i := 0; i < len(b); i++ {
+		if b[i] != i {
+			return 0
+		}
+	}
+	return 12
+}
+
 func main() {
 	runTest := func(test func() int) {
 		funcFullName := runtime.FuncForPC(reflect.ValueOf(test).Pointer()).Name()
@@ -125,4 +139,5 @@ func main() {
 	runTest(Test9)
 	runTest(Test10)
 	runTest(Test11)
+	runTest(Test12)
 }
