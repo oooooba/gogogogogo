@@ -47,6 +47,38 @@ func Test6() int {
 	return cap(s)
 }
 
+func Test7() int {
+	var a [5]int
+	s := a[:]
+	for i := 0; i < len(s); i++ {
+		s[i] = 1
+	}
+	t := s
+	for i := 0; i < len(t); i++ {
+		t[i] = 2
+	}
+	sum := 0
+	for i := 0; i < len(s); i++ {
+		sum += s[i]
+	}
+	return sum
+}
+
+func Test8() int {
+	var a [5]int
+	s := a[:]
+	for i := 0; i < len(s); i++ {
+		s[i] = i
+	}
+	t := s
+	for i := 0; i < len(t); i++ {
+		if t[i] != i {
+			return 0
+		}
+	}
+	return 8
+}
+
 func main() {
 	runTest := func(test func() int) {
 		funcFullName := runtime.FuncForPC(reflect.ValueOf(test).Pointer()).Name()
@@ -59,4 +91,6 @@ func main() {
 	runTest(Test4)
 	runTest(Test5)
 	runTest(Test6)
+	runTest(Test7)
+	runTest(Test8)
 }
