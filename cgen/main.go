@@ -112,20 +112,34 @@ func createType(typ types.Type, id string) string {
 	panic(fmt.Sprintf("type not supported: %s", typ.String()))
 }
 
+type paramArgPair struct {
+	param string
+	arg   string
+}
+
+func (ctx *Context) switchFunction(nextFunction string, nextFunctionFrame string, resumeFunction string, result *string, paramArgPairs ...paramArgPair) {
+	fmt.Fprintf(ctx.stream, "struct %s* next_frame = (struct %s*)(ctx->stack_pointer + sizeof(*frame));\n", nextFunctionFrame, nextFunctionFrame)
+	fmt.Fprintf(ctx.stream, "next_frame->common.resume_func = %s;\n", resumeFunction)
+	fmt.Fprintf(ctx.stream, "next_frame->common.prev_stack_pointer = ctx->stack_pointer;\n")
+	if result != nil {
+		fmt.Fprintf(ctx.stream, "next_frame->result_ptr = &%s;\n", *result)
+	}
+	for i, pair := range paramArgPairs {
+		fmt.Fprintf(ctx.stream, "next_frame->%s = %s; // [%d]\n", pair.param, pair.arg, i)
+	}
+	fmt.Fprintf(ctx.stream, "ctx->stack_pointer = next_frame;\n")
+	fmt.Fprintf(ctx.stream, "return %s;\n", nextFunction)
+}
+
 func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 	fmt.Fprintf(ctx.stream, "\t// %T instruction\n", instruction)
 	switch instr := instruction.(type) {
 	case *ssa.Alloc:
 		if instr.Heap {
-			fmt.Fprintf(ctx.stream, `
-	struct StackFrameNew* next_frame = (struct StackFrameNew*)(ctx->stack_pointer + sizeof(*frame));
-	next_frame->common.resume_func = %s;
-	next_frame->common.prev_stack_pointer = ctx->stack_pointer;
-	next_frame->result_ptr = (void**)&%s;
-	next_frame->size = sizeof(%s);
-	ctx->stack_pointer = next_frame;
-	return gox5_new;
-`, createInstructionName(instr), createValueRelName(instr), createType(instr.Type().Underlying().(*types.Pointer).Elem(), ""))
+			result := createValueRelName(instr)
+			ctx.switchFunction("gox5_new", "StackFrameNew", createInstructionName(instr), &result,
+				paramArgPair{param: "size", arg: fmt.Sprintf("sizeof(%s)", createType(instr.Type().Underlying().(*types.Pointer).Elem(), ""))},
+			)
 		} else {
 			address_of_op := "&"
 			if _, ok := instr.Type().Underlying().(*types.Pointer).Elem().(*types.Array); ok {
@@ -160,25 +174,21 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 
 		case *ssa.Function:
 			name := createFunctionName(callee)
-			fmt.Fprintf(ctx.stream, `
-	struct StackFrame_%s* next_frame = (struct StackFrame_%s*)(ctx->stack_pointer + sizeof(*frame));
-	next_frame->common.resume_func = %s;
-	next_frame->common.prev_stack_pointer = ctx->stack_pointer;
-`, name, name, createInstructionName(instr))
+			nextFunctionFrame := fmt.Sprintf("StackFrame_%s", name)
+			var result *string
 			if callee.Signature.Results().Len() > 0 {
 				if callee.Signature.Results().Len() != 1 {
 					panic("only 0 or 1 return value supported")
 				}
-				fmt.Fprintf(ctx.stream, "next_frame->result_ptr = &%s;\n", createValueRelName(instr))
+				res := createValueRelName(instr)
+				result = &res
 			}
+			paramArgPairs := make([]paramArgPair, 0)
 			for i, arg := range callCommon.Args {
-				param := callee.Params[i]
-				fmt.Fprintf(ctx.stream, "next_frame->%s = %s; // [%d]: param=%s, arg=%s\n", createValueName(param), createValueRelName(arg), i, param.String(), arg.String())
+				paramArgPair := paramArgPair{param: createValueName(callee.Params[i]), arg: createValueRelName(arg)}
+				paramArgPairs = append(paramArgPairs, paramArgPair)
 			}
-			fmt.Fprintf(ctx.stream, `
-	ctx->stack_pointer = next_frame;
-	return %s;
-`, name)
+			ctx.switchFunction(name, nextFunctionFrame, createInstructionName(instr), result, paramArgPairs...)
 
 		default:
 			panic("unknown callee")
@@ -209,27 +219,23 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 				}
 				resultSize = fmt.Sprintf("sizeof(%s)", createType(callee.Signature.Results().At(0).Type(), ""))
 			}
-			fmt.Fprintf(ctx.stream, `
-	struct StackFrameSpawn* next_frame = (struct StackFrameSpawn*)(ctx->stack_pointer + sizeof(*frame));
-	next_frame->common.resume_func = %s;
-	next_frame->common.prev_stack_pointer = ctx->stack_pointer;
-	next_frame->func = %s;
-	next_frame->result_size = %s;
-`, createInstructionName(instr), name, resultSize)
+			paramArgPairs := []paramArgPair{
+				{param: "func", arg: name},
+				{param: "result_size", arg: resultSize},
+			}
 			if len(callCommon.Args) > 3 {
 				panic("currently, support 3 parameters")
 			}
-			for i, arg := range callCommon.Args {
-				param := callee.Params[i]
-				fmt.Fprintf(ctx.stream, "next_frame->arg%d = %s; // param=%s, arg=%s\n", i, createValueRelName(arg), param.String(), arg.String())
+			for i := 0; i < 3; i++ {
+				param := fmt.Sprintf("arg%d", i)
+				arg := "0 /* [padded] */"
+				if i < len(callCommon.Args) {
+					arg = createValueRelName(callCommon.Args[i])
+				}
+				paramArgPair := paramArgPair{param: param, arg: arg}
+				paramArgPairs = append(paramArgPairs, paramArgPair)
 			}
-			for i := len(callCommon.Args); i < 3; i++ {
-				fmt.Fprintf(ctx.stream, "next_frame->arg%d = 0; // [padded]\n", i)
-			}
-			fmt.Fprintf(ctx.stream, `
-	ctx->stack_pointer = next_frame;
-	return gox5_spawn;
-`)
+			ctx.switchFunction("gox5_spawn", "StackFrameSpawn", createInstructionName(instr), nil, paramArgPairs...)
 		default:
 			panic("unknown callee")
 		}
@@ -241,15 +247,10 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 		fmt.Fprintf(ctx.stream, "\treturn %s;\n", createBasicBlockName(instr.Block().Succs[0]))
 
 	case *ssa.MakeChan:
-		fmt.Fprintf(ctx.stream, `
-	struct StackFrameMakeChan* next_frame = (struct StackFrameMakeChan*)(ctx->stack_pointer + sizeof(*frame));
-	next_frame->common.resume_func = %s;
-	next_frame->common.prev_stack_pointer = ctx->stack_pointer;
-	next_frame->result_ptr = &%s;
-	next_frame->size = %s;
-	ctx->stack_pointer = next_frame;
-	return gox5_make_chan;
-`, createInstructionName(instr), createValueRelName(instr), createValueRelName(instr.Size))
+		result := createValueRelName(instr)
+		ctx.switchFunction("gox5_make_chan", "StackFrameMakeChan", createInstructionName(instr), &result,
+			paramArgPair{param: "size", arg: createValueRelName(instr.Size)},
+		)
 
 	case *ssa.Phi:
 		basicBlock := instr.Block()
@@ -269,15 +270,10 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 		fmt.Fprintf(ctx.stream, "return frame->common.resume_func;\n")
 
 	case *ssa.Send:
-		fmt.Fprintf(ctx.stream, `
-	struct StackFrameSend* next_frame = (struct StackFrameSend*)(ctx->stack_pointer + sizeof(*frame));
-	next_frame->common.resume_func = %s;
-	next_frame->common.prev_stack_pointer = ctx->stack_pointer;
-	next_frame->channel = %s;
-	next_frame->data = %s;
-	ctx->stack_pointer = next_frame;
-	return gox5_send;
-`, createInstructionName(instr), createValueRelName(instr.Chan), createValueRelName(instr.X))
+		ctx.switchFunction("gox5_send", "StackFrameSend", createInstructionName(instr), nil,
+			paramArgPair{param: "channel", arg: createValueRelName(instr.Chan)},
+			paramArgPair{param: "data", arg: createValueRelName(instr.X)},
+		)
 
 	case *ssa.Slice:
 		fmt.Fprintf(ctx.stream, "memset(&%s, 0, sizeof(struct Slice));\n", createValueRelName(instr))
@@ -312,15 +308,10 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 
 	case *ssa.UnOp:
 		if instr.Op == token.ARROW {
-			fmt.Fprintf(ctx.stream, `
-	struct StackFrameRecv* next_frame = (struct StackFrameRecv*)(ctx->stack_pointer + sizeof(*frame));
-	next_frame->common.resume_func = %s;
-	next_frame->common.prev_stack_pointer = ctx->stack_pointer;
-	next_frame->result_ptr = &%s;
-	next_frame->channel = %s;
-	ctx->stack_pointer = next_frame;
-	return gox5_recv;
-`, createInstructionName(instr), createValueRelName(instr), createValueRelName(instr.X))
+			result := createValueRelName(instr)
+			ctx.switchFunction("gox5_recv", "StackFrameRecv", createInstructionName(instr), &result,
+				paramArgPair{param: "channel", arg: createValueRelName(instr.X)},
+			)
 		} else if instr.Op == token.MUL {
 			fmt.Fprintf(ctx.stream, "memcpy(&%s, %s, sizeof(%s));\n", createValueRelName(instr), createValueRelName(instr.X), createType(instr.Type(), ""))
 		} else {
@@ -572,7 +563,7 @@ void* gox5_make_chan (struct LightWeightThreadContext* ctx);
 
 struct StackFrameNew {
 	struct StackFrameCommon common;
-	void** result_ptr;
+	void* result_ptr;
 	intptr_t size;
 };
 void* gox5_new (struct LightWeightThreadContext* ctx);
