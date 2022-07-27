@@ -117,12 +117,12 @@ type paramArgPair struct {
 	arg   string
 }
 
-func (ctx *Context) switchFunction(nextFunction string, nextFunctionFrame string, resumeFunction string, result *string, paramArgPairs ...paramArgPair) {
+func (ctx *Context) switchFunction(nextFunction string, nextFunctionFrame string, resumeFunction string, resultPtr *string, paramArgPairs ...paramArgPair) {
 	fmt.Fprintf(ctx.stream, "struct %s* next_frame = (struct %s*)(ctx->stack_pointer + sizeof(*frame));\n", nextFunctionFrame, nextFunctionFrame)
 	fmt.Fprintf(ctx.stream, "next_frame->common.resume_func = %s;\n", resumeFunction)
 	fmt.Fprintf(ctx.stream, "next_frame->common.prev_stack_pointer = ctx->stack_pointer;\n")
-	if result != nil {
-		fmt.Fprintf(ctx.stream, "next_frame->result_ptr = &%s;\n", *result)
+	if resultPtr != nil {
+		fmt.Fprintf(ctx.stream, "next_frame->result_ptr = &%s;\n", *resultPtr)
 	}
 	for i, pair := range paramArgPairs {
 		fmt.Fprintf(ctx.stream, "next_frame->%s = %s; // [%d]\n", pair.param, pair.arg, i)
@@ -175,20 +175,20 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 		case *ssa.Function:
 			name := createFunctionName(callee)
 			nextFunctionFrame := fmt.Sprintf("StackFrame_%s", name)
-			var result *string
+			var resultPtr *string
 			if callee.Signature.Results().Len() > 0 {
 				if callee.Signature.Results().Len() != 1 {
 					panic("only 0 or 1 return value supported")
 				}
-				res := createValueRelName(instr)
-				result = &res
+				result := createValueRelName(instr)
+				resultPtr = &result
 			}
 			paramArgPairs := make([]paramArgPair, 0)
 			for i, arg := range callCommon.Args {
 				paramArgPair := paramArgPair{param: createValueName(callee.Params[i]), arg: createValueRelName(arg)}
 				paramArgPairs = append(paramArgPairs, paramArgPair)
 			}
-			ctx.switchFunction(name, nextFunctionFrame, createInstructionName(instr), result, paramArgPairs...)
+			ctx.switchFunction(name, nextFunctionFrame, createInstructionName(instr), resultPtr, paramArgPairs...)
 
 		default:
 			panic("unknown callee")
