@@ -66,8 +66,13 @@ func extractTestTargetFunctions(f *ssa.Function) []*ssa.Function {
 
 func createValueName(value ssa.Value) string {
 	if val, ok := value.(*ssa.Const); ok {
-		if val == nil {
-			return "NULL"
+		if val.IsNil() {
+			switch val.Type().Underlying().(type) {
+			case *types.Slice:
+				return "(struct Slice){0}"
+			default:
+				panic(fmt.Sprintf("unimplemented: %s: %s", val.String(), val.Type()))
+			}
 		} else {
 			return val.Value.String()
 		}
@@ -152,7 +157,20 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 		}
 
 	case *ssa.BinOp:
-		fmt.Fprintf(ctx.stream, "%s = %s %s %s;\n", createValueRelName(instr), createValueRelName(instr.X), instr.Op.String(), createValueRelName(instr.Y))
+		switch op := instr.Op; op {
+		case token.EQL, token.NEQ:
+			if instr.X.Type().Underlying() != instr.Y.Type().Underlying() {
+				panic(fmt.Sprintf("type mismatch: %s (%s) vs %s (%s)", instr.X, instr.X.Type(), instr.Y, instr.Y.Type()))
+			}
+			switch instr.X.Type().Underlying().(type) {
+			case *types.Slice:
+				fmt.Fprintf(ctx.stream, "%s = memcmp(&%s, &%s, sizeof(%s)) %s 0;\n", createValueRelName(instr), createValueRelName(instr.X), createValueRelName(instr.Y), createValueRelName(instr.X), instr.Op)
+			default:
+				fmt.Fprintf(ctx.stream, "%s = %s %s %s;\n", createValueRelName(instr), createValueRelName(instr.X), instr.Op.String(), createValueRelName(instr.Y))
+			}
+		default:
+			fmt.Fprintf(ctx.stream, "%s = %s %s %s;\n", createValueRelName(instr), createValueRelName(instr.X), instr.Op.String(), createValueRelName(instr.Y))
+		}
 
 	case *ssa.Call:
 		callCommon := instr.Common()

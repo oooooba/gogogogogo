@@ -79,6 +79,34 @@ func Test8() int {
 	return 8
 }
 
+func Test9() int {
+	var s []int
+	if s != nil {
+		return 0
+	}
+	if len(s) != 0 {
+		return 1
+	}
+	if cap(s) != 0 {
+		return 2
+	}
+	return 9
+}
+
+func Test10() int {
+	s := []int{}
+	if s == nil {
+		return 0
+	}
+	if len(s) != 0 {
+		return 1
+	}
+	if cap(s) != 0 {
+		return 2
+	}
+	return 10
+}
+
 func main() {
 	runTest := func(test func() int) {
 		funcFullName := runtime.FuncForPC(reflect.ValueOf(test).Pointer()).Name()
@@ -93,4 +121,6 @@ func main() {
 	runTest(Test6)
 	runTest(Test7)
 	runTest(Test8)
+	runTest(Test9)
+	runTest(Test10)
 }
