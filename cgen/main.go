@@ -181,6 +181,13 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 		switch callee := callCommon.Value.(type) {
 		case *ssa.Builtin:
 			switch callee.Name() {
+			case "append":
+				result := createValueRelName(instr)
+				ctx.switchFunction("gox5_append", "StackFrameAppend", createInstructionName(instr), &result,
+					paramArgPair{param: "base", arg: fmt.Sprintf("%s", createValueRelName(callCommon.Args[0]))},
+					paramArgPair{param: "elements", arg: fmt.Sprintf("%s", createValueRelName(callCommon.Args[1]))},
+				)
+				return
 			case "cap":
 				fmt.Fprintf(ctx.stream, "%s = %s.capacity;\n", createValueRelName(instr), createValueRelName(callCommon.Args[0]))
 			case "len":
@@ -571,6 +578,14 @@ struct StackFrameCommon {
 	void* resume_func;
 	void* prev_stack_pointer;
 };
+
+struct StackFrameAppend {
+	struct StackFrameCommon common;
+	struct Slice* result_ptr;
+	struct Slice base;
+	struct Slice elements;
+};
+void* gox5_append (struct LightWeightThreadContext* ctx);
 
 struct StackFrameMakeChan {
 	struct StackFrameCommon common;

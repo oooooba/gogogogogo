@@ -40,6 +40,11 @@ extern "C" {
 }
 
 #[no_mangle]
+pub extern "C" fn gox5_append(ctx: &mut LightWeightThreadContext) -> NextUserFunctionType {
+    api::append(ctx)
+}
+
+#[no_mangle]
 pub extern "C" fn gox5_make_chan(ctx: &mut LightWeightThreadContext) -> NextUserFunctionType {
     api::make_chan(ctx)
 }

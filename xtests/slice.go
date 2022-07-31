@@ -107,6 +107,93 @@ func Test10() int {
 	return 10
 }
 
+func Test11() int {
+	s := []int{}
+	s = append(s)
+	if s == nil {
+		return 0
+	}
+	if len(s) != 0 {
+		return len(s)
+	}
+	if cap(s) != 0 {
+		return 2
+	}
+	return 11
+}
+
+func Test12() int {
+	s := []int{}
+	s = append(s, 12)
+	if s == nil {
+		return 0
+	}
+	if len(s) != 1 {
+		return 1
+	}
+	if cap(s) == 0 {
+		return 2
+	}
+	return s[0]
+}
+
+func Test13() int {
+	var a [0]int
+	s := a[:]
+	s = append(s)
+	if s == nil {
+		return 0
+	}
+	if len(s) != 0 {
+		return 1
+	}
+	return 13
+}
+
+func Test14() int {
+	var a [0]int
+	s := a[:]
+	s = append(s, 14)
+	if s == nil {
+		return 0
+	}
+	if len(s) != 1 {
+		return 1
+	}
+	if cap(s) == 0 {
+		return 2
+	}
+	return s[0]
+}
+
+func Test15() int {
+	for i := 0; i < 10; i++ {
+		var s []int
+		if s != nil {
+			return 0
+		}
+		if len(s) != 0 {
+			return 1
+		}
+		if cap(s) != 0 {
+			return 2
+		}
+
+		s = append(s, i)
+
+		if s == nil {
+			return 3
+		}
+		if len(s) != 1 {
+			return 4
+		}
+		if cap(s) <= 0 {
+			return 5
+		}
+	}
+	return 15
+}
+
 func main() {
 	runTest := func(test func() int) {
 		funcFullName := runtime.FuncForPC(reflect.ValueOf(test).Pointer()).Name()
@@ -123,4 +210,9 @@ func main() {
 	runTest(Test8)
 	runTest(Test9)
 	runTest(Test10)
+	runTest(Test11)
+	runTest(Test12)
+	runTest(Test13)
+	runTest(Test14)
+	runTest(Test15)
 }
