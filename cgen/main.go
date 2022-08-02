@@ -216,7 +216,7 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 			ctx.switchFunction(name, nextFunctionFrame, createInstructionName(instr), resultPtr, paramArgPairs...)
 
 		default:
-			panic("unknown callee")
+			panic(fmt.Sprintf("unknown callee: %s, %T", callee, callee))
 		}
 
 	case *ssa.FieldAddr:
