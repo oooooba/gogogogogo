@@ -36,16 +36,18 @@ func main() {
 	}
 
 	ctx := Context{
-		stream:        os.Stdout,
-		latestNameMap: make(map[*ssa.BasicBlock]string),
+		stream:           os.Stdout,
+		latestNameMap:    make(map[*ssa.BasicBlock]string),
+		signatureNameSet: make(map[string]struct{}),
 	}
 	ctx.emitPackage(ssaPackage)
 }
 
 type Context struct {
-	stream        *os.File
-	foundValueSet map[ssa.Value]struct{}
-	latestNameMap map[*ssa.BasicBlock]string
+	stream           *os.File
+	foundValueSet    map[ssa.Value]struct{}
+	latestNameMap    map[*ssa.BasicBlock]string
+	signatureNameSet map[string]struct{}
 }
 
 func extractTestTargetFunctions(f *ssa.Function) []*ssa.Function {
@@ -76,6 +78,13 @@ func createValueName(value ssa.Value) string {
 		} else {
 			return val.Value.String()
 		}
+	} else if val, ok := value.(*ssa.Parameter); ok {
+		for i, param := range val.Parent().Params {
+			if val.Name() == param.Name() {
+				return fmt.Sprintf("param%d", i)
+			}
+		}
+		panic(fmt.Sprintf("unreachable: val=%s, params=%v", val, val.Parent().Params))
 	} else {
 		parentName := value.Parent().Name()
 		return fmt.Sprintf("v$%s$%s$%p", value.Name(), parentName, value)
@@ -85,6 +94,8 @@ func createValueName(value ssa.Value) string {
 func createValueRelName(value ssa.Value) string {
 	if _, ok := value.(*ssa.Const); ok {
 		return createValueName(value)
+	} else if _, ok := value.(*ssa.Parameter); ok {
+		return fmt.Sprintf("frame->signature.%s", createValueName(value))
 	} else {
 		return fmt.Sprintf("frame->%s", createValueName(value))
 	}
@@ -122,16 +133,32 @@ type paramArgPair struct {
 	arg   string
 }
 
-func (ctx *Context) switchFunction(nextFunction string, nextFunctionFrame string, resumeFunction string, resultPtr *string, paramArgPairs ...paramArgPair) {
+func (ctx *Context) switchFunction(nextFunction string, nextFunctionFrame string, nextFunctionSignature *types.Signature, resumeFunction string, resultPtr *string, paramArgPairs ...paramArgPair) {
 	fmt.Fprintf(ctx.stream, "struct %s* next_frame = (struct %s*)(ctx->stack_pointer + sizeof(*frame));\n", nextFunctionFrame, nextFunctionFrame)
 	fmt.Fprintf(ctx.stream, "next_frame->common.resume_func = %s;\n", resumeFunction)
 	fmt.Fprintf(ctx.stream, "next_frame->common.prev_stack_pointer = ctx->stack_pointer;\n")
-	if resultPtr != nil {
-		fmt.Fprintf(ctx.stream, "next_frame->result_ptr = &%s;\n", *resultPtr)
+
+	if nextFunctionSignature == nil {
+		// builtin functions
+		if resultPtr != nil {
+			fmt.Fprintf(ctx.stream, "next_frame->result_ptr = &%s;\n", *resultPtr)
+		}
+		for i, pair := range paramArgPairs {
+			fmt.Fprintf(ctx.stream, "next_frame->%s = %s; // [%d]\n", pair.param, pair.arg, i)
+		}
+	} else {
+		// user defned functions
+		if resultPtr != nil {
+			fmt.Fprintf(ctx.stream, "next_frame->signature.result_ptr = &%s;\n", *resultPtr)
+		}
+		if nextFunctionSignature.Params().Len() != len(paramArgPairs) {
+			panic(fmt.Sprintf("signature mismatch: expected=%v, actual=%v", nextFunctionSignature.Params(), paramArgPairs))
+		}
+		for i, pair := range paramArgPairs {
+			fmt.Fprintf(ctx.stream, "next_frame->signature.param%d = %s; // [%s]\n", i, pair.arg, pair.param)
+		}
 	}
-	for i, pair := range paramArgPairs {
-		fmt.Fprintf(ctx.stream, "next_frame->%s = %s; // [%d]\n", pair.param, pair.arg, i)
-	}
+
 	fmt.Fprintf(ctx.stream, "ctx->stack_pointer = next_frame;\n")
 	fmt.Fprintf(ctx.stream, "return %s;\n", nextFunction)
 }
@@ -142,7 +169,7 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 	case *ssa.Alloc:
 		if instr.Heap {
 			result := createValueRelName(instr)
-			ctx.switchFunction("gox5_new", "StackFrameNew", createInstructionName(instr), &result,
+			ctx.switchFunction("gox5_new", "StackFrameNew", nil, createInstructionName(instr), &result,
 				paramArgPair{param: "size", arg: fmt.Sprintf("sizeof(%s)", createType(instr.Type().Underlying().(*types.Pointer).Elem(), ""))},
 			)
 		} else {
@@ -183,7 +210,7 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 			switch callee.Name() {
 			case "append":
 				result := createValueRelName(instr)
-				ctx.switchFunction("gox5_append", "StackFrameAppend", createInstructionName(instr), &result,
+				ctx.switchFunction("gox5_append", "StackFrameAppend", nil, createInstructionName(instr), &result,
 					paramArgPair{param: "base", arg: fmt.Sprintf("%s", createValueRelName(callCommon.Args[0]))},
 					paramArgPair{param: "elements", arg: fmt.Sprintf("%s", createValueRelName(callCommon.Args[1]))},
 				)
@@ -213,7 +240,7 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 				paramArgPair := paramArgPair{param: createValueName(callee.Params[i]), arg: createValueRelName(arg)}
 				paramArgPairs = append(paramArgPairs, paramArgPair)
 			}
-			ctx.switchFunction(name, nextFunctionFrame, createInstructionName(instr), resultPtr, paramArgPairs...)
+			ctx.switchFunction(name, nextFunctionFrame, callee.Signature, createInstructionName(instr), resultPtr, paramArgPairs...)
 
 		default:
 			panic(fmt.Sprintf("unknown callee: %s, %T", callee, callee))
@@ -260,7 +287,7 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 				paramArgPair := paramArgPair{param: param, arg: arg}
 				paramArgPairs = append(paramArgPairs, paramArgPair)
 			}
-			ctx.switchFunction("gox5_spawn", "StackFrameSpawn", createInstructionName(instr), nil, paramArgPairs...)
+			ctx.switchFunction("gox5_spawn", "StackFrameSpawn", nil, createInstructionName(instr), nil, paramArgPairs...)
 		default:
 			panic("unknown callee")
 		}
@@ -273,7 +300,7 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 
 	case *ssa.MakeChan:
 		result := createValueRelName(instr)
-		ctx.switchFunction("gox5_make_chan", "StackFrameMakeChan", createInstructionName(instr), &result,
+		ctx.switchFunction("gox5_make_chan", "StackFrameMakeChan", nil, createInstructionName(instr), &result,
 			paramArgPair{param: "size", arg: createValueRelName(instr.Size)},
 		)
 
@@ -290,12 +317,12 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 			if len(instr.Results) != 1 {
 				panic("only 0 or 1 return value supported")
 			}
-			fmt.Fprintf(ctx.stream, "*frame->result_ptr = %s;\n", createValueRelName(instr.Results[0]))
+			fmt.Fprintf(ctx.stream, "*frame->signature.result_ptr = %s;\n", createValueRelName(instr.Results[0]))
 		}
 		fmt.Fprintf(ctx.stream, "return frame->common.resume_func;\n")
 
 	case *ssa.Send:
-		ctx.switchFunction("gox5_send", "StackFrameSend", createInstructionName(instr), nil,
+		ctx.switchFunction("gox5_send", "StackFrameSend", nil, createInstructionName(instr), nil,
 			paramArgPair{param: "channel", arg: createValueRelName(instr.Chan)},
 			paramArgPair{param: "data", arg: createValueRelName(instr.X)},
 		)
@@ -334,7 +361,7 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 	case *ssa.UnOp:
 		if instr.Op == token.ARROW {
 			result := createValueRelName(instr)
-			ctx.switchFunction("gox5_recv", "StackFrameRecv", createInstructionName(instr), &result,
+			ctx.switchFunction("gox5_recv", "StackFrameRecv", nil, createInstructionName(instr), &result,
 				paramArgPair{param: "channel", arg: createValueRelName(instr.X)},
 			)
 		} else if instr.Op == token.MUL {
@@ -454,20 +481,84 @@ func requireSwitchFunction(instruction ssa.Instruction) bool {
 	return false
 }
 
-func (ctx *Context) emitFunctionDeclaration(function *ssa.Function) {
-	fmt.Fprintf(ctx.stream, "void* %s (struct LightWeightThreadContext* ctx);\n", createFunctionName(function))
-	fmt.Fprintf(ctx.stream, "struct StackFrame_%s {\n", createFunctionName(function))
-	fmt.Fprintf(ctx.stream, "\tstruct StackFrameCommon common;\n")
-	if function.Signature.Results().Len() > 0 {
-		if function.Signature.Results().Len() != 1 {
+func createSignatureItemName(typ types.Type) string {
+	switch t := typ.Underlying().(type) {
+	case *types.Array:
+		return fmt.Sprintf("Array%d%s", t.Len(), createSignatureItemName(t.Elem()))
+	case *types.Basic:
+		switch t.Kind() {
+		case types.Bool:
+			return "bool"
+		case types.Int:
+			return "intptr_t"
+		}
+	case *types.Chan:
+		return "Channel"
+	case *types.Pointer:
+		return fmt.Sprintf("Pointer%s", createSignatureItemName(t.Elem()))
+	case *types.Slice:
+		return "Slice"
+	case *types.Struct:
+		return fmt.Sprintf("Struct%p", t)
+	}
+	panic(fmt.Sprintf("type not supported: %s", typ.String()))
+}
+
+func createSignatureName(signature *types.Signature) string {
+	name := "struct Signature_"
+
+	name += "Params$$"
+
+	name += "$$"
+	for i := 0; i < signature.Params().Len(); i++ {
+		name += createSignatureItemName(signature.Params().At(i).Type())
+		name += "$$"
+	}
+
+	name += "Results$$"
+	if signature.Results().Len() > 0 {
+		if signature.Results().Len() != 1 {
 			panic("only 0 or 1 return value supported")
 		}
-		fmt.Fprintf(ctx.stream, "\t%s* result_ptr;\n", createType(function.Signature.Results().At(0).Type(), ""))
+		name += createSignatureItemName(signature.Results().At(0).Type())
 	}
-	for i := 0; i < len(function.Params); i++ {
-		id := fmt.Sprintf("%s", createValueName(function.Params[i]))
-		fmt.Fprintf(ctx.stream, "\t%s; // parameter[%d]: %s\n", createType(function.Params[i].Type(), id), i, function.Params[i].String())
+
+	return name
+}
+
+func (ctx *Context) tryEmitSignatureDefinition(signature *types.Signature) {
+	name := createSignatureName(signature)
+	_, ok := ctx.signatureNameSet[name]
+	if ok {
+		return
 	}
+	ctx.signatureNameSet[name] = struct{}{}
+
+	fmt.Fprintf(ctx.stream, "%s { /* %p */\n", name, signature)
+
+	if signature.Results().Len() > 0 {
+		if signature.Results().Len() != 1 {
+			panic("only 0 or 1 return value supported")
+		}
+		fmt.Fprintf(ctx.stream, "\t%s* result_ptr;\n", createType(signature.Results().At(0).Type(), ""))
+	}
+
+	for i := 0; i < signature.Params().Len(); i++ {
+		id := fmt.Sprintf("param%d", i)
+		fmt.Fprintf(ctx.stream, "\t%s; // parameter[%d]: %s\n", createType(signature.Params().At(i).Type(), id), i, signature.Params().At(i).String())
+	}
+
+	fmt.Fprintln(ctx.stream, "};")
+}
+
+func (ctx *Context) emitFunctionDeclaration(function *ssa.Function) {
+	fmt.Fprintf(ctx.stream, "void* %s (struct LightWeightThreadContext* ctx);\n", createFunctionName(function))
+
+	ctx.tryEmitSignatureDefinition(function.Signature)
+
+	fmt.Fprintf(ctx.stream, "struct StackFrame_%s {\n", createFunctionName(function))
+	fmt.Fprintf(ctx.stream, "\tstruct StackFrameCommon common;\n")
+	fmt.Fprintf(ctx.stream, "\t%s signature;\n", createSignatureName(function.Signature))
 
 	if function.Blocks != nil {
 		ctx.foundValueSet = make(map[ssa.Value]struct{})
