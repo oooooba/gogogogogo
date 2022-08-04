@@ -508,8 +508,6 @@ func createSignatureName(signature *types.Signature) string {
 	name := "struct Signature_"
 
 	name += "Params$$"
-
-	name += "$$"
 	for i := 0; i < signature.Params().Len(); i++ {
 		name += createSignatureItemName(signature.Params().At(i).Type())
 		name += "$$"
