@@ -134,11 +134,6 @@ func createType(typ types.Type, id string) string {
 	panic(fmt.Sprintf("type not supported: %s", typ.String()))
 }
 
-type paramArgPair struct {
-	param string
-	arg   string
-}
-
 func (ctx *Context) switchFunction(nextFunction string, callCommon *ssa.CallCommon, result string, resumeFunction string) {
 	fmt.Fprintf(ctx.stream, "struct StackFrameCommon* next_frame = (struct StackFrameCommon*)(ctx->stack_pointer + sizeof(*frame));\n")
 	fmt.Fprintf(ctx.stream, "next_frame->resume_func = %s;\n", resumeFunction)
@@ -161,6 +156,11 @@ func (ctx *Context) switchFunction(nextFunction string, callCommon *ssa.CallComm
 
 	fmt.Fprintf(ctx.stream, "ctx->stack_pointer = next_frame;\n")
 	fmt.Fprintf(ctx.stream, "return %s;\n", nextFunction)
+}
+
+type paramArgPair struct {
+	param string
+	arg   string
 }
 
 func (ctx *Context) switchFunctionToCallRuntimeApi(nextFunction string, nextFunctionFrame string, resumeFunction string, resultPtr *string, paramArgPairs ...paramArgPair) {
