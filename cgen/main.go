@@ -78,6 +78,8 @@ func createValueName(value ssa.Value) string {
 		} else {
 			return val.Value.String()
 		}
+	} else if val, ok := value.(*ssa.Function); ok {
+		return fmt.Sprintf("(struct UserFunctionType){%s}", createFunctionName(val))
 	} else if val, ok := value.(*ssa.Parameter); ok {
 		for i, param := range val.Parent().Params {
 			if val.Name() == param.Name() {
@@ -93,6 +95,8 @@ func createValueName(value ssa.Value) string {
 
 func createValueRelName(value ssa.Value) string {
 	if _, ok := value.(*ssa.Const); ok {
+		return createValueName(value)
+	} else if _, ok := value.(*ssa.Function); ok {
 		return createValueName(value)
 	} else if _, ok := value.(*ssa.Parameter); ok {
 		return fmt.Sprintf("frame->signature.%s", createValueName(value))
@@ -120,6 +124,8 @@ func createType(typ types.Type, id string) string {
 			elemType = et.Elem()
 		}
 		return fmt.Sprintf("%s* %s", createType(elemType, ""), id)
+	case *types.Signature:
+		return fmt.Sprintf("struct UserFunctionType %s", id)
 	case *types.Slice:
 		return fmt.Sprintf("struct Slice %s", id)
 	case *types.Struct:
@@ -247,6 +253,25 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 				paramArgPairs = append(paramArgPairs, paramArgPair)
 			}
 			ctx.switchFunction(name, callee.Signature, createInstructionName(instr), resultPtr, paramArgPairs...)
+
+		case *ssa.Parameter:
+			var resultPtr *string
+			signature := callee.Type().(*types.Signature)
+			if signature.Results().Len() > 0 {
+				if signature.Results().Len() != 1 {
+					panic("only 0 or 1 return value supported")
+				}
+				result := createValueRelName(instr)
+				resultPtr = &result
+			}
+			_ = resultPtr
+			paramArgPairs := make([]paramArgPair, 0)
+			for _, arg := range callCommon.Args {
+				paramArgPair := paramArgPair{param: "unknown", arg: createValueRelName(arg)}
+				paramArgPairs = append(paramArgPairs, paramArgPair)
+			}
+			name := fmt.Sprintf("(void*)%s.func", createValueRelName(callee))
+			ctx.switchFunction(name, signature, createInstructionName(instr), resultPtr, paramArgPairs...)
 
 		default:
 			panic(fmt.Sprintf("unknown callee: %s, %T", callee, callee))
@@ -429,6 +454,9 @@ func (ctx *Context) emitValueDeclaration(value ssa.Value) {
 	case *ssa.FieldAddr:
 		ctx.emitValueDeclaration(val.X)
 
+	case *ssa.Function:
+		canEmit = false
+
 	case *ssa.IndexAddr:
 		ctx.emitValueDeclaration(val.X)
 		ctx.emitValueDeclaration(val.Index)
@@ -502,6 +530,8 @@ func createSignatureItemName(typ types.Type) string {
 		return "Channel"
 	case *types.Pointer:
 		return fmt.Sprintf("Pointer%s", createSignatureItemName(t.Elem()))
+	case *types.Signature:
+		return "UserFunctionType"
 	case *types.Slice:
 		return "Slice"
 	case *types.Struct:
@@ -662,6 +692,10 @@ struct LightWeightThreadContext {
 };
 
 struct Channel;
+
+struct UserFunctionType {
+	const void* func;
+};
 
 struct Slice {
 	void* addr;
