@@ -133,30 +133,37 @@ type paramArgPair struct {
 	arg   string
 }
 
-func (ctx *Context) switchFunction(nextFunction string, nextFunctionFrame string, nextFunctionSignature *types.Signature, resumeFunction string, resultPtr *string, paramArgPairs ...paramArgPair) {
+func (ctx *Context) switchFunction(nextFunction string, nextFunctionSignature *types.Signature, resumeFunction string, resultPtr *string, paramArgPairs ...paramArgPair) {
+	fmt.Fprintf(ctx.stream, "struct StackFrameCommon* next_frame = (struct StackFrameCommon*)(ctx->stack_pointer + sizeof(*frame));\n")
+	fmt.Fprintf(ctx.stream, "next_frame->resume_func = %s;\n", resumeFunction)
+	fmt.Fprintf(ctx.stream, "next_frame->prev_stack_pointer = ctx->stack_pointer;\n")
+	signatureName := createSignatureName(nextFunctionSignature)
+	fmt.Fprintf(ctx.stream, "%s* signature = (%s*)(((void*)next_frame) + sizeof(*next_frame));\n", signatureName, signatureName)
+
+	if resultPtr != nil {
+		fmt.Fprintf(ctx.stream, "signature->result_ptr = &%s;\n", *resultPtr)
+	}
+	if nextFunctionSignature.Params().Len() != len(paramArgPairs) {
+		panic(fmt.Sprintf("signature mismatch: expected=%v, actual=%v", nextFunctionSignature.Params(), paramArgPairs))
+	}
+	for i, pair := range paramArgPairs {
+		fmt.Fprintf(ctx.stream, "signature->param%d = %s; // [%s]\n", i, pair.arg, pair.param)
+	}
+
+	fmt.Fprintf(ctx.stream, "ctx->stack_pointer = next_frame;\n")
+	fmt.Fprintf(ctx.stream, "return %s;\n", nextFunction)
+}
+
+func (ctx *Context) switchFunctionToCallRuntimeApi(nextFunction string, nextFunctionFrame string, resumeFunction string, resultPtr *string, paramArgPairs ...paramArgPair) {
 	fmt.Fprintf(ctx.stream, "struct %s* next_frame = (struct %s*)(ctx->stack_pointer + sizeof(*frame));\n", nextFunctionFrame, nextFunctionFrame)
 	fmt.Fprintf(ctx.stream, "next_frame->common.resume_func = %s;\n", resumeFunction)
 	fmt.Fprintf(ctx.stream, "next_frame->common.prev_stack_pointer = ctx->stack_pointer;\n")
 
-	if nextFunctionSignature == nil {
-		// builtin functions
-		if resultPtr != nil {
-			fmt.Fprintf(ctx.stream, "next_frame->result_ptr = &%s;\n", *resultPtr)
-		}
-		for i, pair := range paramArgPairs {
-			fmt.Fprintf(ctx.stream, "next_frame->%s = %s; // [%d]\n", pair.param, pair.arg, i)
-		}
-	} else {
-		// user defned functions
-		if resultPtr != nil {
-			fmt.Fprintf(ctx.stream, "next_frame->signature.result_ptr = &%s;\n", *resultPtr)
-		}
-		if nextFunctionSignature.Params().Len() != len(paramArgPairs) {
-			panic(fmt.Sprintf("signature mismatch: expected=%v, actual=%v", nextFunctionSignature.Params(), paramArgPairs))
-		}
-		for i, pair := range paramArgPairs {
-			fmt.Fprintf(ctx.stream, "next_frame->signature.param%d = %s; // [%s]\n", i, pair.arg, pair.param)
-		}
+	if resultPtr != nil {
+		fmt.Fprintf(ctx.stream, "next_frame->result_ptr = &%s;\n", *resultPtr)
+	}
+	for i, pair := range paramArgPairs {
+		fmt.Fprintf(ctx.stream, "next_frame->%s = %s; // [%d]\n", pair.param, pair.arg, i)
 	}
 
 	fmt.Fprintf(ctx.stream, "ctx->stack_pointer = next_frame;\n")
@@ -169,7 +176,7 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 	case *ssa.Alloc:
 		if instr.Heap {
 			result := createValueRelName(instr)
-			ctx.switchFunction("gox5_new", "StackFrameNew", nil, createInstructionName(instr), &result,
+			ctx.switchFunctionToCallRuntimeApi("gox5_new", "StackFrameNew", createInstructionName(instr), &result,
 				paramArgPair{param: "size", arg: fmt.Sprintf("sizeof(%s)", createType(instr.Type().Underlying().(*types.Pointer).Elem(), ""))},
 			)
 		} else {
@@ -210,7 +217,7 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 			switch callee.Name() {
 			case "append":
 				result := createValueRelName(instr)
-				ctx.switchFunction("gox5_append", "StackFrameAppend", nil, createInstructionName(instr), &result,
+				ctx.switchFunctionToCallRuntimeApi("gox5_append", "StackFrameAppend", createInstructionName(instr), &result,
 					paramArgPair{param: "base", arg: fmt.Sprintf("%s", createValueRelName(callCommon.Args[0]))},
 					paramArgPair{param: "elements", arg: fmt.Sprintf("%s", createValueRelName(callCommon.Args[1]))},
 				)
@@ -226,7 +233,6 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 
 		case *ssa.Function:
 			name := createFunctionName(callee)
-			nextFunctionFrame := fmt.Sprintf("StackFrame_%s", name)
 			var resultPtr *string
 			if callee.Signature.Results().Len() > 0 {
 				if callee.Signature.Results().Len() != 1 {
@@ -240,7 +246,7 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 				paramArgPair := paramArgPair{param: createValueName(callee.Params[i]), arg: createValueRelName(arg)}
 				paramArgPairs = append(paramArgPairs, paramArgPair)
 			}
-			ctx.switchFunction(name, nextFunctionFrame, callee.Signature, createInstructionName(instr), resultPtr, paramArgPairs...)
+			ctx.switchFunction(name, callee.Signature, createInstructionName(instr), resultPtr, paramArgPairs...)
 
 		default:
 			panic(fmt.Sprintf("unknown callee: %s, %T", callee, callee))
@@ -287,7 +293,7 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 				paramArgPair := paramArgPair{param: param, arg: arg}
 				paramArgPairs = append(paramArgPairs, paramArgPair)
 			}
-			ctx.switchFunction("gox5_spawn", "StackFrameSpawn", nil, createInstructionName(instr), nil, paramArgPairs...)
+			ctx.switchFunctionToCallRuntimeApi("gox5_spawn", "StackFrameSpawn", createInstructionName(instr), nil, paramArgPairs...)
 		default:
 			panic("unknown callee")
 		}
@@ -300,7 +306,7 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 
 	case *ssa.MakeChan:
 		result := createValueRelName(instr)
-		ctx.switchFunction("gox5_make_chan", "StackFrameMakeChan", nil, createInstructionName(instr), &result,
+		ctx.switchFunctionToCallRuntimeApi("gox5_make_chan", "StackFrameMakeChan", createInstructionName(instr), &result,
 			paramArgPair{param: "size", arg: createValueRelName(instr.Size)},
 		)
 
@@ -322,7 +328,7 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 		fmt.Fprintf(ctx.stream, "return frame->common.resume_func;\n")
 
 	case *ssa.Send:
-		ctx.switchFunction("gox5_send", "StackFrameSend", nil, createInstructionName(instr), nil,
+		ctx.switchFunctionToCallRuntimeApi("gox5_send", "StackFrameSend", createInstructionName(instr), nil,
 			paramArgPair{param: "channel", arg: createValueRelName(instr.Chan)},
 			paramArgPair{param: "data", arg: createValueRelName(instr.X)},
 		)
@@ -361,7 +367,7 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 	case *ssa.UnOp:
 		if instr.Op == token.ARROW {
 			result := createValueRelName(instr)
-			ctx.switchFunction("gox5_recv", "StackFrameRecv", nil, createInstructionName(instr), &result,
+			ctx.switchFunctionToCallRuntimeApi("gox5_recv", "StackFrameRecv", createInstructionName(instr), &result,
 				paramArgPair{param: "channel", arg: createValueRelName(instr.X)},
 			)
 		} else if instr.Op == token.MUL {
