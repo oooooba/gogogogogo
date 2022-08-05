@@ -139,21 +139,24 @@ type paramArgPair struct {
 	arg   string
 }
 
-func (ctx *Context) switchFunction(nextFunction string, nextFunctionSignature *types.Signature, resumeFunction string, resultPtr *string, paramArgPairs ...paramArgPair) {
+func (ctx *Context) switchFunction(nextFunction string, callCommon *ssa.CallCommon, result string, resumeFunction string) {
 	fmt.Fprintf(ctx.stream, "struct StackFrameCommon* next_frame = (struct StackFrameCommon*)(ctx->stack_pointer + sizeof(*frame));\n")
 	fmt.Fprintf(ctx.stream, "next_frame->resume_func = %s;\n", resumeFunction)
 	fmt.Fprintf(ctx.stream, "next_frame->prev_stack_pointer = ctx->stack_pointer;\n")
-	signatureName := createSignatureName(nextFunctionSignature)
+
+	signature := callCommon.Value.Type().(*types.Signature)
+	signatureName := createSignatureName(signature)
 	fmt.Fprintf(ctx.stream, "%s* signature = (%s*)(((void*)next_frame) + sizeof(*next_frame));\n", signatureName, signatureName)
 
-	if resultPtr != nil {
-		fmt.Fprintf(ctx.stream, "signature->result_ptr = &%s;\n", *resultPtr)
+	if signature.Results().Len() > 0 {
+		if signature.Results().Len() != 1 {
+			panic("only 0 or 1 return value supported")
+		}
+		fmt.Fprintf(ctx.stream, "signature->result_ptr = &%s;\n", result)
 	}
-	if nextFunctionSignature.Params().Len() != len(paramArgPairs) {
-		panic(fmt.Sprintf("signature mismatch: expected=%v, actual=%v", nextFunctionSignature.Params(), paramArgPairs))
-	}
-	for i, pair := range paramArgPairs {
-		fmt.Fprintf(ctx.stream, "signature->param%d = %s; // [%s]\n", i, pair.arg, pair.param)
+
+	for i, arg := range callCommon.Args {
+		fmt.Fprintf(ctx.stream, "signature->param%d = %s;\n", i, createValueRelName(arg))
 	}
 
 	fmt.Fprintf(ctx.stream, "ctx->stack_pointer = next_frame;\n")
@@ -238,40 +241,12 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 			fmt.Fprintf(ctx.stream, "\treturn %s;\n", createInstructionName(instr))
 
 		case *ssa.Function:
-			name := createFunctionName(callee)
-			var resultPtr *string
-			if callee.Signature.Results().Len() > 0 {
-				if callee.Signature.Results().Len() != 1 {
-					panic("only 0 or 1 return value supported")
-				}
-				result := createValueRelName(instr)
-				resultPtr = &result
-			}
-			paramArgPairs := make([]paramArgPair, 0)
-			for i, arg := range callCommon.Args {
-				paramArgPair := paramArgPair{param: createValueName(callee.Params[i]), arg: createValueRelName(arg)}
-				paramArgPairs = append(paramArgPairs, paramArgPair)
-			}
-			ctx.switchFunction(name, callee.Signature, createInstructionName(instr), resultPtr, paramArgPairs...)
+			nextFunction := createFunctionName(callee)
+			ctx.switchFunction(nextFunction, callCommon, createValueRelName(instr), createInstructionName(instr))
 
 		case *ssa.Parameter:
-			var resultPtr *string
-			signature := callee.Type().(*types.Signature)
-			if signature.Results().Len() > 0 {
-				if signature.Results().Len() != 1 {
-					panic("only 0 or 1 return value supported")
-				}
-				result := createValueRelName(instr)
-				resultPtr = &result
-			}
-			_ = resultPtr
-			paramArgPairs := make([]paramArgPair, 0)
-			for _, arg := range callCommon.Args {
-				paramArgPair := paramArgPair{param: "unknown", arg: createValueRelName(arg)}
-				paramArgPairs = append(paramArgPairs, paramArgPair)
-			}
-			name := fmt.Sprintf("(void*)%s.func", createValueRelName(callee))
-			ctx.switchFunction(name, signature, createInstructionName(instr), resultPtr, paramArgPairs...)
+			nextFunction := fmt.Sprintf("(void*)%s.func", createValueRelName(callee))
+			ctx.switchFunction(nextFunction, callCommon, createValueRelName(instr), createInstructionName(instr))
 
 		default:
 			panic(fmt.Sprintf("unknown callee: %s, %T", callee, callee))
