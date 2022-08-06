@@ -158,6 +158,27 @@ func (ctx *Context) switchFunction(nextFunction string, callCommon *ssa.CallComm
 	fmt.Fprintf(ctx.stream, "return %s;\n", nextFunction)
 }
 
+func (ctx *Context) switchFunctionToCallRuntimeSpawnApi(entryFunction string, callCommon *ssa.CallCommon, resultSize string, resumeFunction string) {
+	fmt.Fprintf(ctx.stream, "struct StackFrameSpawn* next_frame = (struct StackFrameSpawn*)(ctx->stack_pointer + sizeof(*frame));\n")
+	fmt.Fprintf(ctx.stream, "next_frame->common.resume_func = %s;\n", resumeFunction)
+	fmt.Fprintf(ctx.stream, "next_frame->common.prev_stack_pointer = ctx->stack_pointer;\n")
+
+	fmt.Fprintf(ctx.stream, "next_frame->func = %s;\n", entryFunction)
+	fmt.Fprintf(ctx.stream, "next_frame->result_size = %s;\n", resultSize)
+
+	fmt.Fprintf(ctx.stream, "intptr_t num_arg_buffer_words = 0;\n")
+	for i, arg := range callCommon.Args {
+		argValue := createValueRelName(arg)
+		argType := createType(arg.Type(), "")
+		fmt.Fprintf(ctx.stream, "*(%s*)&next_frame->arg_buffer[num_arg_buffer_words] = %s; // param[%d]\n", argType, argValue, i)
+		fmt.Fprintf(ctx.stream, "num_arg_buffer_words += sizeof(%s) / sizeof(intptr_t);\n", argType)
+	}
+	fmt.Fprintf(ctx.stream, "next_frame->num_arg_buffer_words = num_arg_buffer_words;\n")
+
+	fmt.Fprintf(ctx.stream, "ctx->stack_pointer = next_frame;\n")
+	fmt.Fprintf(ctx.stream, "return gox5_spawn;\n")
+}
+
 type paramArgPair struct {
 	param string
 	arg   string
@@ -269,7 +290,7 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 		}
 		switch callee := callCommon.Value.(type) {
 		case *ssa.Function:
-			name := createFunctionName(callee)
+			entryFunction := createFunctionName(callee)
 			resultSize := "0"
 			if callee.Signature.Results().Len() > 0 {
 				if callee.Signature.Results().Len() != 1 {
@@ -277,23 +298,7 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 				}
 				resultSize = fmt.Sprintf("sizeof(%s)", createType(callee.Signature.Results().At(0).Type(), ""))
 			}
-			paramArgPairs := []paramArgPair{
-				{param: "func", arg: name},
-				{param: "result_size", arg: resultSize},
-			}
-			if len(callCommon.Args) > 3 {
-				panic("currently, support 3 parameters")
-			}
-			for i := 0; i < 3; i++ {
-				param := fmt.Sprintf("arg%d", i)
-				arg := "0 /* [padded] */"
-				if i < len(callCommon.Args) {
-					arg = createValueRelName(callCommon.Args[i])
-				}
-				paramArgPair := paramArgPair{param: param, arg: arg}
-				paramArgPairs = append(paramArgPairs, paramArgPair)
-			}
-			ctx.switchFunctionToCallRuntimeApi("gox5_spawn", "StackFrameSpawn", createInstructionName(instr), nil, paramArgPairs...)
+			ctx.switchFunctionToCallRuntimeSpawnApi(entryFunction, callCommon, resultSize, createInstructionName(instr))
 		default:
 			panic("unknown callee")
 		}
@@ -723,10 +728,8 @@ struct StackFrameSpawn {
 	struct StackFrameCommon common;
     void* func;
 	intptr_t result_size;
-	// ATTENTION: number of arguments fixed
-	struct Channel* arg0;
-	intptr_t arg1;
-	intptr_t arg2;
+	intptr_t num_arg_buffer_words;
+	void* arg_buffer[0];
 };
 void* gox5_spawn (struct LightWeightThreadContext* ctx);
 `)

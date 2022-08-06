@@ -90,6 +90,30 @@ func Test7() int {
 	return 7
 }
 
+func test8_f(ch chan int, x int, y int, z int) {
+	ch <- x
+	ch <- y
+	ch <- z
+}
+
+func Test8() int {
+	ch := make(chan int)
+	go test8_f(ch, 1, 2, 3)
+	v := <-ch
+	if v != 1 {
+		return 1
+	}
+	v = <-ch
+	if v != 2 {
+		return 2
+	}
+	v = <-ch
+	if v != 3 {
+		return 3
+	}
+	return 8
+}
+
 func main() {
 	runTest := func(test func() int) {
 		funcFullName := runtime.FuncForPC(reflect.ValueOf(test).Pointer()).Name()
@@ -103,4 +127,5 @@ func main() {
 	runTest(Test5)
 	runTest(Test6)
 	runTest(Test7)
+	runTest(Test8)
 }

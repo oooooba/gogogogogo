@@ -256,9 +256,8 @@ struct StackFrameSpawn {
     common: StackFrameCommon,
     func: UserFunctionType,
     result_size: usize,
-    arg0: *mut (),
-    arg1: *mut (),
-    arg2: *mut (),
+    num_arg_buffer_words: usize,
+    arg_buffer: [(); 0],
 }
 
 unsafe impl Send for StackFrameSpawn {}
@@ -269,16 +268,20 @@ pub async fn spawn(ctx: &mut LightWeightThreadContext<'_>) -> NextUserFunctionTy
 
         let entry_func = stack_frame.func;
         let result_size = stack_frame.result_size;
-        let args = vec![
-            ObjectPtr(stack_frame.arg0),
-            ObjectPtr(stack_frame.arg1),
-            ObjectPtr(stack_frame.arg2),
-        ];
+        let arg_buffer_ptr = ObjectPtr(stack_frame.arg_buffer.as_mut_ptr());
+        let num_arg_buffer_words = stack_frame.num_arg_buffer_words;
         let global_context = ctx.global_context.dupulicate();
 
         tokio::spawn(async move {
             let mut new_ctx = Box::new(create_light_weight_thread_context(global_context));
-            start_light_weight_thread(entry_func, &mut new_ctx, result_size, args).await;
+            start_light_weight_thread(
+                entry_func,
+                &mut new_ctx,
+                result_size,
+                arg_buffer_ptr,
+                num_arg_buffer_words,
+            )
+            .await;
         });
     }
     leave_runtime_api(ctx)
