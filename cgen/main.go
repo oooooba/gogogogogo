@@ -751,6 +751,11 @@ void* gox5_spawn (struct LightWeightThreadContext* ctx);
 			continue
 		}
 		ctx.emitFunctionDeclaration(function)
+
+		for _, anonFunc := range function.AnonFuncs {
+			ctx.emitFunctionDeclaration(anonFunc)
+
+		}
 	}
 
 	for symbol := range pkg.Members {
@@ -765,6 +770,13 @@ void* gox5_spawn (struct LightWeightThreadContext* ctx);
 			continue
 		}
 		ctx.emitFunctionDefinition(function)
+
+		for _, anonFunc := range function.AnonFuncs {
+			if anonFunc.Blocks == nil {
+				continue
+			}
+			ctx.emitFunctionDefinition(anonFunc)
+		}
 	}
 
 	fmt.Fprintln(ctx.stream, "struct { const char* name; void* function; } test_entry_points[] = {")
