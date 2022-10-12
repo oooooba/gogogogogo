@@ -140,8 +140,11 @@ func (ctx *Context) switchFunction(nextFunction string, callCommon *ssa.CallComm
 	fmt.Fprintf(ctx.stream, "next_frame->prev_stack_pointer = ctx->stack_pointer;\n")
 
 	signature := callCommon.Value.Type().(*types.Signature)
-	signatureName := createSignatureName(signature)
-	fmt.Fprintf(ctx.stream, "%s* signature = (%s*)(((void*)next_frame) + sizeof(*next_frame));\n", signatureName, signatureName)
+
+	if signature.Results().Len() > 0 || signature.Params().Len() > 0 {
+		signatureName := createSignatureName(signature)
+		fmt.Fprintf(ctx.stream, "%s* signature = (%s*)(((void*)next_frame) + sizeof(*next_frame));\n", signatureName, signatureName)
+	}
 
 	if signature.Results().Len() > 0 {
 		if signature.Results().Len() != 1 {
@@ -150,8 +153,10 @@ func (ctx *Context) switchFunction(nextFunction string, callCommon *ssa.CallComm
 		fmt.Fprintf(ctx.stream, "signature->result_ptr = &%s;\n", result)
 	}
 
-	for i, arg := range callCommon.Args {
-		fmt.Fprintf(ctx.stream, "signature->param%d = %s;\n", i, createValueRelName(arg))
+	for i := 0; i < signature.Params().Len(); i++ {
+		arg := callCommon.Args[i]
+		fmt.Fprintf(ctx.stream, "signature->param%d = %s; // %s\n",
+			i, createValueRelName(arg), signature.Params().At(i))
 	}
 
 	fmt.Fprintf(ctx.stream, "ctx->stack_pointer = next_frame;\n")
