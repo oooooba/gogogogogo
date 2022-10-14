@@ -50,6 +50,11 @@ pub extern "C" fn gox5_make_chan(ctx: &mut LightWeightThreadContext) -> NextUser
 }
 
 #[no_mangle]
+pub extern "C" fn gox5_make_closure(ctx: &mut LightWeightThreadContext) -> NextUserFunctionType {
+    api::make_closure(ctx)
+}
+
+#[no_mangle]
 pub extern "C" fn gox5_new(ctx: &mut LightWeightThreadContext) -> NextUserFunctionType {
     api::new(ctx)
 }
@@ -89,10 +94,11 @@ async fn start_light_weight_thread<'a>(
         let result_pointer = ctx.stack_pointer as *mut StackFrame as *mut ();
         let stack_pointer = (result_pointer as *mut u8).add(result_size);
         ctx.stack_pointer = &mut *(stack_pointer as *mut StackFrame);
-        let words = slice::from_raw_parts_mut(ctx.stack_pointer.words.as_mut_ptr(), 4);
+        let words = slice::from_raw_parts_mut(ctx.stack_pointer.words.as_mut_ptr(), 5);
         words[0] = terminate as *mut ();
         words[1] = ptr::null_mut();
-        let mut arg_base = 2;
+        words[2] = ptr::null_mut();
+        let mut arg_base = 3;
         if result_size > 0 {
             words[arg_base] = result_pointer;
             arg_base += 1;

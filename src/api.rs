@@ -52,6 +52,7 @@ unsafe impl Send for UserFunctionType {}
 struct StackFrameCommon {
     resume_func: NextUserFunctionType,
     prev_stack_pointer: *mut StackFrame,
+    free_vars: *mut (),
 }
 
 unsafe impl Send for StackFrameCommon {}
@@ -183,6 +184,39 @@ pub fn make_chan(ctx: &mut LightWeightThreadContext) -> NextUserFunctionType {
 }
 
 #[repr(C)]
+struct StackFrameMakeClosure {
+    common: StackFrameCommon,
+    result_ptr: *mut ObjectPtr,
+    func: UserFunctionType,
+    size: usize,
+    var: ObjectPtr,
+}
+
+unsafe impl Send for StackFrameMakeClosure {}
+
+pub fn make_closure(ctx: &mut LightWeightThreadContext) -> NextUserFunctionType {
+    let size = unsafe {
+        let stack_frame = &mut ctx.stack_pointer.make_closure;
+        stack_frame.size
+    };
+    let ptr = ctx
+        .global_context
+        .process(|mut global_context| global_context.allocator().allocate(size, |_ptr| {}));
+    unsafe {
+        assert_eq!(size, 8);
+        let words = slice::from_raw_parts_mut(ptr as *mut ObjectPtr, 1);
+        let stack_frame = &mut ctx.stack_pointer.make_closure;
+        words[0] = stack_frame.var.clone();
+    };
+    let ptr = ObjectPtr(ptr);
+    unsafe {
+        let stack_frame = &mut ctx.stack_pointer.make_closure;
+        *stack_frame.result_ptr = ptr;
+    };
+    leave_runtime_api(ctx)
+}
+
+#[repr(C)]
 struct StackFrameNew {
     common: StackFrameCommon,
     result_ptr: *mut ObjectPtr,
@@ -301,6 +335,7 @@ pub union StackFrame {
     common: ManuallyDrop<StackFrameCommon>,
     append: ManuallyDrop<StackFrameAppend>,
     make_chan: ManuallyDrop<StackFrameMakeChan>,
+    make_closure: ManuallyDrop<StackFrameMakeClosure>,
     new: ManuallyDrop<StackFrameNew>,
     recv: ManuallyDrop<StackFrameRecv>,
     send: ManuallyDrop<StackFrameSend>,

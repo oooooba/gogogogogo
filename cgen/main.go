@@ -100,6 +100,9 @@ func createValueRelName(value ssa.Value) string {
 		return createValueName(value)
 	} else if _, ok := value.(*ssa.Parameter); ok {
 		return fmt.Sprintf("frame->signature.%s", createValueName(value))
+	} else if _, ok := value.(*ssa.FreeVar); ok {
+		return fmt.Sprintf("((struct FreeVars_%s*)frame->common.free_vars)->%s",
+			createFunctionName(value.Parent()), createValueName(value))
 	} else {
 		return fmt.Sprintf("frame->%s", createValueName(value))
 	}
@@ -158,6 +161,13 @@ func (ctx *Context) switchFunction(nextFunction string, callCommon *ssa.CallComm
 		fmt.Fprintf(ctx.stream, "signature->param%d = %s; // %s\n",
 			i, createValueRelName(arg), signature.Params().At(i))
 	}
+
+	freeVars := "NULL"
+	if callee, ok := callCommon.Value.(*ssa.MakeClosure); ok {
+		closure := callee.Fn.(*ssa.Function)
+		freeVars = fmt.Sprintf("(struct FreeVars_%s*)%s.func", createFunctionName(closure), createValueRelName(callee))
+	}
+	fmt.Fprintf(ctx.stream, "next_frame->free_vars = %s; // %s : %s\n", freeVars, callCommon, callCommon.Value.Type())
 
 	fmt.Fprintf(ctx.stream, "ctx->stack_pointer = next_frame;\n")
 	fmt.Fprintf(ctx.stream, "return %s;\n", nextFunction)
@@ -270,6 +280,10 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 			nextFunction := createFunctionName(callee)
 			ctx.switchFunction(nextFunction, callCommon, createValueRelName(instr), createInstructionName(instr))
 
+		case *ssa.MakeClosure:
+			nextFunction := createFunctionName(callee.Fn.(*ssa.Function))
+			ctx.switchFunction(nextFunction, callCommon, createValueRelName(instr), createInstructionName(instr))
+
 		case *ssa.Parameter:
 			nextFunction := fmt.Sprintf("(void*)%s.func", createValueRelName(callee))
 			ctx.switchFunction(nextFunction, callCommon, createValueRelName(instr), createInstructionName(instr))
@@ -318,6 +332,14 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 		result := createValueRelName(instr)
 		ctx.switchFunctionToCallRuntimeApi("gox5_make_chan", "StackFrameMakeChan", createInstructionName(instr), &result,
 			paramArgPair{param: "size", arg: createValueRelName(instr.Size)},
+		)
+
+	case *ssa.MakeClosure:
+		result := createValueRelName(instr)
+		ctx.switchFunctionToCallRuntimeApi("gox5_make_closure", "StackFrameMakeClosure", createInstructionName(instr), &result,
+			paramArgPair{param: "func", arg: createFunctionName(instr.Fn.(*ssa.Function))},
+			paramArgPair{param: "size", arg: fmt.Sprintf("sizeof(struct FreeVars_%s)", createFunctionName(instr.Fn.(*ssa.Function)))},
+			paramArgPair{param: "var", arg: createValueRelName(instr.Bindings[0])},
 		)
 
 	case *ssa.Phi:
@@ -439,6 +461,9 @@ func (ctx *Context) emitValueDeclaration(value ssa.Value) {
 	case *ssa.FieldAddr:
 		ctx.emitValueDeclaration(val.X)
 
+	case *ssa.FreeVar:
+		canEmit = false
+
 	case *ssa.Function:
 		canEmit = false
 
@@ -448,6 +473,12 @@ func (ctx *Context) emitValueDeclaration(value ssa.Value) {
 
 	case *ssa.MakeChan:
 		ctx.emitValueDeclaration(val.Size)
+
+	case *ssa.MakeClosure:
+		ctx.emitValueDeclaration(val.Fn)
+		for _, freeVar := range val.Bindings {
+			ctx.emitValueDeclaration(freeVar)
+		}
 
 	case *ssa.Parameter:
 		canEmit = false
@@ -490,7 +521,7 @@ func requireSwitchFunction(instruction ssa.Instruction) bool {
 	switch instruction.(type) {
 	case *ssa.Alloc:
 		return instruction.(*ssa.Alloc).Heap
-	case *ssa.Call, *ssa.Go, *ssa.MakeChan, *ssa.Send:
+	case *ssa.Call, *ssa.Go, *ssa.MakeChan, *ssa.MakeClosure, *ssa.Send:
 		return true
 	case *ssa.UnOp:
 		if instruction.(*ssa.UnOp).Op == token.ARROW {
@@ -574,6 +605,14 @@ func (ctx *Context) emitFunctionDeclaration(function *ssa.Function) {
 	fmt.Fprintf(ctx.stream, "void* %s (struct LightWeightThreadContext* ctx);\n", createFunctionName(function))
 
 	ctx.tryEmitSignatureDefinition(function.Signature)
+
+	fmt.Fprintf(ctx.stream, "struct FreeVars_%s {\n", createFunctionName(function))
+	for _, freeVar := range function.FreeVars {
+		fmt.Fprintf(ctx.stream, "\t// found %T: %s, %s\n", freeVar, createValueName(freeVar), freeVar.String())
+		id := fmt.Sprintf("%s", createValueName(freeVar))
+		fmt.Fprintf(ctx.stream, "\t%s; // %s : %s\n", createType(freeVar.Type(), id), freeVar.String(), freeVar.Type())
+	}
+	fmt.Fprintln(ctx.stream, "};")
 
 	fmt.Fprintf(ctx.stream, "struct StackFrame_%s {\n", createFunctionName(function))
 	fmt.Fprintf(ctx.stream, "\tstruct StackFrameCommon common;\n")
@@ -691,6 +730,7 @@ struct Slice {
 struct StackFrameCommon {
 	void* resume_func;
 	void* prev_stack_pointer;
+	void* free_vars;
 };
 
 struct StackFrameAppend {
@@ -707,6 +747,15 @@ struct StackFrameMakeChan {
 	intptr_t size;
 };
 void* gox5_make_chan (struct LightWeightThreadContext* ctx);
+
+struct StackFrameMakeClosure {
+	struct StackFrameCommon common;
+	void* result_ptr;
+	void* func;
+	intptr_t size;
+	void* var;
+};
+void* gox5_make_closure (struct LightWeightThreadContext* ctx);
 
 struct StackFrameNew {
 	struct StackFrameCommon common;
