@@ -45,6 +45,16 @@ func Test5() int {
 	return x
 }
 
+func Test6() int {
+	f := func() int {
+		g := func() int {
+			return 6
+		}
+		return g()
+	}
+	return f()
+}
+
 func main() {
 	runTest := func(test func() int) {
 		funcFullName := runtime.FuncForPC(reflect.ValueOf(test).Pointer()).Name()
@@ -56,4 +66,5 @@ func main() {
 	runTest(Test3)
 	runTest(Test4)
 	runTest(Test5)
+	runTest(Test6)
 }

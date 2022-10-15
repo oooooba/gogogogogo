@@ -700,6 +700,28 @@ func (ctx *Context) emitTypeDefinition(typ *ssa.Type) {
 	}
 }
 
+func (ctx *Context) visitAllFunctions(pkg *ssa.Package, procedure func(function *ssa.Function)) {
+	var f func(function *ssa.Function)
+	f = func(function *ssa.Function) {
+		procedure(function)
+		for _, anonFunc := range function.AnonFuncs {
+			f(anonFunc)
+		}
+	}
+	for symbol := range pkg.Members {
+		function, ok := pkg.Members[symbol].(*ssa.Function)
+		if !ok {
+			continue
+		}
+
+		if symbol == "main" || symbol == "init" {
+			continue
+		}
+
+		f(function)
+	}
+}
+
 func (ctx *Context) emitPackage(pkg *ssa.Package) {
 	fmt.Fprint(ctx.stream, `
 #include <stdbool.h>
@@ -796,42 +818,15 @@ void* gox5_spawn (struct LightWeightThreadContext* ctx);
 		ctx.emitTypeDefinition(typ)
 	}
 
-	for symbol := range pkg.Members {
-		function, ok := pkg.Members[symbol].(*ssa.Function)
-		if !ok {
-			continue
-		}
-		if symbol == "main" || symbol == "init" {
-			continue
-		}
+	ctx.visitAllFunctions(pkg, func(function *ssa.Function) {
 		ctx.emitFunctionDeclaration(function)
+	})
 
-		for _, anonFunc := range function.AnonFuncs {
-			ctx.emitFunctionDeclaration(anonFunc)
-
+	ctx.visitAllFunctions(pkg, func(function *ssa.Function) {
+		if function.Blocks != nil {
+			ctx.emitFunctionDefinition(function)
 		}
-	}
-
-	for symbol := range pkg.Members {
-		function, ok := pkg.Members[symbol].(*ssa.Function)
-		if !ok {
-			continue
-		}
-		if symbol == "main" || symbol == "init" {
-			continue
-		}
-		if function.Blocks == nil {
-			continue
-		}
-		ctx.emitFunctionDefinition(function)
-
-		for _, anonFunc := range function.AnonFuncs {
-			if anonFunc.Blocks == nil {
-				continue
-			}
-			ctx.emitFunctionDefinition(anonFunc)
-		}
-	}
+	})
 
 	fmt.Fprintln(ctx.stream, "struct { const char* name; void* function; } test_entry_points[] = {")
 	for symbol := range pkg.Members {
