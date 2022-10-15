@@ -162,15 +162,26 @@ func (ctx *Context) switchFunction(nextFunction string, callCommon *ssa.CallComm
 			i, createValueRelName(arg), signature.Params().At(i))
 	}
 
-	freeVars := "NULL"
-	if callee, ok := callCommon.Value.(*ssa.MakeClosure); ok { // W.A.
-		closure := callee.Fn.(*ssa.Function)
-		freeVars = fmt.Sprintf("(struct FreeVars_%s*)(((intptr_t*)%s.func)+1)", createFunctionName(closure), createValueRelName(callee))
+	fmt.Fprintf(ctx.stream, `
+	// ToDo: move this procedure inside the runtime
+	uintptr_t addr = (uintptr_t)%s;
+	uintptr_t flag = ((uintptr_t)1) << 63;
+	void* func;
+	void* free_vars;
+	if ((addr & flag) == 0) {
+		func = (void*)addr;
+		free_vars = NULL;
+	} else {
+		void** p = (void**)(addr & ~flag);
+		func = p[0];
+		free_vars = &p[1];
 	}
-	fmt.Fprintf(ctx.stream, "next_frame->free_vars = %s; // %s : %s\n", freeVars, callCommon, callCommon.Value.Type())
 
-	fmt.Fprintf(ctx.stream, "ctx->stack_pointer = next_frame;\n")
-	fmt.Fprintf(ctx.stream, "return %s;\n", nextFunction)
+	next_frame->free_vars = free_vars;
+
+	ctx->stack_pointer = next_frame;
+	return func;
+`, nextFunction)
 }
 
 func (ctx *Context) switchFunctionToCallRuntimeSpawnApi(entryFunction string, callCommon *ssa.CallCommon, resultSize string, resumeFunction string) {
@@ -280,11 +291,7 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 			nextFunction := createFunctionName(callee)
 			ctx.switchFunction(nextFunction, callCommon, createValueRelName(instr), createInstructionName(instr))
 
-		case *ssa.MakeClosure:
-			nextFunction := createFunctionName(callee.Fn.(*ssa.Function))
-			ctx.switchFunction(nextFunction, callCommon, createValueRelName(instr), createInstructionName(instr))
-
-		case *ssa.Parameter:
+		case *ssa.MakeClosure, *ssa.Parameter:
 			nextFunction := fmt.Sprintf("(void*)%s.func", createValueRelName(callee))
 			ctx.switchFunction(nextFunction, callCommon, createValueRelName(instr), createInstructionName(instr))
 

@@ -222,7 +222,12 @@ pub fn make_closure(ctx: &mut LightWeightThreadContext) -> NextUserFunctionType 
         let object_ptrs = slice::from_raw_parts_mut(closure_layout.object_ptrs.as_mut_ptr(), 1);
         object_ptrs[0] = stack_frame.var.clone();
     };
-    let ptr = ObjectPtr(ptr);
+    let ptr = {
+        let addr = ptr as usize;
+        let flag = 1 << 63;
+        assert_eq!(addr & flag, 0);
+        ObjectPtr((addr | flag) as *mut ())
+    };
     unsafe {
         let stack_frame = &mut ctx.stack_pointer.make_closure;
         *stack_frame.result_ptr = ptr;
