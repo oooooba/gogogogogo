@@ -162,26 +162,9 @@ func (ctx *Context) switchFunction(nextFunction string, callCommon *ssa.CallComm
 			i, createValueRelName(arg), signature.Params().At(i))
 	}
 
-	fmt.Fprintf(ctx.stream, `
-	// ToDo: move this procedure inside the runtime
-	uintptr_t addr = (uintptr_t)%s;
-	uintptr_t flag = ((uintptr_t)1) << 63;
-	void* func;
-	void* free_vars;
-	if ((addr & flag) == 0) {
-		func = (void*)addr;
-		free_vars = NULL;
-	} else {
-		void** p = (void**)(addr & ~flag);
-		func = p[0];
-		free_vars = &p[1];
-	}
-
-	next_frame->free_vars = free_vars;
-
-	ctx->stack_pointer = next_frame;
-	return func;
-`, nextFunction)
+	fmt.Fprintf(ctx.stream, "next_frame->free_vars = NULL;\n")
+	fmt.Fprintf(ctx.stream, "ctx->stack_pointer = next_frame;\n")
+	fmt.Fprintf(ctx.stream, "return %s;\n", nextFunction)
 }
 
 func (ctx *Context) switchFunctionToCallRuntimeSpawnApi(entryFunction string, callCommon *ssa.CallCommon, resultSize string, resumeFunction string) {

@@ -17,6 +17,22 @@ impl NextUserFunctionType {
     pub fn new_null() -> Self {
         NextUserFunctionType(ptr::null_mut())
     }
+
+    pub fn extrace_user_function(&self) -> (UserFunctionType, Option<*mut ()>) {
+        let addr = self.0 as usize;
+        let flag = 1 << 63;
+        if (addr & flag) == 0 {
+            let func = unsafe { mem::transmute::<*mut (), UserFunctionType>(self.0) };
+            return (func, None);
+        }
+        let ptr = (addr & !flag) as *mut () as *mut ClosureLayout;
+        unsafe {
+            let closure_layout = &mut *ptr;
+            let func = closure_layout.func.clone();
+            let object_ptrs = closure_layout.object_ptrs.as_mut_ptr() as *mut ();
+            (func, Some(object_ptrs))
+        }
+    }
 }
 
 unsafe impl Send for NextUserFunctionType {}

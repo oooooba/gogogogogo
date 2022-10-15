@@ -122,7 +122,14 @@ async fn start_light_weight_thread<'a>(
             func.invoke(ctx)
         };
         ctx.prev_func = func;
-        func = unsafe { mem::transmute::<NextUserFunctionType, UserFunctionType>(next_func) }
+        let (next_func, object_ptrs) = next_func.extrace_user_function();
+        if let Some(object_ptrs) = object_ptrs {
+            unsafe {
+                let words = slice::from_raw_parts_mut(ctx.stack_pointer.words.as_mut_ptr(), 3);
+                words[2] = object_ptrs; // free_vars
+            }
+        }
+        func = next_func;
     }
 }
 
