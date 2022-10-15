@@ -651,10 +651,14 @@ func (ctx *Context) emitFunctionDeclaration(function *ssa.Function) {
 
 func (ctx *Context) emitFunctionDefinitionHeader(function *ssa.Function, name string) {
 	fmt.Fprintf(ctx.stream, "void* %s (struct LightWeightThreadContext* ctx) {", name)
+	freeVarsCompareOp := "=="
+	if len(function.FreeVars) != 0 {
+		freeVarsCompareOp = "!="
+	}
 	fmt.Fprintf(ctx.stream, `
 	struct StackFrame_%s* frame = ctx->stack_pointer;
-	(void)frame;
-`, createFunctionName(function))
+	assert(frame->common.free_vars %s NULL);
+`, createFunctionName(function), freeVarsCompareOp)
 }
 
 func (ctx *Context) emitFunctionDefinitionFooter(function *ssa.Function) {
