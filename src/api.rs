@@ -9,7 +9,7 @@ use super::start_light_weight_thread;
 use super::LightWeightThreadContext;
 use super::ObjectPtr;
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, PartialEq, Eq, Debug)]
 #[repr(C)]
 pub struct NextUserFunctionType(*mut ());
 
@@ -24,7 +24,7 @@ unsafe impl Send for NextUserFunctionType {}
 type UserFunctionTypeInner =
     unsafe extern "C" fn(&mut LightWeightThreadContext) -> NextUserFunctionType;
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 #[repr(C)]
 pub struct UserFunctionType(UserFunctionTypeInner);
 
@@ -300,7 +300,7 @@ pub async fn spawn(ctx: &mut LightWeightThreadContext<'_>) -> NextUserFunctionTy
     unsafe {
         let stack_frame = &mut ctx.stack_pointer.spawn;
 
-        let entry_func = stack_frame.func;
+        let entry_func = stack_frame.func.clone();
         let result_size = stack_frame.result_size;
         let arg_buffer_ptr = ObjectPtr(stack_frame.arg_buffer.as_mut_ptr());
         let num_arg_buffer_words = stack_frame.num_arg_buffer_words;
@@ -325,7 +325,7 @@ fn leave_runtime_api(ctx: &mut LightWeightThreadContext) -> NextUserFunctionType
     unsafe {
         let stack_frame = &mut ctx.stack_pointer.common;
         ctx.stack_pointer = &mut *stack_frame.prev_stack_pointer;
-        stack_frame.resume_func
+        stack_frame.resume_func.clone()
     }
 }
 
