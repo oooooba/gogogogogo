@@ -194,19 +194,33 @@ struct StackFrameMakeClosure {
 
 unsafe impl Send for StackFrameMakeClosure {}
 
+#[repr(C)]
+struct ClosureLayout {
+    func: UserFunctionType,
+    object_ptrs: [ObjectPtr; 0],
+}
+
 pub fn make_closure(ctx: &mut LightWeightThreadContext) -> NextUserFunctionType {
     let size = unsafe {
         let stack_frame = &mut ctx.stack_pointer.make_closure;
         stack_frame.size
     };
-    let ptr = ctx
-        .global_context
-        .process(|mut global_context| global_context.allocator().allocate(size, |_ptr| {}));
+    let ptr = ctx.global_context.process(|mut global_context| {
+        global_context
+            .allocator()
+            .allocate(mem::size_of::<ClosureLayout>() + size, |_ptr| {})
+    });
     unsafe {
         assert_eq!(size, 8);
-        let words = slice::from_raw_parts_mut(ptr as *mut ObjectPtr, 1);
+        let ptr = ptr as *mut ClosureLayout;
+        let closure_layout = &mut *ptr;
+
         let stack_frame = &mut ctx.stack_pointer.make_closure;
-        words[0] = stack_frame.var.clone();
+
+        closure_layout.func = stack_frame.func.clone();
+
+        let object_ptrs = slice::from_raw_parts_mut(closure_layout.object_ptrs.as_mut_ptr(), 1);
+        object_ptrs[0] = stack_frame.var.clone();
     };
     let ptr = ObjectPtr(ptr);
     unsafe {

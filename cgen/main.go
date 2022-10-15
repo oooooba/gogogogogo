@@ -163,9 +163,9 @@ func (ctx *Context) switchFunction(nextFunction string, callCommon *ssa.CallComm
 	}
 
 	freeVars := "NULL"
-	if callee, ok := callCommon.Value.(*ssa.MakeClosure); ok {
+	if callee, ok := callCommon.Value.(*ssa.MakeClosure); ok { // W.A.
 		closure := callee.Fn.(*ssa.Function)
-		freeVars = fmt.Sprintf("(struct FreeVars_%s*)%s.func", createFunctionName(closure), createValueRelName(callee))
+		freeVars = fmt.Sprintf("(struct FreeVars_%s*)(((intptr_t*)%s.func)+1)", createFunctionName(closure), createValueRelName(callee))
 	}
 	fmt.Fprintf(ctx.stream, "next_frame->free_vars = %s; // %s : %s\n", freeVars, callCommon, callCommon.Value.Type())
 
