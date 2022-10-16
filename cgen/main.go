@@ -188,6 +188,26 @@ func (ctx *Context) switchFunctionToCallRuntimeSpawnApi(entryFunction string, ca
 	fmt.Fprintf(ctx.stream, "return gox5_spawn;\n")
 }
 
+func (ctx *Context) switchFunctionToCallRuntimeMakeClosureApi(closure *ssa.Function, resumeFunction string, resultPtr *string, bindings []ssa.Value) {
+	fmt.Fprintf(ctx.stream, "struct StackFrameMakeClosure* next_frame = (struct StackFrameMakeClosure*)(ctx->stack_pointer + sizeof(*frame));\n")
+	fmt.Fprintf(ctx.stream, "next_frame->common.resume_func = %s;\n", resumeFunction)
+	fmt.Fprintf(ctx.stream, "next_frame->common.prev_stack_pointer = ctx->stack_pointer;\n")
+
+	closureName := createFunctionName(closure)
+	fmt.Fprintf(ctx.stream, "next_frame->result_ptr = &%s;\n", *resultPtr)
+	fmt.Fprintf(ctx.stream, "next_frame->func = %s;\n", closureName)
+
+	fmt.Fprintf(ctx.stream, "struct FreeVars_%s* free_vars = (struct FreeVars_%s*)&next_frame->object_ptrs;\n", closureName, closureName)
+	for i, freeVar := range closure.FreeVars {
+		val := bindings[i]
+		fmt.Fprintf(ctx.stream, "free_vars->%s = %s;\n", createValueName(freeVar), createValueRelName(val))
+	}
+	fmt.Fprintf(ctx.stream, "next_frame->num_object_ptrs = sizeof(*free_vars) / sizeof(intptr_t);\n")
+
+	fmt.Fprintf(ctx.stream, "ctx->stack_pointer = next_frame;\n")
+	fmt.Fprintf(ctx.stream, "return gox5_make_closure;\n")
+}
+
 type paramArgPair struct {
 	param string
 	arg   string
@@ -325,12 +345,12 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 		)
 
 	case *ssa.MakeClosure:
+		closure := instr.Fn.(*ssa.Function)
+		if len(closure.FreeVars) != len(instr.Bindings) {
+			panic(fmt.Sprintf("invalid closure invocation: freeVars=%s, bindings=%s", closure, instr.Bindings))
+		}
 		result := createValueRelName(instr)
-		ctx.switchFunctionToCallRuntimeApi("gox5_make_closure", "StackFrameMakeClosure", createInstructionName(instr), &result,
-			paramArgPair{param: "func", arg: createFunctionName(instr.Fn.(*ssa.Function))},
-			paramArgPair{param: "size", arg: fmt.Sprintf("sizeof(struct FreeVars_%s)", createFunctionName(instr.Fn.(*ssa.Function)))},
-			paramArgPair{param: "var", arg: createValueRelName(instr.Bindings[0])},
-		)
+		ctx.switchFunctionToCallRuntimeMakeClosureApi(closure, createInstructionName(instr), &result, instr.Bindings)
 
 	case *ssa.Phi:
 		basicBlock := instr.Block()
@@ -768,8 +788,8 @@ struct StackFrameMakeClosure {
 	struct StackFrameCommon common;
 	void* result_ptr;
 	void* func;
-	intptr_t size;
-	void* var;
+	intptr_t num_object_ptrs;
+	void* object_ptrs[0];
 };
 void* gox5_make_closure (struct LightWeightThreadContext* ctx);
 

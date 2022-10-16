@@ -55,6 +55,22 @@ func Test6() int {
 	return f()
 }
 
+func Test7() int {
+	x := 0
+	y := 0
+	func() {
+		x = 3
+		y = 4
+	}()
+	if x != 3 {
+		return 0
+	}
+	if y != 4 {
+		return 1
+	}
+	return 7
+}
+
 func main() {
 	runTest := func(test func() int) {
 		funcFullName := runtime.FuncForPC(reflect.ValueOf(test).Pointer()).Name()
@@ -67,4 +83,5 @@ func main() {
 	runTest(Test4)
 	runTest(Test5)
 	runTest(Test6)
+	runTest(Test7)
 }

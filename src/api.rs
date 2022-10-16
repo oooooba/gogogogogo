@@ -204,8 +204,8 @@ struct StackFrameMakeClosure {
     common: StackFrameCommon,
     result_ptr: *mut ObjectPtr,
     func: UserFunctionType,
-    size: usize,
-    var: ObjectPtr,
+    num_object_ptrs: usize,
+    object_ptrs: [ObjectPtr; 0],
 }
 
 unsafe impl Send for StackFrameMakeClosure {}
@@ -213,21 +213,16 @@ unsafe impl Send for StackFrameMakeClosure {}
 #[repr(C)]
 struct ClosureLayout {
     func: UserFunctionType,
-    object_ptrs: [ObjectPtr; 0],
+    object_ptrs: Vec<ObjectPtr>,
 }
 
 pub fn make_closure(ctx: &mut LightWeightThreadContext) -> NextUserFunctionType {
-    let size = unsafe {
-        let stack_frame = &mut ctx.stack_pointer.make_closure;
-        stack_frame.size
-    };
     let ptr = ctx.global_context.process(|mut global_context| {
         global_context
             .allocator()
-            .allocate(mem::size_of::<ClosureLayout>() + size, |_ptr| {})
+            .allocate(mem::size_of::<ClosureLayout>(), |_ptr| {})
     });
     unsafe {
-        assert_eq!(size, 8);
         let ptr = ptr as *mut ClosureLayout;
         let closure_layout = &mut *ptr;
 
@@ -235,8 +230,12 @@ pub fn make_closure(ctx: &mut LightWeightThreadContext) -> NextUserFunctionType 
 
         closure_layout.func = stack_frame.func.clone();
 
-        let object_ptrs = slice::from_raw_parts_mut(closure_layout.object_ptrs.as_mut_ptr(), 1);
-        object_ptrs[0] = stack_frame.var.clone();
+        let num_object_ptrs = stack_frame.num_object_ptrs;
+        let object_ptrs = stack_frame.object_ptrs.as_mut_ptr();
+        let object_ptrs = slice::from_raw_parts(object_ptrs, num_object_ptrs).to_vec();
+
+        let prev_object_ptrs = mem::replace(&mut closure_layout.object_ptrs, object_ptrs);
+        mem::forget(prev_object_ptrs);
     };
     let ptr = {
         let addr = ptr as usize;
