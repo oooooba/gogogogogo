@@ -759,8 +759,8 @@ struct UserFunctionType {
 
 struct Slice {
 	void* addr;
-	intptr_t size;
-	intptr_t capacity;
+	uintptr_t size;
+	uintptr_t capacity;
 };
 
 struct StackFrameCommon {
@@ -780,7 +780,7 @@ void* gox5_append (struct LightWeightThreadContext* ctx);
 struct StackFrameMakeChan {
 	struct StackFrameCommon common;
 	struct Channel** result_ptr;
-	intptr_t size;
+	intptr_t size; // ToDo: correct to proper type
 };
 void* gox5_make_chan (struct LightWeightThreadContext* ctx);
 
@@ -788,7 +788,7 @@ struct StackFrameMakeClosure {
 	struct StackFrameCommon common;
 	void* result_ptr;
 	void* func;
-	intptr_t num_object_ptrs;
+	uintptr_t num_object_ptrs;
 	void* object_ptrs[0];
 };
 void* gox5_make_closure (struct LightWeightThreadContext* ctx);
@@ -796,7 +796,7 @@ void* gox5_make_closure (struct LightWeightThreadContext* ctx);
 struct StackFrameNew {
 	struct StackFrameCommon common;
 	void* result_ptr;
-	intptr_t size;
+	uintptr_t size;
 };
 void* gox5_new (struct LightWeightThreadContext* ctx);
 
@@ -817,8 +817,8 @@ void* gox5_send (struct LightWeightThreadContext* ctx);
 struct StackFrameSpawn {
 	struct StackFrameCommon common;
     void* func;
-	intptr_t result_size;
-	intptr_t num_arg_buffer_words;
+	uintptr_t result_size;
+	uintptr_t num_arg_buffer_words;
 	void* arg_buffer[0];
 };
 void* gox5_spawn (struct LightWeightThreadContext* ctx);
