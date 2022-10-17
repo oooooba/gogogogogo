@@ -9,14 +9,14 @@ use std::slice;
 
 use async_recursion::async_recursion;
 
-use api::{NextUserFunctionType, StackFrame, UserFunctionType};
+use api::{FunctionObject, StackFrame, UserFunction};
 use global_context::GlobalContextPtr;
 
 #[repr(C)]
 pub struct LightWeightThreadContext<'a> {
     global_context: GlobalContextPtr,
     stack_pointer: &'a mut StackFrame,
-    prev_func: UserFunctionType,
+    prev_func: UserFunction,
     marker: isize,
 }
 
@@ -36,55 +36,55 @@ unsafe impl Send for ObjectPtr {}
 extern "C" {
     fn test_entry_point_num() -> libc::size_t;
     fn test_entry_point_name(i: libc::size_t) -> *const libc::c_char;
-    fn test_entry_point_function(i: libc::size_t) -> UserFunctionType;
+    fn test_entry_point_function(i: libc::size_t) -> UserFunction;
 }
 
 #[no_mangle]
-pub extern "C" fn gox5_append(ctx: &mut LightWeightThreadContext) -> NextUserFunctionType {
+pub extern "C" fn gox5_append(ctx: &mut LightWeightThreadContext) -> FunctionObject {
     api::append(ctx)
 }
 
 #[no_mangle]
-pub extern "C" fn gox5_make_chan(ctx: &mut LightWeightThreadContext) -> NextUserFunctionType {
+pub extern "C" fn gox5_make_chan(ctx: &mut LightWeightThreadContext) -> FunctionObject {
     api::make_chan(ctx)
 }
 
 #[no_mangle]
-pub extern "C" fn gox5_make_closure(ctx: &mut LightWeightThreadContext) -> NextUserFunctionType {
+pub extern "C" fn gox5_make_closure(ctx: &mut LightWeightThreadContext) -> FunctionObject {
     api::make_closure(ctx)
 }
 
 #[no_mangle]
-pub extern "C" fn gox5_new(ctx: &mut LightWeightThreadContext) -> NextUserFunctionType {
+pub extern "C" fn gox5_new(ctx: &mut LightWeightThreadContext) -> FunctionObject {
     api::new(ctx)
 }
 
 #[no_mangle]
-pub extern "C" fn gox5_recv(_ctx: &mut LightWeightThreadContext) -> NextUserFunctionType {
+pub extern "C" fn gox5_recv(_ctx: &mut LightWeightThreadContext) -> FunctionObject {
     unreachable!()
 }
 
 #[no_mangle]
-pub extern "C" fn gox5_send(_ctx: &mut LightWeightThreadContext) -> NextUserFunctionType {
+pub extern "C" fn gox5_send(_ctx: &mut LightWeightThreadContext) -> FunctionObject {
     unreachable!()
 }
 
 #[no_mangle]
-pub extern "C" fn gox5_spawn(_ctx: &mut LightWeightThreadContext) -> NextUserFunctionType {
+pub extern "C" fn gox5_spawn(_ctx: &mut LightWeightThreadContext) -> FunctionObject {
     unreachable!()
 }
 
-extern "C" fn terminate(_ctx: &mut LightWeightThreadContext) -> NextUserFunctionType {
+extern "C" fn terminate(_ctx: &mut LightWeightThreadContext) -> FunctionObject {
     unreachable!()
 }
 
 #[async_recursion]
-pub async fn spawn_wrapper(ctx: &mut LightWeightThreadContext<'_>) -> NextUserFunctionType {
+pub async fn spawn_wrapper(ctx: &mut LightWeightThreadContext<'_>) -> FunctionObject {
     api::spawn(ctx).await
 }
 
 async fn start_light_weight_thread<'a>(
-    entry_func: UserFunctionType,
+    entry_func: UserFunction,
     ctx: &mut LightWeightThreadContext<'a>,
     result_size: usize,
     arg_buffer_ptr: ObjectPtr,
@@ -191,7 +191,7 @@ fn create_light_weight_thread_context<'a>(
 ) -> LightWeightThreadContext<'a> {
     let stack_start_addr = global_context
         .process(|mut global_context| global_context.allocator().allocate_guarded_pages(1));
-    let prev_func = UserFunctionType::new(terminate);
+    let prev_func = UserFunction::new(terminate);
     LightWeightThreadContext {
         global_context,
         stack_pointer: unsafe { &mut *(stack_start_addr as *mut StackFrame) },
@@ -306,9 +306,9 @@ mod tests {
         assert_ne!(channel, ptr::null_mut());
     }
 
-    unsafe extern "C" fn user_function(ctx: &mut LightWeightThreadContext) -> NextUserFunctionType {
+    unsafe extern "C" fn user_function(ctx: &mut LightWeightThreadContext) -> FunctionObject {
         ctx.marker = 0x12345678;
-        NextUserFunctionType::new_null()
+        FunctionObject::new_null()
     }
 
     #[test]
@@ -316,7 +316,7 @@ mod tests {
         let allocator = Box::new(MockObjectAllocator::new());
         let global_context = global_context::create_global_context(allocator);
         let mut ctx = create_light_weight_thread_context(global_context.dupulicate());
-        let func = UserFunctionType::new(user_function);
+        let func = UserFunction::new(user_function);
         func.invoke(&mut ctx);
         assert_eq!(ctx.marker, 0x12345678);
     }

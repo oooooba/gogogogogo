@@ -11,18 +11,18 @@ use super::ObjectPtr;
 
 #[derive(Clone, PartialEq, Eq, Debug)]
 #[repr(C)]
-pub struct NextUserFunctionType(*mut ());
+pub struct FunctionObject(*const ());
 
-impl NextUserFunctionType {
+impl FunctionObject {
     pub fn new_null() -> Self {
-        NextUserFunctionType(ptr::null_mut())
+        FunctionObject(ptr::null_mut())
     }
 
-    pub fn extrace_user_function(&self) -> (UserFunctionType, Option<*mut ()>) {
+    pub fn extrace_user_function(&self) -> (UserFunction, Option<*mut ()>) {
         let addr = self.0 as usize;
         let flag = 1 << 63;
         if (addr & flag) == 0 {
-            let func = unsafe { mem::transmute::<*mut (), UserFunctionType>(self.0) };
+            let func = unsafe { mem::transmute::<*const (), UserFunction>(self.0) };
             return (func, None);
         }
         let ptr = (addr & !flag) as *mut () as *mut ClosureLayout;
@@ -35,38 +35,38 @@ impl NextUserFunctionType {
     }
 }
 
-unsafe impl Send for NextUserFunctionType {}
+unsafe impl Send for FunctionObject {}
 
-type UserFunctionTypeInner =
-    unsafe extern "C" fn(&mut LightWeightThreadContext) -> NextUserFunctionType;
+type UserFunctionInner =
+    unsafe extern "C" fn(&mut LightWeightThreadContext) -> FunctionObject;
 
 #[derive(Clone)]
 #[repr(C)]
-pub struct UserFunctionType(UserFunctionTypeInner);
+pub struct UserFunction(UserFunctionInner);
 
-impl UserFunctionType {
-    pub fn new(user_function: UserFunctionTypeInner) -> Self {
-        UserFunctionType(user_function)
+impl UserFunction {
+    pub fn new(user_function: UserFunctionInner) -> Self {
+        UserFunction(user_function)
     }
 
-    pub fn invoke(&self, ctx: &mut LightWeightThreadContext) -> NextUserFunctionType {
+    pub fn invoke(&self, ctx: &mut LightWeightThreadContext) -> FunctionObject {
         unsafe { self.0(ctx) }
     }
 }
 
-impl PartialEq<UserFunctionTypeInner> for UserFunctionType {
-    fn eq(&self, other: &UserFunctionTypeInner) -> bool {
+impl PartialEq<UserFunctionInner> for UserFunction {
+    fn eq(&self, other: &UserFunctionInner) -> bool {
         let lhs = self.0 as *const ();
         let rhs = *other as *const ();
         lhs == rhs
     }
 }
 
-unsafe impl Send for UserFunctionType {}
+unsafe impl Send for UserFunction {}
 
 #[repr(C)]
 struct StackFrameCommon {
-    resume_func: NextUserFunctionType,
+    resume_func: FunctionObject,
     prev_stack_pointer: *mut StackFrame,
     free_vars: *mut (),
 }
@@ -103,7 +103,7 @@ struct StackFrameAppend {
     elements: Slice,
 }
 
-pub fn append(ctx: &mut LightWeightThreadContext) -> NextUserFunctionType {
+pub fn append(ctx: &mut LightWeightThreadContext) -> FunctionObject {
     let (base, elements, result) = unsafe {
         let (base_ptr, elements_ptr, result_ptr) = {
             let stack_frame = &mut ctx.stack_pointer.append;
@@ -185,7 +185,7 @@ pub fn allocate_channel(ctx: &mut LightWeightThreadContext, capacity: usize) -> 
     ptr
 }
 
-pub fn make_chan(ctx: &mut LightWeightThreadContext) -> NextUserFunctionType {
+pub fn make_chan(ctx: &mut LightWeightThreadContext) -> FunctionObject {
     let size = unsafe {
         let stack_frame = &mut ctx.stack_pointer.make_chan;
         stack_frame.size
@@ -203,7 +203,7 @@ pub fn make_chan(ctx: &mut LightWeightThreadContext) -> NextUserFunctionType {
 struct StackFrameMakeClosure {
     common: StackFrameCommon,
     result_ptr: *mut ObjectPtr,
-    func: UserFunctionType,
+    func: UserFunction,
     num_object_ptrs: usize,
     object_ptrs: [ObjectPtr; 0],
 }
@@ -212,11 +212,11 @@ unsafe impl Send for StackFrameMakeClosure {}
 
 #[repr(C)]
 struct ClosureLayout {
-    func: UserFunctionType,
+    func: UserFunction,
     object_ptrs: Vec<ObjectPtr>,
 }
 
-pub fn make_closure(ctx: &mut LightWeightThreadContext) -> NextUserFunctionType {
+pub fn make_closure(ctx: &mut LightWeightThreadContext) -> FunctionObject {
     let ptr = ctx.global_context.process(|mut global_context| {
         global_context
             .allocator()
@@ -257,7 +257,7 @@ struct StackFrameNew {
     size: usize,
 }
 
-pub fn new(ctx: &mut LightWeightThreadContext) -> NextUserFunctionType {
+pub fn new(ctx: &mut LightWeightThreadContext) -> FunctionObject {
     let size = unsafe {
         let stack_frame = &mut ctx.stack_pointer.new;
         stack_frame.size
@@ -285,7 +285,7 @@ struct StackFrameRecv {
 
 unsafe impl Send for StackFrameRecv {}
 
-pub async fn recv(ctx: &mut LightWeightThreadContext<'_>) -> NextUserFunctionType {
+pub async fn recv(ctx: &mut LightWeightThreadContext<'_>) -> FunctionObject {
     let channel = unsafe {
         let stack_frame = &mut ctx.stack_pointer.recv;
         stack_frame.channel.clone()
@@ -309,7 +309,7 @@ struct StackFrameSend {
 
 unsafe impl Send for StackFrameSend {}
 
-pub async fn send(ctx: &mut LightWeightThreadContext<'_>) -> NextUserFunctionType {
+pub async fn send(ctx: &mut LightWeightThreadContext<'_>) -> FunctionObject {
     let (channel, data) = unsafe {
         let stack_frame = &mut ctx.stack_pointer.send;
         (stack_frame.channel.clone(), stack_frame.data)
@@ -322,7 +322,7 @@ pub async fn send(ctx: &mut LightWeightThreadContext<'_>) -> NextUserFunctionTyp
 #[repr(C)]
 struct StackFrameSpawn {
     common: StackFrameCommon,
-    func: UserFunctionType,
+    func: UserFunction,
     result_size: usize,
     num_arg_buffer_words: usize,
     arg_buffer: [(); 0],
@@ -330,7 +330,7 @@ struct StackFrameSpawn {
 
 unsafe impl Send for StackFrameSpawn {}
 
-pub async fn spawn(ctx: &mut LightWeightThreadContext<'_>) -> NextUserFunctionType {
+pub async fn spawn(ctx: &mut LightWeightThreadContext<'_>) -> FunctionObject {
     unsafe {
         let stack_frame = &mut ctx.stack_pointer.spawn;
 
@@ -355,7 +355,7 @@ pub async fn spawn(ctx: &mut LightWeightThreadContext<'_>) -> NextUserFunctionTy
     leave_runtime_api(ctx)
 }
 
-fn leave_runtime_api(ctx: &mut LightWeightThreadContext) -> NextUserFunctionType {
+fn leave_runtime_api(ctx: &mut LightWeightThreadContext) -> FunctionObject {
     unsafe {
         let stack_frame = &mut ctx.stack_pointer.common;
         ctx.stack_pointer = &mut *stack_frame.prev_stack_pointer;

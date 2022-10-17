@@ -79,7 +79,7 @@ func createValueName(value ssa.Value) string {
 			return val.Value.String()
 		}
 	} else if val, ok := value.(*ssa.Function); ok {
-		return fmt.Sprintf("(struct UserFunctionType){%s}", createFunctionName(val))
+		return fmt.Sprintf("(struct FunctionObject){%s}", createFunctionName(val))
 	} else if val, ok := value.(*ssa.Parameter); ok {
 		for i, param := range val.Parent().Params {
 			if val.Name() == param.Name() {
@@ -128,7 +128,7 @@ func createType(typ types.Type, id string) string {
 		}
 		return fmt.Sprintf("%s* %s", createType(elemType, ""), id)
 	case *types.Signature:
-		return fmt.Sprintf("struct UserFunctionType %s", id)
+		return fmt.Sprintf("struct FunctionObject %s", id)
 	case *types.Slice:
 		return fmt.Sprintf("struct Slice %s", id)
 	case *types.Struct:
@@ -557,7 +557,7 @@ func createSignatureItemName(typ types.Type) string {
 	case *types.Pointer:
 		return fmt.Sprintf("Pointer%s", createSignatureItemName(t.Elem()))
 	case *types.Signature:
-		return "UserFunctionType"
+		return "FunctionObject"
 	case *types.Slice:
 		return "Slice"
 	case *types.Struct:
@@ -753,7 +753,7 @@ struct LightWeightThreadContext {
 
 struct Channel;
 
-struct UserFunctionType {
+struct FunctionObject {
 	const void* func;
 };
 
