@@ -114,6 +114,19 @@ func Test8() int {
 	return 8
 }
 
+func test9_f(ch chan int) func() {
+	return func() {
+		ch <- 9
+	}
+}
+
+func Test9() int {
+	ch := make(chan int)
+	go test9_f(ch)()
+	v := <-ch
+	return v
+}
+
 func main() {
 	runTest := func(test func() int) {
 		funcFullName := runtime.FuncForPC(reflect.ValueOf(test).Pointer()).Name()
@@ -128,4 +141,5 @@ func main() {
 	runTest(Test6)
 	runTest(Test7)
 	runTest(Test8)
+	runTest(Test9)
 }

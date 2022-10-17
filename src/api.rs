@@ -14,6 +14,10 @@ use super::ObjectPtr;
 pub struct FunctionObject(*const ());
 
 impl FunctionObject {
+    pub fn from_user_function(user_function: UserFunction) -> Self {
+        FunctionObject(user_function.0 as *const ())
+    }
+
     pub fn new_null() -> Self {
         FunctionObject(ptr::null_mut())
     }
@@ -321,7 +325,7 @@ pub async fn send(ctx: &mut LightWeightThreadContext<'_>) -> FunctionObject {
 #[repr(C)]
 struct StackFrameSpawn {
     common: StackFrameCommon,
-    func: UserFunction,
+    func: FunctionObject,
     result_size: usize,
     num_arg_buffer_words: usize,
     arg_buffer: [(); 0],

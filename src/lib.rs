@@ -84,7 +84,7 @@ pub async fn spawn_wrapper(ctx: &mut LightWeightThreadContext<'_>) -> FunctionOb
 }
 
 async fn start_light_weight_thread<'a>(
-    entry_func: UserFunction,
+    entry_func: FunctionObject,
     ctx: &mut LightWeightThreadContext<'a>,
     result_size: usize,
     arg_buffer_ptr: ObjectPtr,
@@ -94,10 +94,11 @@ async fn start_light_weight_thread<'a>(
         let result_pointer = ctx.stack_pointer as *mut StackFrame as *mut ();
         let stack_pointer = (result_pointer as *mut u8).add(result_size);
         ctx.stack_pointer = &mut *(stack_pointer as *mut StackFrame);
+        let (_, object_ptrs) = entry_func.extrace_user_function();
         let words = slice::from_raw_parts_mut(ctx.stack_pointer.words.as_mut_ptr(), 5);
         words[0] = terminate as *mut ();
         words[1] = ptr::null_mut();
-        words[2] = ptr::null_mut();
+        words[2] = object_ptrs.unwrap_or(ptr::null_mut());
         let mut arg_base = 3;
         if result_size > 0 {
             words[arg_base] = result_pointer;
@@ -108,7 +109,7 @@ async fn start_light_weight_thread<'a>(
         ptr::copy_nonoverlapping(src_arg_buffer_ptr, dst_arg_buffer_ptr, num_arg_buffer_words);
     }
 
-    let mut func = entry_func;
+    let (mut func, _) = entry_func.extrace_user_function();
     loop {
         let next_func = if func == gox5_send {
             api::send(ctx).await
@@ -211,7 +212,7 @@ async fn main() {
         for i in 0..test_entry_point_num() {
             let entry_func = test_entry_point_function(i);
             start_light_weight_thread(
-                entry_func,
+                FunctionObject::from_user_function(entry_func),
                 &mut ctx,
                 mem::size_of::<isize>(),
                 ObjectPtr(ptr::NonNull::dangling().as_ptr()),

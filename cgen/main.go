@@ -167,12 +167,12 @@ func (ctx *Context) switchFunction(nextFunction string, callCommon *ssa.CallComm
 	fmt.Fprintf(ctx.stream, "return %s;\n", nextFunction)
 }
 
-func (ctx *Context) switchFunctionToCallRuntimeSpawnApi(entryFunction string, callCommon *ssa.CallCommon, resultSize string, resumeFunction string) {
+func (ctx *Context) switchFunctionToCallRuntimeSpawnApi(functionObject string, callCommon *ssa.CallCommon, resultSize string, resumeFunction string) {
 	fmt.Fprintf(ctx.stream, "struct StackFrameSpawn* next_frame = (struct StackFrameSpawn*)(ctx->stack_pointer + sizeof(*frame));\n")
 	fmt.Fprintf(ctx.stream, "next_frame->common.resume_func = %s;\n", resumeFunction)
 	fmt.Fprintf(ctx.stream, "next_frame->common.prev_stack_pointer = ctx->stack_pointer;\n")
 
-	fmt.Fprintf(ctx.stream, "next_frame->func = %s;\n", entryFunction)
+	fmt.Fprintf(ctx.stream, "next_frame->func = %s;\n", functionObject)
 	fmt.Fprintf(ctx.stream, "next_frame->result_size = %s;\n", resultSize)
 
 	fmt.Fprintf(ctx.stream, "intptr_t num_arg_buffer_words = 0;\n")
@@ -317,20 +317,29 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 		if callCommon.Method != nil {
 			panic("method not supported")
 		}
+
+		var functionObject string
+		var signature *types.Signature
 		switch callee := callCommon.Value.(type) {
 		case *ssa.Function:
-			entryFunction := createFunctionName(callee)
-			resultSize := "0"
-			if callee.Signature.Results().Len() > 0 {
-				if callee.Signature.Results().Len() != 1 {
-					panic("only 0 or 1 return value supported")
-				}
-				resultSize = fmt.Sprintf("sizeof(%s)", createType(callee.Signature.Results().At(0).Type(), ""))
-			}
-			ctx.switchFunctionToCallRuntimeSpawnApi(entryFunction, callCommon, resultSize, createInstructionName(instr))
+			functionObject = createFunctionName(callee)
+			signature = callee.Signature
+		case ssa.Value:
+			functionObject = fmt.Sprintf("(void*)%s.func", createValueRelName(callee)) // W.A.
+			signature = callee.Type().(*types.Signature)
 		default:
-			panic("unknown callee")
+			panic(fmt.Sprintf("unknown callee: %s, %s, %T, %T", instr, callee, instr, callee))
 		}
+
+		resultSize := "0"
+		if signature.Results().Len() > 0 {
+			if signature.Results().Len() != 1 {
+				panic("only 0 or 1 return value supported")
+			}
+			resultSize = fmt.Sprintf("sizeof(%s)", createType(signature.Results().At(0).Type(), ""))
+		}
+
+		ctx.switchFunctionToCallRuntimeSpawnApi(functionObject, callCommon, resultSize, createInstructionName(instr))
 
 	case *ssa.If:
 		fmt.Fprintf(ctx.stream, "\treturn %s ? %s : %s;\n", createValueRelName(instr.Cond), createBasicBlockName(instr.Block().Succs[0]), createBasicBlockName(instr.Block().Succs[1]))
