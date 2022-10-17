@@ -195,7 +195,7 @@ func (ctx *Context) switchFunctionToCallRuntimeMakeClosureApi(closure *ssa.Funct
 
 	closureName := createFunctionName(closure)
 	fmt.Fprintf(ctx.stream, "next_frame->result_ptr = &%s;\n", *resultPtr)
-	fmt.Fprintf(ctx.stream, "next_frame->func = %s;\n", closureName)
+	fmt.Fprintf(ctx.stream, "next_frame->user_function = (struct UserFunction){.func_ptr = %s};\n", closureName)
 
 	fmt.Fprintf(ctx.stream, "struct FreeVars_%s* free_vars = (struct FreeVars_%s*)&next_frame->object_ptrs;\n", closureName, closureName)
 	for i, freeVar := range closure.FreeVars {
@@ -757,6 +757,10 @@ struct FunctionObject {
 	const void* func;
 };
 
+struct UserFunction {
+	const void* func_ptr;
+};
+
 struct Slice {
 	void* addr;
 	uintptr_t size;
@@ -787,7 +791,7 @@ void* gox5_make_chan (struct LightWeightThreadContext* ctx);
 struct StackFrameMakeClosure {
 	struct StackFrameCommon common;
 	void* result_ptr;
-	void* func;
+	struct UserFunction user_function;
 	uintptr_t num_object_ptrs;
 	void* object_ptrs[0];
 };

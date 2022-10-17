@@ -37,8 +37,7 @@ impl FunctionObject {
 
 unsafe impl Send for FunctionObject {}
 
-type UserFunctionInner =
-    unsafe extern "C" fn(&mut LightWeightThreadContext) -> FunctionObject;
+type UserFunctionInner = unsafe extern "C" fn(&mut LightWeightThreadContext) -> FunctionObject;
 
 #[derive(Clone)]
 #[repr(C)]
@@ -203,7 +202,7 @@ pub fn make_chan(ctx: &mut LightWeightThreadContext) -> FunctionObject {
 struct StackFrameMakeClosure {
     common: StackFrameCommon,
     result_ptr: *mut ObjectPtr,
-    func: UserFunction,
+    user_function: UserFunction,
     num_object_ptrs: usize,
     object_ptrs: [ObjectPtr; 0],
 }
@@ -228,7 +227,7 @@ pub fn make_closure(ctx: &mut LightWeightThreadContext) -> FunctionObject {
 
         let stack_frame = &mut ctx.stack_pointer.make_closure;
 
-        closure_layout.func = stack_frame.func.clone();
+        closure_layout.func = stack_frame.user_function.clone();
 
         let num_object_ptrs = stack_frame.num_object_ptrs;
         let object_ptrs = stack_frame.object_ptrs.as_mut_ptr();
