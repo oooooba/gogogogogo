@@ -66,6 +66,10 @@ func extractTestTargetFunctions(f *ssa.Function) []*ssa.Function {
 	return targets
 }
 
+func wrapInFunctionObject(s string) string {
+	return fmt.Sprintf("(struct FunctionObject){.func_ptr=%s}", s)
+}
+
 func createValueName(value ssa.Value) string {
 	if val, ok := value.(*ssa.Const); ok {
 		if val.IsNil() {
@@ -79,7 +83,7 @@ func createValueName(value ssa.Value) string {
 			return val.Value.String()
 		}
 	} else if val, ok := value.(*ssa.Function); ok {
-		return fmt.Sprintf("(struct FunctionObject){%s}", createFunctionName(val))
+		return fmt.Sprintf("%s", wrapInFunctionObject(createFunctionName(val)))
 	} else if val, ok := value.(*ssa.Parameter); ok {
 		for i, param := range val.Parent().Params {
 			if val.Name() == param.Name() {
@@ -139,7 +143,7 @@ func createType(typ types.Type, id string) string {
 
 func (ctx *Context) switchFunction(nextFunction string, callCommon *ssa.CallCommon, result string, resumeFunction string) {
 	fmt.Fprintf(ctx.stream, "struct StackFrameCommon* next_frame = (struct StackFrameCommon*)(ctx->stack_pointer + sizeof(*frame));\n")
-	fmt.Fprintf(ctx.stream, "next_frame->resume_func = %s;\n", resumeFunction)
+	fmt.Fprintf(ctx.stream, "next_frame->resume_func = %s;\n", wrapInFunctionObject(resumeFunction))
 	fmt.Fprintf(ctx.stream, "next_frame->prev_stack_pointer = ctx->stack_pointer;\n")
 
 	signature := callCommon.Value.Type().(*types.Signature)
@@ -169,10 +173,10 @@ func (ctx *Context) switchFunction(nextFunction string, callCommon *ssa.CallComm
 
 func (ctx *Context) switchFunctionToCallRuntimeSpawnApi(functionObject string, callCommon *ssa.CallCommon, resultSize string, resumeFunction string) {
 	fmt.Fprintf(ctx.stream, "struct StackFrameSpawn* next_frame = (struct StackFrameSpawn*)(ctx->stack_pointer + sizeof(*frame));\n")
-	fmt.Fprintf(ctx.stream, "next_frame->common.resume_func = %s;\n", resumeFunction)
+	fmt.Fprintf(ctx.stream, "next_frame->common.resume_func = %s;\n", wrapInFunctionObject(resumeFunction))
 	fmt.Fprintf(ctx.stream, "next_frame->common.prev_stack_pointer = ctx->stack_pointer;\n")
 
-	fmt.Fprintf(ctx.stream, "next_frame->func = %s;\n", functionObject)
+	fmt.Fprintf(ctx.stream, "next_frame->function_object = %s;\n", functionObject)
 	fmt.Fprintf(ctx.stream, "next_frame->result_size = %s;\n", resultSize)
 
 	fmt.Fprintf(ctx.stream, "intptr_t num_arg_buffer_words = 0;\n")
@@ -185,12 +189,12 @@ func (ctx *Context) switchFunctionToCallRuntimeSpawnApi(functionObject string, c
 	fmt.Fprintf(ctx.stream, "next_frame->num_arg_buffer_words = num_arg_buffer_words;\n")
 
 	fmt.Fprintf(ctx.stream, "ctx->stack_pointer = next_frame;\n")
-	fmt.Fprintf(ctx.stream, "return gox5_spawn;\n")
+	fmt.Fprintf(ctx.stream, "return %s;\n", wrapInFunctionObject("gox5_spawn"))
 }
 
 func (ctx *Context) switchFunctionToCallRuntimeMakeClosureApi(closure *ssa.Function, resumeFunction string, resultPtr *string, bindings []ssa.Value) {
 	fmt.Fprintf(ctx.stream, "struct StackFrameMakeClosure* next_frame = (struct StackFrameMakeClosure*)(ctx->stack_pointer + sizeof(*frame));\n")
-	fmt.Fprintf(ctx.stream, "next_frame->common.resume_func = %s;\n", resumeFunction)
+	fmt.Fprintf(ctx.stream, "next_frame->common.resume_func = %s;\n", wrapInFunctionObject(resumeFunction))
 	fmt.Fprintf(ctx.stream, "next_frame->common.prev_stack_pointer = ctx->stack_pointer;\n")
 
 	closureName := createFunctionName(closure)
@@ -205,7 +209,7 @@ func (ctx *Context) switchFunctionToCallRuntimeMakeClosureApi(closure *ssa.Funct
 	fmt.Fprintf(ctx.stream, "next_frame->num_object_ptrs = sizeof(*free_vars) / sizeof(intptr_t);\n")
 
 	fmt.Fprintf(ctx.stream, "ctx->stack_pointer = next_frame;\n")
-	fmt.Fprintf(ctx.stream, "return gox5_make_closure;\n")
+	fmt.Fprintf(ctx.stream, "return %s\n;", wrapInFunctionObject("gox5_make_closure"))
 }
 
 type paramArgPair struct {
@@ -215,7 +219,7 @@ type paramArgPair struct {
 
 func (ctx *Context) switchFunctionToCallRuntimeApi(nextFunction string, nextFunctionFrame string, resumeFunction string, resultPtr *string, paramArgPairs ...paramArgPair) {
 	fmt.Fprintf(ctx.stream, "struct %s* next_frame = (struct %s*)(ctx->stack_pointer + sizeof(*frame));\n", nextFunctionFrame, nextFunctionFrame)
-	fmt.Fprintf(ctx.stream, "next_frame->common.resume_func = %s;\n", resumeFunction)
+	fmt.Fprintf(ctx.stream, "next_frame->common.resume_func = %s;\n", wrapInFunctionObject(resumeFunction))
 	fmt.Fprintf(ctx.stream, "next_frame->common.prev_stack_pointer = ctx->stack_pointer;\n")
 
 	if resultPtr != nil {
@@ -226,7 +230,7 @@ func (ctx *Context) switchFunctionToCallRuntimeApi(nextFunction string, nextFunc
 	}
 
 	fmt.Fprintf(ctx.stream, "ctx->stack_pointer = next_frame;\n")
-	fmt.Fprintf(ctx.stream, "return %s;\n", nextFunction)
+	fmt.Fprintf(ctx.stream, "return %s;\n", wrapInFunctionObject(nextFunction))
 }
 
 func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
@@ -288,14 +292,14 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 			default:
 				panic(fmt.Sprintf("unsuported builtin function: %s", callee.Name()))
 			}
-			fmt.Fprintf(ctx.stream, "\treturn %s;\n", createInstructionName(instr))
+			fmt.Fprintf(ctx.stream, "\treturn %s;\n", wrapInFunctionObject(createInstructionName(instr)))
 
 		case *ssa.Function:
-			nextFunction := createFunctionName(callee)
+			nextFunction := createValueName(callee)
 			ctx.switchFunction(nextFunction, callCommon, createValueRelName(instr), createInstructionName(instr))
 
 		case *ssa.MakeClosure, *ssa.Parameter:
-			nextFunction := fmt.Sprintf("(void*)%s.func", createValueRelName(callee))
+			nextFunction := createValueRelName(callee)
 			ctx.switchFunction(nextFunction, callCommon, createValueRelName(instr), createInstructionName(instr))
 
 		default:
@@ -322,10 +326,10 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 		var signature *types.Signature
 		switch callee := callCommon.Value.(type) {
 		case *ssa.Function:
-			functionObject = createFunctionName(callee)
+			functionObject = createValueName(callee)
 			signature = callee.Signature
 		case ssa.Value:
-			functionObject = fmt.Sprintf("(void*)%s.func", createValueRelName(callee)) // W.A.
+			functionObject = createValueRelName(callee)
 			signature = callee.Type().(*types.Signature)
 		default:
 			panic(fmt.Sprintf("unknown callee: %s, %s, %T, %T", instr, callee, instr, callee))
@@ -342,10 +346,12 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 		ctx.switchFunctionToCallRuntimeSpawnApi(functionObject, callCommon, resultSize, createInstructionName(instr))
 
 	case *ssa.If:
-		fmt.Fprintf(ctx.stream, "\treturn %s ? %s : %s;\n", createValueRelName(instr.Cond), createBasicBlockName(instr.Block().Succs[0]), createBasicBlockName(instr.Block().Succs[1]))
+		fmt.Fprintf(ctx.stream, "\treturn %s ? %s : %s;\n", createValueRelName(instr.Cond),
+			wrapInFunctionObject(createBasicBlockName(instr.Block().Succs[0])),
+			wrapInFunctionObject(createBasicBlockName(instr.Block().Succs[1])))
 
 	case *ssa.Jump:
-		fmt.Fprintf(ctx.stream, "\treturn %s;\n", createBasicBlockName(instr.Block().Succs[0]))
+		fmt.Fprintf(ctx.stream, "\treturn %s;\n", wrapInFunctionObject(createBasicBlockName(instr.Block().Succs[0])))
 
 	case *ssa.MakeChan:
 		result := createValueRelName(instr)
@@ -621,7 +627,7 @@ func (ctx *Context) tryEmitSignatureDefinition(signature *types.Signature) {
 }
 
 func (ctx *Context) emitFunctionDeclaration(function *ssa.Function) {
-	fmt.Fprintf(ctx.stream, "void* %s (struct LightWeightThreadContext* ctx);\n", createFunctionName(function))
+	fmt.Fprintf(ctx.stream, "struct FunctionObject %s (struct LightWeightThreadContext* ctx);\n", createFunctionName(function))
 
 	ctx.tryEmitSignatureDefinition(function.Signature)
 
@@ -656,12 +662,12 @@ func (ctx *Context) emitFunctionDeclaration(function *ssa.Function) {
 
 	for _, basicBlock := range function.DomPreorder() {
 		name := createBasicBlockName(basicBlock)
-		fmt.Fprintf(ctx.stream, "void* %s (struct LightWeightThreadContext* ctx);\n", name)
+		fmt.Fprintf(ctx.stream, "struct FunctionObject %s (struct LightWeightThreadContext* ctx);\n", name)
 		ctx.latestNameMap[basicBlock] = name
 		for _, instr := range basicBlock.Instrs {
 			if requireSwitchFunction(instr) {
 				continuation_name := createInstructionName(instr)
-				fmt.Fprintf(ctx.stream, "void* %s (struct LightWeightThreadContext* ctx);\n", continuation_name)
+				fmt.Fprintf(ctx.stream, "struct FunctionObject %s (struct LightWeightThreadContext* ctx);\n", continuation_name)
 				ctx.latestNameMap[basicBlock] = continuation_name
 			}
 		}
@@ -669,7 +675,7 @@ func (ctx *Context) emitFunctionDeclaration(function *ssa.Function) {
 }
 
 func (ctx *Context) emitFunctionDefinitionHeader(function *ssa.Function, name string) {
-	fmt.Fprintf(ctx.stream, "void* %s (struct LightWeightThreadContext* ctx) {", name)
+	fmt.Fprintf(ctx.stream, "struct FunctionObject %s (struct LightWeightThreadContext* ctx) {", name)
 	freeVarsCompareOp := "=="
 	if len(function.FreeVars) != 0 {
 		freeVarsCompareOp = "!="
@@ -686,11 +692,11 @@ func (ctx *Context) emitFunctionDefinitionFooter(function *ssa.Function) {
 
 func (ctx *Context) emitFunctionDefinition(function *ssa.Function) {
 	fmt.Fprintf(ctx.stream, `
-void* %s (struct LightWeightThreadContext* ctx) {
+struct FunctionObject %s (struct LightWeightThreadContext* ctx) {
 	assert(ctx->marker == 0xdeadbeef);
 	return %s;
 }
-`, createFunctionName(function), createBasicBlockName(function.Blocks[0]))
+`, createFunctionName(function), wrapInFunctionObject(createBasicBlockName(function.Blocks[0])))
 
 	for _, basicBlock := range function.DomPreorder() {
 		ctx.emitFunctionDefinitionHeader(function, createBasicBlockName(basicBlock))
@@ -763,7 +769,7 @@ struct LightWeightThreadContext {
 struct Channel;
 
 struct FunctionObject {
-	const void* func;
+	const void* func_ptr;
 };
 
 struct UserFunction {
@@ -777,7 +783,7 @@ struct Slice {
 };
 
 struct StackFrameCommon {
-	void* resume_func;
+	struct FunctionObject resume_func;
 	void* prev_stack_pointer;
 	void* free_vars;
 };
@@ -788,14 +794,14 @@ struct StackFrameAppend {
 	struct Slice base;
 	struct Slice elements;
 };
-void* gox5_append (struct LightWeightThreadContext* ctx);
+struct FunctionObject gox5_append (struct LightWeightThreadContext* ctx);
 
 struct StackFrameMakeChan {
 	struct StackFrameCommon common;
 	struct Channel** result_ptr;
 	intptr_t size; // ToDo: correct to proper type
 };
-void* gox5_make_chan (struct LightWeightThreadContext* ctx);
+struct FunctionObject gox5_make_chan (struct LightWeightThreadContext* ctx);
 
 struct StackFrameMakeClosure {
 	struct StackFrameCommon common;
@@ -804,37 +810,37 @@ struct StackFrameMakeClosure {
 	uintptr_t num_object_ptrs;
 	void* object_ptrs[0];
 };
-void* gox5_make_closure (struct LightWeightThreadContext* ctx);
+struct FunctionObject gox5_make_closure (struct LightWeightThreadContext* ctx);
 
 struct StackFrameNew {
 	struct StackFrameCommon common;
 	void* result_ptr;
 	uintptr_t size;
 };
-void* gox5_new (struct LightWeightThreadContext* ctx);
+struct FunctionObject gox5_new (struct LightWeightThreadContext* ctx);
 
 struct StackFrameRecv {
 	struct StackFrameCommon common;
 	intptr_t* result_ptr;
 	struct Channel* channel;
 };
-void* gox5_recv (struct LightWeightThreadContext* ctx);
+struct FunctionObject gox5_recv (struct LightWeightThreadContext* ctx);
 
 struct StackFrameSend {
 	struct StackFrameCommon common;
 	struct Channel* channel;
 	intptr_t data;
 };
-void* gox5_send (struct LightWeightThreadContext* ctx);
+struct FunctionObject gox5_send (struct LightWeightThreadContext* ctx);
 
 struct StackFrameSpawn {
 	struct StackFrameCommon common;
-    void* func;
+	struct FunctionObject function_object;
 	uintptr_t result_size;
 	uintptr_t num_arg_buffer_words;
 	void* arg_buffer[0];
 };
-void* gox5_spawn (struct LightWeightThreadContext* ctx);
+struct FunctionObject gox5_spawn (struct LightWeightThreadContext* ctx);
 `)
 
 	for member := range pkg.Members {
