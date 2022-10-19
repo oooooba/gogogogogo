@@ -772,16 +772,14 @@ func (ctx *Context) emitPackage(pkg *ssa.Package) {
 #define DECLARE_RUNTIME_API(name, param_type) \
 	struct FunctionObject (gox5_##name)(struct LightWeightThreadContext* ctx)
 
-struct GlobalContextPtr {
-	const void* ptr;
-};
+struct GlobalContextPtr;
 
 struct UserFunction {
 	const void* func_ptr;
 };
 
 struct LightWeightThreadContext {
-	struct GlobalContextPtr global_context;
+	struct GlobalContextPtr* global_context;
 	void* stack_pointer;
 	struct UserFunction prev_func;
 	intptr_t marker;
