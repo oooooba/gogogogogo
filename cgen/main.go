@@ -761,6 +761,9 @@ func (ctx *Context) emitPackage(pkg *ssa.Package) {
 #include <string.h>
 #include <assert.h>
 
+#define DECLARE_RUNTIME_API(name, param_type) \
+	struct FunctionObject (gox5_##name)(struct LightWeightThreadContext* ctx)
+
 struct LightWeightThreadContext {
 	void* global_context;
 	void* stack_pointer;
@@ -796,14 +799,14 @@ struct StackFrameAppend {
 	struct Slice base;
 	struct Slice elements;
 };
-struct FunctionObject gox5_append (struct LightWeightThreadContext* ctx);
+DECLARE_RUNTIME_API(append, StackFrameAppend);
 
 struct StackFrameMakeChan {
 	struct StackFrameCommon common;
 	struct Channel** result_ptr;
 	intptr_t size; // ToDo: correct to proper type
 };
-struct FunctionObject gox5_make_chan (struct LightWeightThreadContext* ctx);
+DECLARE_RUNTIME_API(make_chan, StackFrameMakeChan);
 
 struct StackFrameMakeClosure {
 	struct StackFrameCommon common;
@@ -812,28 +815,28 @@ struct StackFrameMakeClosure {
 	uintptr_t num_object_ptrs;
 	void* object_ptrs[0];
 };
-struct FunctionObject gox5_make_closure (struct LightWeightThreadContext* ctx);
+DECLARE_RUNTIME_API(make_closure, StackFrameMakeClosure);
 
 struct StackFrameNew {
 	struct StackFrameCommon common;
 	void* result_ptr;
 	uintptr_t size;
 };
-struct FunctionObject gox5_new (struct LightWeightThreadContext* ctx);
+DECLARE_RUNTIME_API(new, StackFrameNew);
 
 struct StackFrameRecv {
 	struct StackFrameCommon common;
 	intptr_t* result_ptr;
 	struct Channel* channel;
 };
-struct FunctionObject gox5_recv (struct LightWeightThreadContext* ctx);
+DECLARE_RUNTIME_API(recv, StackFrameRecv);
 
 struct StackFrameSend {
 	struct StackFrameCommon common;
 	struct Channel* channel;
 	intptr_t data;
 };
-struct FunctionObject gox5_send (struct LightWeightThreadContext* ctx);
+DECLARE_RUNTIME_API(send, StackFrameSend);
 
 struct StackFrameSpawn {
 	struct StackFrameCommon common;
@@ -842,7 +845,7 @@ struct StackFrameSpawn {
 	uintptr_t num_arg_buffer_words;
 	void* arg_buffer[0];
 };
-struct FunctionObject gox5_spawn (struct LightWeightThreadContext* ctx);
+DECLARE_RUNTIME_API(spawn, StackFrameSpawn);
 `)
 
 	for member := range pkg.Members {
