@@ -40,6 +40,13 @@ func main() {
 		latestNameMap:    make(map[*ssa.BasicBlock]string),
 		signatureNameSet: make(map[string]struct{}),
 	}
+
+	if false {
+		ctx.visitAllFunctions(ssaPackage, func(function *ssa.Function) {
+			function.WriteTo(os.Stderr)
+		})
+	}
+
 	ctx.emitPackage(ssaPackage)
 }
 
