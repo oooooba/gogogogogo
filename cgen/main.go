@@ -626,8 +626,12 @@ func (ctx *Context) tryEmitSignatureDefinition(signature *types.Signature) {
 	fmt.Fprintln(ctx.stream, "};")
 }
 
+func (ctx *Context) emitFunctionHeader(name string, end string) {
+	fmt.Fprintf(ctx.stream, "struct FunctionObject %s (struct LightWeightThreadContext* ctx)%s\n", name, end)
+}
+
 func (ctx *Context) emitFunctionDeclaration(function *ssa.Function) {
-	fmt.Fprintf(ctx.stream, "struct FunctionObject %s (struct LightWeightThreadContext* ctx);\n", createFunctionName(function))
+	ctx.emitFunctionHeader(createFunctionName(function), ";")
 
 	ctx.tryEmitSignatureDefinition(function.Signature)
 
@@ -662,20 +666,20 @@ func (ctx *Context) emitFunctionDeclaration(function *ssa.Function) {
 
 	for _, basicBlock := range function.DomPreorder() {
 		name := createBasicBlockName(basicBlock)
-		fmt.Fprintf(ctx.stream, "struct FunctionObject %s (struct LightWeightThreadContext* ctx);\n", name)
+		ctx.emitFunctionHeader(name, ";")
 		ctx.latestNameMap[basicBlock] = name
 		for _, instr := range basicBlock.Instrs {
 			if requireSwitchFunction(instr) {
 				continuation_name := createInstructionName(instr)
-				fmt.Fprintf(ctx.stream, "struct FunctionObject %s (struct LightWeightThreadContext* ctx);\n", continuation_name)
+				ctx.emitFunctionHeader(continuation_name, ";")
 				ctx.latestNameMap[basicBlock] = continuation_name
 			}
 		}
 	}
 }
 
-func (ctx *Context) emitFunctionDefinitionHeader(function *ssa.Function, name string) {
-	fmt.Fprintf(ctx.stream, "struct FunctionObject %s (struct LightWeightThreadContext* ctx) {", name)
+func (ctx *Context) emitFunctionDefinitionPrologue(function *ssa.Function, name string) {
+	ctx.emitFunctionHeader(name, "{")
 	freeVarsCompareOp := "=="
 	if len(function.FreeVars) != 0 {
 		freeVarsCompareOp = "!="
@@ -686,31 +690,29 @@ func (ctx *Context) emitFunctionDefinitionHeader(function *ssa.Function, name st
 `, createFunctionName(function), freeVarsCompareOp)
 }
 
-func (ctx *Context) emitFunctionDefinitionFooter(function *ssa.Function) {
+func (ctx *Context) emitFunctionDefinitionEpilogue(function *ssa.Function) {
 	fmt.Fprintln(ctx.stream, "}")
 }
 
 func (ctx *Context) emitFunctionDefinition(function *ssa.Function) {
-	fmt.Fprintf(ctx.stream, `
-struct FunctionObject %s (struct LightWeightThreadContext* ctx) {
-	assert(ctx->marker == 0xdeadbeef);
-	return %s;
-}
-`, createFunctionName(function), wrapInFunctionObject(createBasicBlockName(function.Blocks[0])))
+	ctx.emitFunctionHeader(createFunctionName(function), "{")
+	fmt.Fprintf(ctx.stream, "\tassert(ctx->marker == 0xdeadbeef);\n")
+	fmt.Fprintf(ctx.stream, "\treturn %s;\n", wrapInFunctionObject(createBasicBlockName(function.Blocks[0])))
+	fmt.Fprintf(ctx.stream, "}\n")
 
 	for _, basicBlock := range function.DomPreorder() {
-		ctx.emitFunctionDefinitionHeader(function, createBasicBlockName(basicBlock))
+		ctx.emitFunctionDefinitionPrologue(function, createBasicBlockName(basicBlock))
 
 		for _, instr := range basicBlock.Instrs {
 			ctx.emitInstruction(instr)
 
 			if requireSwitchFunction(instr) {
-				ctx.emitFunctionDefinitionFooter(function)
-				ctx.emitFunctionDefinitionHeader(function, createInstructionName(instr))
+				ctx.emitFunctionDefinitionEpilogue(function)
+				ctx.emitFunctionDefinitionPrologue(function, createInstructionName(instr))
 			}
 		}
 
-		ctx.emitFunctionDefinitionFooter(function)
+		ctx.emitFunctionDefinitionEpilogue(function)
 	}
 }
 
