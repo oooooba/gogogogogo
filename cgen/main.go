@@ -377,7 +377,8 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 	case *ssa.Phi:
 		basicBlock := instr.Block()
 		for i, edge := range instr.Edges {
-			fmt.Fprintf(ctx.stream, "\tif (ctx->prev_func == %s) { %s = %s; } else\n", ctx.latestNameMap[basicBlock.Preds[i]], createValueRelName(instr), createValueRelName(edge))
+			fmt.Fprintf(ctx.stream, "\tif (ctx->prev_func.func_ptr == %s) { %s = %s; } else\n",
+				ctx.latestNameMap[basicBlock.Preds[i]], createValueRelName(instr), createValueRelName(edge))
 		}
 		fmt.Fprintln(ctx.stream, "\t{ assert(false); }")
 
@@ -775,20 +776,20 @@ struct GlobalContextPtr {
 	const void* ptr;
 };
 
+struct UserFunction {
+	const void* func_ptr;
+};
+
 struct LightWeightThreadContext {
 	struct GlobalContextPtr global_context;
 	void* stack_pointer;
-	const void* prev_func;
+	struct UserFunction prev_func;
 	intptr_t marker;
 };
 
 struct Channel;
 
 struct FunctionObject {
-	const void* func_ptr;
-};
-
-struct UserFunction {
 	const void* func_ptr;
 };
 
