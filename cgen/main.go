@@ -4,6 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"strings"
 
 	"go/ast"
 	"go/importer"
@@ -42,8 +43,14 @@ func main() {
 	}
 
 	if false {
+		var keywords []string
 		ctx.visitAllFunctions(ssaPackage, func(function *ssa.Function) {
-			function.WriteTo(os.Stderr)
+			for _, keyword := range keywords {
+				if strings.Contains(function.Name(), keyword) {
+					function.WriteTo(os.Stderr)
+					break
+				}
+			}
 		})
 	}
 
