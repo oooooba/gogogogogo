@@ -24,7 +24,7 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	prog, pkgs := ssautil.AllPackages(initPkgs, ssa.SanityCheckFunctions)
+	prog, _ := ssautil.AllPackages(initPkgs, ssa.SanityCheckFunctions)
 	prog.Build()
 
 	ctx := Context{
@@ -33,10 +33,9 @@ func main() {
 		signatureNameSet: make(map[string]struct{}),
 	}
 
-	pkg := pkgs[0]
 	if false {
 		var keywords []string
-		ctx.visitAllFunctions(pkg, func(function *ssa.Function) {
+		ctx.visitAllFunctions(prog, func(function *ssa.Function) {
 			for _, keyword := range keywords {
 				if strings.Contains(function.Name(), keyword) {
 					function.WriteTo(os.Stderr)
@@ -46,7 +45,7 @@ func main() {
 		})
 	}
 
-	ctx.emitPackage(pkg)
+	ctx.emitProgram(prog)
 }
 
 type Context struct {
@@ -729,7 +728,16 @@ func (ctx *Context) emitTypeDefinition(typ *ssa.Type) {
 	}
 }
 
-func (ctx *Context) visitAllFunctions(pkg *ssa.Package, procedure func(function *ssa.Function)) {
+func findMainPackage(program *ssa.Program) *ssa.Package {
+	for _, pkg := range program.AllPackages() {
+		if pkg.Pkg.Name() == "main" {
+			return pkg
+		}
+	}
+	panic("main package not found")
+}
+
+func (ctx *Context) visitAllFunctions(program *ssa.Program, procedure func(function *ssa.Function)) {
 	var f func(function *ssa.Function)
 	f = func(function *ssa.Function) {
 		procedure(function)
@@ -737,8 +745,10 @@ func (ctx *Context) visitAllFunctions(pkg *ssa.Package, procedure func(function 
 			f(anonFunc)
 		}
 	}
-	for symbol := range pkg.Members {
-		function, ok := pkg.Members[symbol].(*ssa.Function)
+
+	mainPkg := findMainPackage(program)
+	for symbol := range mainPkg.Members {
+		function, ok := mainPkg.Members[symbol].(*ssa.Function)
 		if !ok {
 			continue
 		}
@@ -751,7 +761,7 @@ func (ctx *Context) visitAllFunctions(pkg *ssa.Package, procedure func(function 
 	}
 }
 
-func (ctx *Context) emitPackage(pkg *ssa.Package) {
+func (ctx *Context) emitProgram(program *ssa.Program) {
 	fmt.Fprint(ctx.stream, `
 #include <stdbool.h>
 #include <stdio.h>
@@ -848,27 +858,29 @@ struct StackFrameSpawn {
 DECLARE_RUNTIME_API(spawn, StackFrameSpawn);
 `)
 
-	for member := range pkg.Members {
-		typ, ok := pkg.Members[member].(*ssa.Type)
+	mainPkg := findMainPackage(program)
+
+	for member := range mainPkg.Members {
+		typ, ok := mainPkg.Members[member].(*ssa.Type)
 		if !ok {
 			continue
 		}
 		ctx.emitTypeDefinition(typ)
 	}
 
-	ctx.visitAllFunctions(pkg, func(function *ssa.Function) {
+	ctx.visitAllFunctions(program, func(function *ssa.Function) {
 		ctx.emitFunctionDeclaration(function)
 	})
 
-	ctx.visitAllFunctions(pkg, func(function *ssa.Function) {
+	ctx.visitAllFunctions(program, func(function *ssa.Function) {
 		if function.Blocks != nil {
 			ctx.emitFunctionDefinition(function)
 		}
 	})
 
 	fmt.Fprintln(ctx.stream, "struct { const char* name; void* function; } test_entry_points[] = {")
-	for symbol := range pkg.Members {
-		function, ok := pkg.Members[symbol].(*ssa.Function)
+	for symbol := range mainPkg.Members {
+		function, ok := mainPkg.Members[symbol].(*ssa.Function)
 		if !ok {
 			continue
 		}
