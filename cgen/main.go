@@ -3,15 +3,14 @@ package main
 import (
 	"flag"
 	"fmt"
+	"log"
 	"os"
 	"strings"
 
-	"go/ast"
-	"go/importer"
-	"go/parser"
 	"go/token"
 	"go/types"
 
+	"golang.org/x/tools/go/packages"
 	"golang.org/x/tools/go/ssa"
 	"golang.org/x/tools/go/ssa/ssautil"
 )
@@ -20,21 +19,13 @@ func main() {
 	filename := flag.String("i", "/dev/stdin", "input file")
 	flag.Parse()
 
-	fset := token.NewFileSet()
-	f, err := parser.ParseFile(fset, *filename, nil, 0)
+	cfg := packages.Config{Mode: packages.LoadAllSyntax}
+	initPkgs, err := packages.Load(&cfg, *filename)
 	if err != nil {
-		fmt.Println(err)
-		return
+		log.Fatal(err)
 	}
-	files := []*ast.File{f}
-
-	typesPackage := types.NewPackage("package", "")
-	ssaPackage, _, err := ssautil.BuildPackage(
-		&types.Config{Importer: importer.Default()}, fset, typesPackage, files, ssa.SanityCheckFunctions)
-	if err != nil {
-		fmt.Println(err)
-		return
-	}
+	prog, pkgs := ssautil.AllPackages(initPkgs, ssa.SanityCheckFunctions)
+	prog.Build()
 
 	ctx := Context{
 		stream:           os.Stdout,
@@ -42,9 +33,10 @@ func main() {
 		signatureNameSet: make(map[string]struct{}),
 	}
 
+	pkg := pkgs[0]
 	if false {
 		var keywords []string
-		ctx.visitAllFunctions(ssaPackage, func(function *ssa.Function) {
+		ctx.visitAllFunctions(pkg, func(function *ssa.Function) {
 			for _, keyword := range keywords {
 				if strings.Contains(function.Name(), keyword) {
 					function.WriteTo(os.Stderr)
@@ -54,7 +46,7 @@ func main() {
 		})
 	}
 
-	ctx.emitPackage(ssaPackage)
+	ctx.emitPackage(pkg)
 }
 
 type Context struct {
