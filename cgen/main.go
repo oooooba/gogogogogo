@@ -759,6 +759,22 @@ func (ctx *Context) visitAllFunctions(program *ssa.Program, procedure func(funct
 
 		f(function)
 	}
+
+	g := func(t types.Type) {
+		methodSet := program.MethodSets.MethodSet(t)
+		for i := 0; i < methodSet.Len(); i++ {
+			function := program.MethodValue(methodSet.At(i))
+			f(function)
+		}
+	}
+	for member := range mainPkg.Members {
+		typ, ok := mainPkg.Members[member].(*ssa.Type)
+		if !ok {
+			continue
+		}
+		g(typ.Type())
+		g(types.NewPointer(typ.Type()))
+	}
 }
 
 func (ctx *Context) emitProgram(program *ssa.Program) {
