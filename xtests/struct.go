@@ -96,6 +96,32 @@ func Test13() int {
 	return s.methodRefRead()
 }
 
+func (s S1) methodCopyRead() int {
+	return s.n - s.m
+}
+
+func (s S1) methodCopyWrite(x, y int) {
+	s.n = x
+	s.m = y
+}
+
+func Test14() int {
+	s := S1{n: 24, m: 10}
+	return s.methodCopyRead()
+}
+
+func Test15() int {
+	s := S1{n: 25, m: 10}
+	s.methodCopyWrite(1, 2)
+	if s.n != 25 {
+		return 1
+	}
+	if s.m != 10 {
+		return 2
+	}
+	return s.methodCopyRead()
+}
+
 func main() {
 	runTest := func(test func() int) {
 		funcFullName := runtime.FuncForPC(reflect.ValueOf(test).Pointer()).Name()
@@ -115,4 +141,6 @@ func main() {
 	runTest(Test11)
 	runTest(Test12)
 	runTest(Test13)
+	runTest(Test14)
+	runTest(Test15)
 }

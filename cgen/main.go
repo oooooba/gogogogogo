@@ -268,6 +268,9 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 				fmt.Fprintf(ctx.stream, "%s = %s.capacity;\n", createValueRelName(instr), createValueRelName(callCommon.Args[0]))
 			case "len":
 				fmt.Fprintf(ctx.stream, "%s = %s.size;\n", createValueRelName(instr), createValueRelName(callCommon.Args[0]))
+			case "ssa:wrapnilchk":
+				fmt.Fprintf(ctx.stream, "assert(%s); // ssa:wrapnilchk\n", createValueRelName(callCommon.Args[0]))
+				fmt.Fprintf(ctx.stream, "%s = %s;\n", createValueRelName(instr), createValueRelName(callCommon.Args[0]))
 			default:
 				panic(fmt.Sprintf("unsuported builtin function: %s", callee.Name()))
 			}
@@ -452,7 +455,14 @@ func createBasicBlockName(basicBlock *ssa.BasicBlock) string {
 }
 
 func createFunctionName(function *ssa.Function) string {
-	return fmt.Sprintf("f$%s", function.Name())
+	methodType := ""
+	if function.Signature.Recv() != nil {
+		methodType = "_value"
+		if _, ok := function.Signature.Recv().Type().(*types.Pointer); ok {
+			methodType = "_pointer"
+		}
+	}
+	return fmt.Sprintf("f$%s%s", function.Name(), methodType)
 }
 
 func (ctx *Context) emitCallCommonDeclaration(callCommon *ssa.CallCommon) {
