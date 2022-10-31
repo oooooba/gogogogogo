@@ -166,10 +166,18 @@ func (ctx *Context) switchFunction(nextFunction string, callCommon *ssa.CallComm
 		fmt.Fprintf(ctx.stream, "signature->result_ptr = &%s;\n", result)
 	}
 
+	base := 0
+	if signature.Recv() != nil {
+		arg := callCommon.Args[base]
+		fmt.Fprintf(ctx.stream, "signature->param%d = %s; // receiver: %s\n",
+			base, createValueRelName(arg), signature.Recv())
+		base++
+	}
+
 	for i := 0; i < signature.Params().Len(); i++ {
-		arg := callCommon.Args[i]
+		arg := callCommon.Args[base+i]
 		fmt.Fprintf(ctx.stream, "signature->param%d = %s; // %s\n",
-			i, createValueRelName(arg), signature.Params().At(i))
+			base+i, createValueRelName(arg), signature.Params().At(i))
 	}
 
 	fmt.Fprintf(ctx.stream, "next_frame->free_vars = NULL;\n")
@@ -582,6 +590,10 @@ func createSignatureName(signature *types.Signature) string {
 	name := "struct Signature_"
 
 	name += "Params$$"
+	if signature.Recv() != nil {
+		name += createSignatureItemName(signature.Recv().Type())
+		name += "$$"
+	}
 	for i := 0; i < signature.Params().Len(); i++ {
 		name += createSignatureItemName(signature.Params().At(i).Type())
 		name += "$$"
@@ -615,8 +627,15 @@ func (ctx *Context) tryEmitSignatureDefinition(signature *types.Signature) {
 		fmt.Fprintf(ctx.stream, "\t%s* result_ptr;\n", createType(signature.Results().At(0).Type(), ""))
 	}
 
+	base := 0
+	if signature.Recv() != nil {
+		id := fmt.Sprintf("param%d", base)
+		fmt.Fprintf(ctx.stream, "\t%s; // receiver: %s\n", createType(signature.Recv().Type(), id), signature.Recv().String())
+		base++
+	}
+
 	for i := 0; i < signature.Params().Len(); i++ {
-		id := fmt.Sprintf("param%d", i)
+		id := fmt.Sprintf("param%d", base+i)
 		fmt.Fprintf(ctx.stream, "\t%s; // parameter[%d]: %s\n", createType(signature.Params().At(i).Type(), id), i, signature.Params().At(i).String())
 	}
 
