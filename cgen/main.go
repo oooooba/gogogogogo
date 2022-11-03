@@ -753,7 +753,7 @@ func (ctx *Context) emitTypeDefinition(typ *ssa.Type) {
 		}
 		fmt.Fprintf(ctx.stream, "};\n")
 	default:
-		panic("not implemented")
+		panic(fmt.Sprintf("not implemented: %s", typ))
 	}
 }
 
