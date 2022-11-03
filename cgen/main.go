@@ -117,17 +117,41 @@ func createValueRelName(value ssa.Value) string {
 	}
 }
 
+func createTypeName(typ types.Type) string {
+	switch t := typ.Underlying().(type) {
+	case *types.Array:
+		return fmt.Sprintf("%s_arr%d", createTypeName(t.Elem()), t.Len())
+	case *types.Basic:
+		switch t.Kind() {
+		case types.Bool:
+			return fmt.Sprintf("bool")
+		case types.Int, types.Int8, types.Int16, types.Int32, types.Int64, types.Uint, types.Uint8, types.Uint16, types.Uint32, types.Uint64, types.Uintptr:
+			return fmt.Sprintf("intptr_t")
+		}
+	case *types.Chan:
+		return fmt.Sprintf("Channel_ptr")
+	case *types.Pointer:
+		elemType := t.Elem().Underlying()
+		if et, ok := elemType.(*types.Array); ok {
+			elemType = et.Elem()
+		}
+		return fmt.Sprintf("%s_ptr", createTypeName(elemType))
+	case *types.Signature:
+		return fmt.Sprintf("FunctionObject")
+	case *types.Slice:
+		return fmt.Sprintf("Slice")
+	case *types.Struct:
+		return fmt.Sprintf("t$%p", t)
+	}
+	panic(fmt.Sprintf("type not supported: %s", typ.String()))
+}
+
 func createType(typ types.Type, id string) string {
 	switch t := typ.Underlying().(type) {
 	case *types.Array:
 		return fmt.Sprintf("%s %s[%d]", createType(t.Elem(), ""), id, t.Len())
 	case *types.Basic:
-		switch t.Kind() {
-		case types.Bool:
-			return fmt.Sprintf("bool %s", id)
-		case types.Int, types.Int8, types.Int16, types.Int32, types.Int64, types.Uint, types.Uint8, types.Uint16, types.Uint32, types.Uint64, types.Uintptr:
-			return fmt.Sprintf("intptr_t %s", id)
-		}
+		return fmt.Sprintf("%s %s", createTypeName(t), id)
 	case *types.Chan:
 		return fmt.Sprintf("struct Channel* %s", id)
 	case *types.Pointer:
@@ -136,12 +160,8 @@ func createType(typ types.Type, id string) string {
 			elemType = et.Elem()
 		}
 		return fmt.Sprintf("%s* %s", createType(elemType, ""), id)
-	case *types.Signature:
-		return fmt.Sprintf("struct FunctionObject %s", id)
-	case *types.Slice:
-		return fmt.Sprintf("struct Slice %s", id)
-	case *types.Struct:
-		return fmt.Sprintf("struct t$%p %s", t, id)
+	case *types.Signature, *types.Slice, *types.Struct:
+		return fmt.Sprintf("struct %s %s", createTypeName(t), id)
 	}
 	panic(fmt.Sprintf("type not supported: %s", typ.String()))
 }
@@ -457,10 +477,7 @@ func createBasicBlockName(basicBlock *ssa.BasicBlock) string {
 func createFunctionName(function *ssa.Function) string {
 	methodType := ""
 	if function.Signature.Recv() != nil {
-		methodType = "_value"
-		if _, ok := function.Signature.Recv().Type().(*types.Pointer); ok {
-			methodType = "_pointer"
-		}
+		methodType = fmt.Sprintf("_%s", createTypeName(function.Signature.Recv().Type()))
 	}
 	return fmt.Sprintf("f$%s%s", function.Name(), methodType)
 }
@@ -752,6 +769,10 @@ func (ctx *Context) emitTypeDefinition(typ *ssa.Type) {
 			fmt.Fprintf(ctx.stream, "\t%s; // %s\n", createType(field.Type(), id), field)
 		}
 		fmt.Fprintf(ctx.stream, "};\n")
+
+	case *types.Interface:
+		// do nothing
+
 	default:
 		panic(fmt.Sprintf("not implemented: %s", typ))
 	}
@@ -793,6 +814,9 @@ func (ctx *Context) visitAllFunctions(program *ssa.Program, procedure func(funct
 		methodSet := program.MethodSets.MethodSet(t)
 		for i := 0; i < methodSet.Len(); i++ {
 			function := program.MethodValue(methodSet.At(i))
+			if function == nil {
+				continue
+			}
 			f(function)
 		}
 	}
