@@ -71,6 +71,23 @@ func extractTestTargetFunctions(f *ssa.Function) []*ssa.Function {
 	return targets
 }
 
+func encode(str string) string {
+	buf := ""
+	for _, c := range str {
+		s := ""
+		switch c {
+		case '_':
+			s = "___"
+		case '$':
+			s = "_S_"
+		default:
+			s = string(c)
+		}
+		buf += s
+	}
+	return buf
+}
+
 func wrapInFunctionObject(s string) string {
 	return fmt.Sprintf("(struct FunctionObject){.func_ptr=%s}", s)
 }
@@ -98,7 +115,7 @@ func createValueName(value ssa.Value) string {
 		panic(fmt.Sprintf("unreachable: val=%s, params=%v", val, val.Parent().Params))
 	} else {
 		parentName := value.Parent().Name()
-		return fmt.Sprintf("v$%s$%s$%p", value.Name(), parentName, value)
+		return encode(fmt.Sprintf("v$%s$%s$%p", value.Name(), parentName, value))
 	}
 }
 
@@ -141,7 +158,7 @@ func createTypeName(typ types.Type) string {
 	case *types.Slice:
 		return fmt.Sprintf("Slice")
 	case *types.Struct:
-		return fmt.Sprintf("t$%p", t)
+		return encode(fmt.Sprintf("t$%p", t))
 	}
 	panic(fmt.Sprintf("type not supported: %s", typ.String()))
 }
@@ -467,19 +484,19 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 }
 
 func createInstructionName(instruction ssa.Instruction) string {
-	return fmt.Sprintf("i$%s$%s$%p", instruction.Block().String(), instruction.Parent().Name(), instruction)
+	return encode(fmt.Sprintf("i$%s$%s$%p", instruction.Block().String(), instruction.Parent().Name(), instruction))
 }
 
 func createBasicBlockName(basicBlock *ssa.BasicBlock) string {
-	return fmt.Sprintf("b$%s$%s$%p", basicBlock.String(), basicBlock.Parent().Name(), basicBlock)
+	return encode(fmt.Sprintf("b$%s$%s$%p", basicBlock.String(), basicBlock.Parent().Name(), basicBlock))
 }
 
 func createFunctionName(function *ssa.Function) string {
 	methodType := ""
 	if function.Signature.Recv() != nil {
-		methodType = fmt.Sprintf("_%s", createTypeName(function.Signature.Recv().Type()))
+		methodType = fmt.Sprintf("$%s", createTypeName(function.Signature.Recv().Type()))
 	}
-	return fmt.Sprintf("f$%s%s", function.Name(), methodType)
+	return encode(fmt.Sprintf("f$%s%s", function.Name(), methodType))
 }
 
 func (ctx *Context) emitCallCommonDeclaration(callCommon *ssa.CallCommon) {
@@ -614,19 +631,19 @@ func createSignatureItemName(typ types.Type) string {
 }
 
 func createSignatureName(signature *types.Signature) string {
-	name := "struct Signature_"
+	name := "struct Signature$"
 
-	name += "Params$$"
+	name += "Params$"
 	if signature.Recv() != nil {
 		name += createSignatureItemName(signature.Recv().Type())
-		name += "$$"
+		name += "$"
 	}
 	for i := 0; i < signature.Params().Len(); i++ {
 		name += createSignatureItemName(signature.Params().At(i).Type())
-		name += "$$"
+		name += "$"
 	}
 
-	name += "Results$$"
+	name += "Results$"
 	if signature.Results().Len() > 0 {
 		if signature.Results().Len() != 1 {
 			panic("only 0 or 1 return value supported")
@@ -634,7 +651,7 @@ func createSignatureName(signature *types.Signature) string {
 		name += createSignatureItemName(signature.Results().At(0).Type())
 	}
 
-	return name
+	return encode(name)
 }
 
 func (ctx *Context) tryEmitSignatureDefinition(signature *types.Signature) {
