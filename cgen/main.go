@@ -368,8 +368,10 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 				for i, arg := range callCommon.Args {
 					argValue := createValueRelName(arg)
 					argType := createType(arg.Type(), "")
-					fmt.Fprintf(ctx.stream, "*(%s*)&next_frame->arg_buffer[num_arg_buffer_words] = %s; // param[%d]\n", argType, argValue, i)
-					fmt.Fprintf(ctx.stream, "num_arg_buffer_words += sizeof(%s) / sizeof(intptr_t);\n", argType)
+					tmpVar := fmt.Sprintf("tmp%d", i)
+					fmt.Fprintf(ctx.stream, "%s %s = %s; // param[%d]\n", argType, tmpVar, argValue, i)
+					fmt.Fprintf(ctx.stream, "memcpy(&next_frame->arg_buffer[num_arg_buffer_words], &%s, sizeof(%s));\n", tmpVar, tmpVar)
+					fmt.Fprintf(ctx.stream, "num_arg_buffer_words += sizeof(%s) / sizeof(intptr_t);\n", tmpVar)
 				}
 				fmt.Fprintf(ctx.stream, "next_frame->num_arg_buffer_words = num_arg_buffer_words;\n")
 			},

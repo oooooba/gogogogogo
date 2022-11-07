@@ -10,6 +10,7 @@ go run main.go -i ../xtests/`basename $1` >$c_file_name
 cd ..
 
 gcc -Wall -Wextra -Werror -std=c11 -g \
+    -fstrict-aliasing -Wstrict-aliasing \
     -o $bin_file_name $c_file_name target/debug/libgogogogogo.a \
     -lpthread -ldl -lm \
 
