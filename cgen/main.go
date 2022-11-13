@@ -29,6 +29,7 @@ func main() {
 
 	ctx := Context{
 		stream:           os.Stdout,
+		program:          prog,
 		latestNameMap:    make(map[*ssa.BasicBlock]string),
 		signatureNameSet: make(map[string]struct{}),
 	}
@@ -50,6 +51,7 @@ func main() {
 
 type Context struct {
 	stream           *os.File
+	program          *ssa.Program
 	foundValueSet    map[ssa.Value]struct{}
 	latestNameMap    map[*ssa.BasicBlock]string
 	signatureNameSet map[string]struct{}
@@ -147,6 +149,8 @@ func createTypeName(typ types.Type) string {
 		}
 	case *types.Chan:
 		return fmt.Sprintf("Channel_ptr")
+	case *types.Interface:
+		return fmt.Sprintf("Interface")
 	case *types.Pointer:
 		elemType := t.Elem().Underlying()
 		if et, ok := elemType.(*types.Array); ok {
@@ -177,7 +181,7 @@ func createType(typ types.Type, id string) string {
 			elemType = et.Elem()
 		}
 		return fmt.Sprintf("%s* %s", createType(elemType, ""), id)
-	case *types.Signature, *types.Slice, *types.Struct:
+	case *types.Interface, *types.Signature, *types.Slice, *types.Struct:
 		return fmt.Sprintf("struct %s %s", createTypeName(t), id)
 	}
 	panic(fmt.Sprintf("type not supported: %s", typ.String()))
@@ -189,10 +193,15 @@ func (ctx *Context) switchFunction(nextFunction string, callCommon *ssa.CallComm
 	fmt.Fprintf(ctx.stream, "next_frame->resume_func = %s;\n", wrapInFunctionObject(resumeFunction))
 	fmt.Fprintf(ctx.stream, "next_frame->prev_stack_pointer = ctx->stack_pointer;\n")
 
-	signature := callCommon.Value.Type().(*types.Signature)
+	var signature *types.Signature
+	if callCommon.IsInvoke() {
+		signature = callCommon.Method.Type().(*types.Signature)
+	} else {
+		signature = callCommon.Value.Type().(*types.Signature)
+	}
 
-	if signature.Results().Len() > 0 || signature.Params().Len() > 0 {
-		signatureName := createSignatureName(signature)
+	if callCommon.IsInvoke() || signature.Results().Len() > 0 || signature.Params().Len() > 0 {
+		signatureName := createSignatureName(signature, false)
 		fmt.Fprintf(ctx.stream, "%s* signature = (%s*)(next_frame + 1);\n", signatureName, signatureName)
 	}
 
@@ -203,18 +212,29 @@ func (ctx *Context) switchFunction(nextFunction string, callCommon *ssa.CallComm
 		fmt.Fprintf(ctx.stream, "signature->result_ptr = &%s;\n", result)
 	}
 
-	base := 0
-	if signature.Recv() != nil {
-		arg := callCommon.Args[base]
-		fmt.Fprintf(ctx.stream, "signature->param%d = %s; // receiver: %s\n",
+	if callCommon.IsInvoke() {
+		base := 0
+		arg := callCommon.Value
+		fmt.Fprintf(ctx.stream, "signature->param%d = %s.receiver; // receiver: %s\n",
 			base, createValueRelName(arg), signature.Recv())
-		base++
-	}
-
-	for i := 0; i < signature.Params().Len(); i++ {
-		arg := callCommon.Args[base+i]
-		fmt.Fprintf(ctx.stream, "signature->param%d = %s; // %s\n",
-			base+i, createValueRelName(arg), signature.Params().At(i))
+		for i := 0; i < signature.Params().Len(); i++ {
+			arg := callCommon.Args[i]
+			fmt.Fprintf(ctx.stream, "signature->param%d = %s; // %s\n",
+				base+i, createValueRelName(arg), signature.Params().At(i))
+		}
+	} else {
+		base := 0
+		if signature.Recv() != nil {
+			arg := callCommon.Args[base]
+			fmt.Fprintf(ctx.stream, "signature->param%d = %s; // receiver: %s\n",
+				base, createValueRelName(arg), signature.Recv())
+			base++
+		}
+		for i := 0; i < signature.Params().Len(); i++ {
+			arg := callCommon.Args[base+i]
+			fmt.Fprintf(ctx.stream, "signature->param%d = %s; // %s\n",
+				base+i, createValueRelName(arg), signature.Params().At(i))
+		}
 	}
 
 	fmt.Fprintf(ctx.stream, "next_frame->free_vars = NULL;\n")
@@ -288,7 +308,22 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 	case *ssa.Call:
 		callCommon := instr.Common()
 		if callCommon.Method != nil {
-			panic("method not supported")
+			methodName := callCommon.Method.Name()
+			fmt.Fprintf(ctx.stream, `
+			struct FunctionObject next_function = {.func_ptr = NULL};
+			struct Interface* interface = &%s;
+			for (uintptr_t i = 0; i < interface->num_methods; ++i) {
+				struct InterfaceTableEntry* entry = &interface->interface_table[i];
+				if (strcmp(entry->method_name, "%s") == 0) {
+					next_function = entry->method;
+					break;
+				}
+			}
+			assert(next_function.func_ptr != NULL);
+			`, createValueRelName(callCommon.Value), methodName)
+			nextFunction := "next_function"
+			ctx.switchFunction(nextFunction, callCommon, createValueRelName(instr), createInstructionName(instr))
+			return
 		}
 
 		switch callee := callCommon.Value.(type) {
@@ -412,6 +447,13 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 			},
 			paramArgPair{param: "user_function", arg: userFunction},
 		)
+
+	case *ssa.MakeInterface:
+		valueName := createValueRelName(instr)
+		interfaceTableName := fmt.Sprintf("interfaceTable_%s", createTypeName(instr.X.Type()))
+		fmt.Fprintf(ctx.stream, "%s.receiver = %s;\n", valueName, createValueRelName(instr.X))
+		fmt.Fprintf(ctx.stream, "%s.num_methods = sizeof(%s.entries)/sizeof(%s.entries[0]);\n", valueName, interfaceTableName, interfaceTableName)
+		fmt.Fprintf(ctx.stream, "%s.interface_table = &%s.entries[0];\n", valueName, interfaceTableName)
 
 	case *ssa.Phi:
 		basicBlock := instr.Block()
@@ -556,6 +598,9 @@ func (ctx *Context) emitValueDeclaration(value ssa.Value) {
 			ctx.emitValueDeclaration(freeVar)
 		}
 
+	case *ssa.MakeInterface:
+		ctx.emitValueDeclaration(val.X)
+
 	case *ssa.Parameter:
 		canEmit = false
 
@@ -620,6 +665,8 @@ func createSignatureItemName(typ types.Type) string {
 		}
 	case *types.Chan:
 		return "Channel"
+	case *types.Interface:
+		return "Interface"
 	case *types.Pointer:
 		return fmt.Sprintf("Pointer%s", createSignatureItemName(t.Elem()))
 	case *types.Signature:
@@ -632,12 +679,16 @@ func createSignatureItemName(typ types.Type) string {
 	panic(fmt.Sprintf("type not supported: %s", typ.String()))
 }
 
-func createSignatureName(signature *types.Signature) string {
+func createSignatureName(signature *types.Signature, makesReceiverInterface bool) string {
 	name := "struct Signature$"
 
 	name += "Params$"
 	if signature.Recv() != nil {
-		name += createSignatureItemName(signature.Recv().Type())
+		if makesReceiverInterface {
+			name += "Interface"
+		} else {
+			name += createSignatureItemName(signature.Recv().Type())
+		}
 		name += "$"
 	}
 	for i := 0; i < signature.Params().Len(); i++ {
@@ -656,15 +707,14 @@ func createSignatureName(signature *types.Signature) string {
 	return encode(name)
 }
 
-func (ctx *Context) tryEmitSignatureDefinition(signature *types.Signature) {
-	name := createSignatureName(signature)
-	_, ok := ctx.signatureNameSet[name]
+func (ctx *Context) tryEmitSignatureDefinition(signature *types.Signature, signatureName string) {
+	_, ok := ctx.signatureNameSet[signatureName]
 	if ok {
 		return
 	}
-	ctx.signatureNameSet[name] = struct{}{}
+	ctx.signatureNameSet[signatureName] = struct{}{}
 
-	fmt.Fprintf(ctx.stream, "%s { /* %p */\n", name, signature)
+	fmt.Fprintf(ctx.stream, "%s { /* %p */\n", signatureName, signature)
 
 	if signature.Results().Len() > 0 {
 		if signature.Results().Len() != 1 {
@@ -695,7 +745,13 @@ func (ctx *Context) emitFunctionHeader(name string, end string) {
 func (ctx *Context) emitFunctionDeclaration(function *ssa.Function) {
 	ctx.emitFunctionHeader(createFunctionName(function), ";")
 
-	ctx.tryEmitSignatureDefinition(function.Signature)
+	signature := function.Signature
+	concreteSignatureName := createSignatureName(signature, false)
+	ctx.tryEmitSignatureDefinition(function.Signature, concreteSignatureName)
+	if function.Signature.Recv() != nil {
+		abstructSignatureName := createSignatureName(signature, true)
+		ctx.tryEmitSignatureDefinition(function.Signature, abstructSignatureName)
+	}
 
 	fmt.Fprintf(ctx.stream, "struct FreeVars_%s {\n", createFunctionName(function))
 	for _, freeVar := range function.FreeVars {
@@ -707,7 +763,7 @@ func (ctx *Context) emitFunctionDeclaration(function *ssa.Function) {
 
 	fmt.Fprintf(ctx.stream, "struct StackFrame_%s {\n", createFunctionName(function))
 	fmt.Fprintf(ctx.stream, "\tstruct StackFrameCommon common;\n")
-	fmt.Fprintf(ctx.stream, "\t%s signature;\n", createSignatureName(function.Signature))
+	fmt.Fprintf(ctx.stream, "\t%s signature;\n", concreteSignatureName)
 
 	if function.Blocks != nil {
 		ctx.foundValueSet = make(map[ssa.Value]struct{})
@@ -795,6 +851,26 @@ func (ctx *Context) emitTypeDefinition(typ *ssa.Type) {
 	default:
 		panic(fmt.Sprintf("not implemented: %s", typ))
 	}
+}
+
+func (ctx *Context) emitInterfaceTable(typ *ssa.Type) {
+	t := types.NewPointer(typ.Type())
+	methodSet := ctx.program.MethodSets.MethodSet(t)
+
+	if methodSet.Len() == 0 {
+		return
+	}
+
+	fmt.Fprintf(ctx.stream, "struct InterfaceTable_%s {\n", createTypeName(t))
+	fmt.Fprintf(ctx.stream, "\tstruct InterfaceTableEntry entries[%d];\n", methodSet.Len())
+	fmt.Fprintf(ctx.stream, "} interfaceTable_%s = {{\n", createTypeName(t))
+	for i := 0; i < methodSet.Len(); i++ {
+		function := ctx.program.MethodValue(methodSet.At(i))
+		methodName := function.Name()
+		method := wrapInFunctionObject(createFunctionName(function))
+		fmt.Fprintf(ctx.stream, "\t{\"%s\", %s},\n", methodName, method)
+	}
+	fmt.Fprintln(ctx.stream, "}};")
 }
 
 func findMainPackage(program *ssa.Program) *ssa.Package {
@@ -885,6 +961,17 @@ struct LightWeightThreadContext {
 
 struct Channel;
 
+struct InterfaceTableEntry {
+	const char* method_name;
+	struct FunctionObject method;
+};
+
+struct Interface {
+	void* receiver;
+	uintptr_t num_methods;
+	struct InterfaceTableEntry* interface_table;
+};
+
 struct Slice {
 	void* addr;
 	uintptr_t size;
@@ -959,6 +1046,14 @@ DECLARE_RUNTIME_API(spawn, StackFrameSpawn);
 	ctx.visitAllFunctions(program, func(function *ssa.Function) {
 		ctx.emitFunctionDeclaration(function)
 	})
+
+	for member := range mainPkg.Members {
+		typ, ok := mainPkg.Members[member].(*ssa.Type)
+		if !ok {
+			continue
+		}
+		ctx.emitInterfaceTable(typ)
+	}
 
 	ctx.visitAllFunctions(program, func(function *ssa.Function) {
 		if function.Blocks != nil {

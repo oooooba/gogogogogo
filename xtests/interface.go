@@ -37,6 +37,13 @@ func Test2() int {
 	return s.f()
 }
 
+func Test3() int {
+	var i I
+	s := S0{n: 3}
+	i = &s
+	return i.f()
+}
+
 func main() {
 	runTest := func(test func() int) {
 		funcFullName := runtime.FuncForPC(reflect.ValueOf(test).Pointer()).Name()
@@ -45,4 +52,5 @@ func main() {
 	}
 	runTest(Test1)
 	runTest(Test2)
+	runTest(Test3)
 }
