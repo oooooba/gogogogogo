@@ -162,7 +162,7 @@ func createTypeName(typ types.Type) string {
 	case *types.Slice:
 		return fmt.Sprintf("Slice")
 	case *types.Struct:
-		return encode(fmt.Sprintf("t$%p", t))
+		return encode(fmt.Sprintf("Struct%p", t))
 	}
 	panic(fmt.Sprintf("type not supported: %s", typ.String()))
 }
@@ -652,33 +652,6 @@ func requireSwitchFunction(instruction ssa.Instruction) bool {
 	return false
 }
 
-func createSignatureItemName(typ types.Type) string {
-	switch t := typ.Underlying().(type) {
-	case *types.Array:
-		return fmt.Sprintf("Array%d%s", t.Len(), createSignatureItemName(t.Elem()))
-	case *types.Basic:
-		switch t.Kind() {
-		case types.Bool:
-			return "bool"
-		case types.Int:
-			return "intptr_t"
-		}
-	case *types.Chan:
-		return "Channel"
-	case *types.Interface:
-		return "Interface"
-	case *types.Pointer:
-		return fmt.Sprintf("Pointer%s", createSignatureItemName(t.Elem()))
-	case *types.Signature:
-		return "FunctionObject"
-	case *types.Slice:
-		return "Slice"
-	case *types.Struct:
-		return fmt.Sprintf("Struct%p", t)
-	}
-	panic(fmt.Sprintf("type not supported: %s", typ.String()))
-}
-
 func createSignatureName(signature *types.Signature, makesReceiverInterface bool) string {
 	name := "struct Signature$"
 
@@ -687,12 +660,12 @@ func createSignatureName(signature *types.Signature, makesReceiverInterface bool
 		if makesReceiverInterface {
 			name += "Interface"
 		} else {
-			name += createSignatureItemName(signature.Recv().Type())
+			name += createTypeName(signature.Recv().Type())
 		}
 		name += "$"
 	}
 	for i := 0; i < signature.Params().Len(); i++ {
-		name += createSignatureItemName(signature.Params().At(i).Type())
+		name += createTypeName(signature.Params().At(i).Type())
 		name += "$"
 	}
 
@@ -701,7 +674,7 @@ func createSignatureName(signature *types.Signature, makesReceiverInterface bool
 		if signature.Results().Len() != 1 {
 			panic("only 0 or 1 return value supported")
 		}
-		name += createSignatureItemName(signature.Results().At(0).Type())
+		name += createTypeName(signature.Results().At(0).Type())
 	}
 
 	return encode(name)
