@@ -44,6 +44,35 @@ func Test3() int {
 	return i.f()
 }
 
+func Test4() int {
+	var i I
+	s := S0{n: 0}
+	i = &s
+	s = S0{n: 4}
+	return i.f()
+}
+
+type S2 struct {
+	n int
+	m int
+}
+
+func (s *S2) f() int {
+	return s.n - s.m
+}
+
+func Test5() int {
+	var i I
+	s0 := S0{n: 1}
+	i = &s0
+	if i.f() != 1 {
+		return 0
+	}
+	s2 := S2{n: 6, m: 1}
+	i = &s2
+	return i.f()
+}
+
 func main() {
 	runTest := func(test func() int) {
 		funcFullName := runtime.FuncForPC(reflect.ValueOf(test).Pointer()).Name()
@@ -53,4 +82,6 @@ func main() {
 	runTest(Test1)
 	runTest(Test2)
 	runTest(Test3)
+	runTest(Test4)
+	runTest(Test5)
 }
