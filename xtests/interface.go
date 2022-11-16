@@ -73,6 +73,25 @@ func Test5() int {
 	return i.f()
 }
 
+func Test6() int {
+	f := func(i I) int {
+		return i.f()
+	}
+	s0 := S0{n: 1}
+	if f(&s0) != 1 {
+		return 1
+	}
+	s1 := S1{m: 2}
+	if f(&s1) != 2 {
+		return 2
+	}
+	s2 := S2{n: 5, m: 2}
+	if f(&s2) != 3 {
+		return 3
+	}
+	return 6
+}
+
 func main() {
 	runTest := func(test func() int) {
 		funcFullName := runtime.FuncForPC(reflect.ValueOf(test).Pointer()).Name()
@@ -84,4 +103,5 @@ func main() {
 	runTest(Test3)
 	runTest(Test4)
 	runTest(Test5)
+	runTest(Test6)
 }
