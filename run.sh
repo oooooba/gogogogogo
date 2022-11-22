@@ -11,6 +11,7 @@ cd ..
 
 gcc -Wall -Wextra -Werror -std=c11 -g \
     -fstrict-aliasing -Wstrict-aliasing \
+    -fsanitize=undefined -fno-sanitize-recover=all \
     -o $bin_file_name $c_file_name target/debug/libgogogogogo.a \
     -lpthread -ldl -lm \
 
