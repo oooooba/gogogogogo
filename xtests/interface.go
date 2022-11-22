@@ -92,6 +92,21 @@ func Test6() int {
 	return 6
 }
 
+type I1 interface {
+	g(int) int
+}
+
+func (s *S0) g(x int) int {
+	return s.n - x
+}
+
+func Test7() int {
+	var i I1
+	s := S0{n: 8}
+	i = &s
+	return i.g(1)
+}
+
 func main() {
 	runTest := func(test func() int) {
 		funcFullName := runtime.FuncForPC(reflect.ValueOf(test).Pointer()).Name()
@@ -104,4 +119,5 @@ func main() {
 	runTest(Test4)
 	runTest(Test5)
 	runTest(Test6)
+	runTest(Test7)
 }

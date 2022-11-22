@@ -201,7 +201,12 @@ func (ctx *Context) switchFunction(nextFunction string, callCommon *ssa.CallComm
 	}
 
 	if callCommon.IsInvoke() || signature.Results().Len() > 0 || signature.Params().Len() > 0 {
-		signatureName := createSignatureName(signature, false)
+		var signatureName string
+		if callCommon.IsInvoke() {
+			signatureName = createSignatureName(signature, true)
+		} else {
+			signatureName = createSignatureName(signature, false)
+		}
 		fmt.Fprintf(ctx.stream, "%s* signature = (%s*)(next_frame + 1);\n", signatureName, signatureName)
 	}
 
@@ -215,8 +220,9 @@ func (ctx *Context) switchFunction(nextFunction string, callCommon *ssa.CallComm
 	if callCommon.IsInvoke() {
 		base := 0
 		arg := callCommon.Value
-		fmt.Fprintf(ctx.stream, "signature->param%d = %s; // receiver: %s\n",
+		fmt.Fprintf(ctx.stream, "signature->param%d = %s.receiver; // receiver: %s\n",
 			base, createValueRelName(arg), signature.Recv())
+		base++
 		for i := 0; i < signature.Params().Len(); i++ {
 			arg := callCommon.Args[i]
 			fmt.Fprintf(ctx.stream, "signature->param%d = %s; // %s\n",
@@ -653,15 +659,16 @@ func requireSwitchFunction(instruction ssa.Instruction) bool {
 }
 
 func createSignatureName(signature *types.Signature, makesReceiverInterface bool) string {
-	name := "struct Signature$"
+	name := "struct "
+
+	if signature.Recv() != nil && makesReceiverInterface {
+		name += "Interface"
+	}
+	name += "Signature$"
 
 	name += "Params$"
-	if signature.Recv() != nil {
-		if makesReceiverInterface {
-			name += "Interface"
-		} else {
-			name += createTypeName(signature.Recv().Type())
-		}
+	if signature.Recv() != nil && !makesReceiverInterface {
+		name += createTypeName(signature.Recv().Type())
 		name += "$"
 	}
 	for i := 0; i < signature.Params().Len(); i++ {
@@ -680,7 +687,7 @@ func createSignatureName(signature *types.Signature, makesReceiverInterface bool
 	return encode(name)
 }
 
-func (ctx *Context) tryEmitSignatureDefinition(signature *types.Signature, signatureName string) {
+func (ctx *Context) tryEmitSignatureDefinition(signature *types.Signature, signatureName string, makesReceiverInterface bool) {
 	_, ok := ctx.signatureNameSet[signatureName]
 	if ok {
 		return
@@ -699,7 +706,13 @@ func (ctx *Context) tryEmitSignatureDefinition(signature *types.Signature, signa
 	base := 0
 	if signature.Recv() != nil {
 		id := fmt.Sprintf("param%d", base)
-		fmt.Fprintf(ctx.stream, "\t%s; // receiver: %s\n", createType(signature.Recv().Type(), id), signature.Recv().String())
+		var decl string
+		if makesReceiverInterface {
+			decl = fmt.Sprintf("void* %s", id)
+		} else {
+			decl = createType(signature.Recv().Type(), id)
+		}
+		fmt.Fprintf(ctx.stream, "\t%s; // receiver: %s\n", decl, signature.Recv().String())
 		base++
 	}
 
@@ -720,10 +733,10 @@ func (ctx *Context) emitFunctionDeclaration(function *ssa.Function) {
 
 	signature := function.Signature
 	concreteSignatureName := createSignatureName(signature, false)
-	ctx.tryEmitSignatureDefinition(function.Signature, concreteSignatureName)
+	ctx.tryEmitSignatureDefinition(function.Signature, concreteSignatureName, false)
 	if function.Signature.Recv() != nil {
 		abstructSignatureName := createSignatureName(signature, true)
-		ctx.tryEmitSignatureDefinition(function.Signature, abstructSignatureName)
+		ctx.tryEmitSignatureDefinition(function.Signature, abstructSignatureName, true)
 	}
 
 	fmt.Fprintf(ctx.stream, "struct FreeVars_%s {\n", createFunctionName(function))
