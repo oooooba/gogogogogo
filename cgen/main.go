@@ -217,30 +217,24 @@ func (ctx *Context) switchFunction(nextFunction string, callCommon *ssa.CallComm
 		fmt.Fprintf(ctx.stream, "signature->result_ptr = &%s;\n", result)
 	}
 
+	paramBase := 0
+	argBase := 0
 	if callCommon.IsInvoke() {
-		base := 0
 		arg := callCommon.Value
 		fmt.Fprintf(ctx.stream, "signature->param%d = %s.receiver; // receiver: %s\n",
-			base, createValueRelName(arg), signature.Recv())
-		base++
-		for i := 0; i < signature.Params().Len(); i++ {
-			arg := callCommon.Args[i]
-			fmt.Fprintf(ctx.stream, "signature->param%d = %s; // %s\n",
-				base+i, createValueRelName(arg), signature.Params().At(i))
-		}
-	} else {
-		base := 0
-		if signature.Recv() != nil {
-			arg := callCommon.Args[base]
-			fmt.Fprintf(ctx.stream, "signature->param%d = %s; // receiver: %s\n",
-				base, createValueRelName(arg), signature.Recv())
-			base++
-		}
-		for i := 0; i < signature.Params().Len(); i++ {
-			arg := callCommon.Args[base+i]
-			fmt.Fprintf(ctx.stream, "signature->param%d = %s; // %s\n",
-				base+i, createValueRelName(arg), signature.Params().At(i))
-		}
+			paramBase, createValueRelName(arg), signature.Recv())
+		paramBase++
+	} else if signature.Recv() != nil {
+		arg := callCommon.Args[argBase]
+		fmt.Fprintf(ctx.stream, "signature->param%d = %s; // receiver: %s\n",
+			paramBase, createValueRelName(arg), signature.Recv())
+		paramBase++
+		argBase++
+	}
+	for i := 0; i < signature.Params().Len(); i++ {
+		arg := callCommon.Args[argBase+i]
+		fmt.Fprintf(ctx.stream, "signature->param%d = %s; // %s\n",
+			paramBase+i, createValueRelName(arg), signature.Params().At(i))
 	}
 
 	fmt.Fprintf(ctx.stream, "next_frame->free_vars = NULL;\n")
