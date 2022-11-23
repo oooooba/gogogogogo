@@ -101,7 +101,7 @@ func createValueName(value ssa.Value) string {
 			case *types.Slice:
 				return "(struct Slice){0}"
 			default:
-				panic(fmt.Sprintf("unimplemented: %s: %s", val.String(), val.Type()))
+				return "NULL"
 			}
 		} else {
 			return val.Value.String()
