@@ -107,6 +107,53 @@ func Test7() int {
 	return i.g(1)
 }
 
+func (s *S1) g(x int) int {
+	return s.m + x
+}
+
+func (s *S2) g(x int) int {
+	return s.n + s.m - x
+}
+
+func Test8() int {
+	var i I1
+	s0 := S0{n: 2}
+	i = &s0
+	if i.g(1) != 1 {
+		return 1
+	}
+	s1 := S1{m: 0}
+	i = &s1
+	if i.g(2) != 2 {
+		return 2
+	}
+	s2 := S2{n: 2, m: 4}
+	i = &s2
+	if i.g(3) != 3 {
+		return 3
+	}
+	return 8
+}
+
+func Test9() int {
+	g := func(i I1, x int) int {
+		return i.g(x)
+	}
+	s0 := S0{n: 2}
+	if g(&s0, 1) != 1 {
+		return 1
+	}
+	s1 := S1{m: 0}
+	if g(&s1, 2) != 2 {
+		return 2
+	}
+	s2 := S2{n: 2, m: 4}
+	if g(&s2, 3) != 3 {
+		return 3
+	}
+	return 9
+}
+
 func main() {
 	runTest := func(test func() int) {
 		funcFullName := runtime.FuncForPC(reflect.ValueOf(test).Pointer()).Name()
@@ -120,4 +167,6 @@ func main() {
 	runTest(Test5)
 	runTest(Test6)
 	runTest(Test7)
+	runTest(Test8)
+	runTest(Test9)
 }
