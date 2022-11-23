@@ -348,6 +348,10 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 			}
 			fmt.Fprintf(ctx.stream, "\treturn %s;\n", wrapInFunctionObject(createInstructionName(instr)))
 
+		case *ssa.Const:
+			nextFunction := wrapInFunctionObject(createValueName(callee))
+			ctx.switchFunction(nextFunction, callCommon, createValueRelName(instr), createInstructionName(instr))
+
 		case *ssa.Function:
 			nextFunction := createValueName(callee)
 			ctx.switchFunction(nextFunction, callCommon, createValueRelName(instr), createInstructionName(instr))

@@ -90,6 +90,20 @@ func Test10() int {
 	return 10
 }
 
+func Test11() int {
+	f := func(x int) int {
+		return x
+	}
+	if f(1) != 1 {
+		return 1
+	}
+	f = nil
+	if f != nil {
+		return f(2)
+	}
+	return 11
+}
+
 func main() {
 	runTest := func(test func() int) {
 		funcFullName := runtime.FuncForPC(reflect.ValueOf(test).Pointer()).Name()
@@ -106,4 +120,5 @@ func main() {
 	runTest(Test8)
 	runTest(Test9)
 	runTest(Test10)
+	runTest(Test11)
 }
