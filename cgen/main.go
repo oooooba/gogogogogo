@@ -98,6 +98,8 @@ func createValueName(value ssa.Value) string {
 	if val, ok := value.(*ssa.Const); ok {
 		if val.IsNil() {
 			switch val.Type().Underlying().(type) {
+			case *types.Signature:
+				return wrapInFunctionObject("NULL")
 			case *types.Slice:
 				return "(struct Slice){0}"
 			default:
@@ -296,7 +298,7 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 				panic(fmt.Sprintf("type mismatch: %s (%s) vs %s (%s)", instr.X, instr.X.Type(), instr.Y, instr.Y.Type()))
 			}
 			switch instr.X.Type().Underlying().(type) {
-			case *types.Slice:
+			case *types.Signature, *types.Slice:
 				fmt.Fprintf(ctx.stream, "%s = memcmp(&%s, &%s, sizeof(%s)) %s 0;\n", createValueRelName(instr), createValueRelName(instr.X), createValueRelName(instr.Y), createValueRelName(instr.X), instr.Op)
 			default:
 				fmt.Fprintf(ctx.stream, "%s = %s %s %s;\n", createValueRelName(instr), createValueRelName(instr.X), instr.Op.String(), createValueRelName(instr.Y))
@@ -348,11 +350,7 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 			}
 			fmt.Fprintf(ctx.stream, "\treturn %s;\n", wrapInFunctionObject(createInstructionName(instr)))
 
-		case *ssa.Const:
-			nextFunction := wrapInFunctionObject(createValueName(callee))
-			ctx.switchFunction(nextFunction, callCommon, createValueRelName(instr), createInstructionName(instr))
-
-		case *ssa.Function:
+		case *ssa.Const, *ssa.Function:
 			nextFunction := createValueName(callee)
 			ctx.switchFunction(nextFunction, callCommon, createValueRelName(instr), createInstructionName(instr))
 
