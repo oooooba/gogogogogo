@@ -250,6 +250,26 @@ func Test17() int {
 	return 17
 }
 
+func Test18() int {
+	s := []int{1, 2, 3}
+	f := func(t []int) {
+		for i, x := range t {
+			t[i] = x + x
+		}
+	}
+	f(s)
+	if s[0] != 2 {
+		return 1
+	}
+	if s[1] != 4 {
+		return 2
+	}
+	if s[2] != 6 {
+		return 3
+	}
+	return 18
+}
+
 func main() {
 	runTest := func(test func() int) {
 		funcFullName := runtime.FuncForPC(reflect.ValueOf(test).Pointer()).Name()
@@ -273,4 +293,5 @@ func main() {
 	runTest(Test15)
 	runTest(Test16)
 	runTest(Test17)
+	runTest(Test18)
 }
