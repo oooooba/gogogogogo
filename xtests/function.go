@@ -79,6 +79,67 @@ func Test7() int {
 	return test7_f(test7_g)
 }
 
+func test8_f(s ...int) int {
+	if len(s) != 0 {
+		return 0
+	}
+	return 8
+}
+
+func Test8() int {
+	return test8_f()
+}
+
+func test9_f(s ...int) int {
+	if len(s) != 3 {
+		return 0
+	}
+	for i, x := range s {
+		if x != i+1 {
+			return i + 1
+		}
+	}
+	return 9
+}
+
+func Test9() int {
+	return test9_f(1, 2, 3)
+}
+
+func test10_f(s ...int) int {
+	if len(s) != 4 {
+		return 0
+	}
+	for i, x := range s {
+		if x != i+i {
+			return i + 1
+		}
+	}
+	return 10
+}
+
+func Test10() int {
+	s := []int{0, 2, 4, 6}
+	return test10_f(s...)
+}
+
+func test11_f(s ...int) {
+	for i := 0; i < len(s); i++ {
+		s[i] = i + i + i
+	}
+}
+
+func Test11() int {
+	s := []int{0, 1, 2, 3, 4}
+	test11_f(s...)
+	for i, x := range s {
+		if x != i+i+i {
+			return i
+		}
+	}
+	return 11
+}
+
 func main() {
 	runTest := func(test func() int) {
 		funcFullName := runtime.FuncForPC(reflect.ValueOf(test).Pointer()).Name()
@@ -92,4 +153,8 @@ func main() {
 	runTest(Test5)
 	runTest(Test6)
 	runTest(Test7)
+	runTest(Test8)
+	runTest(Test9)
+	runTest(Test10)
+	runTest(Test11)
 }
