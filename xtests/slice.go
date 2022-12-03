@@ -194,6 +194,62 @@ func Test15() int {
 	return 15
 }
 
+func Test16() int {
+	s := [][]int{
+		{},
+		{1},
+		{2, 3},
+	}
+	if len(s) != 3 {
+		return 1
+	}
+	if len(s[0]) != 0 {
+		return 2
+	}
+	if len(s[1]) != 1 {
+		return 3
+	}
+	if s[1][0] != 1 {
+		return 4
+	}
+	if len(s[2]) != 2 {
+		return 5
+	}
+	if s[2][0] != 2 {
+		return 6
+	}
+	if s[2][1] != 3 {
+		return 7
+	}
+	return 16
+}
+
+func Test17() int {
+	s := [][]int{
+		{},
+		{1},
+		{2, 3},
+	}
+	t := [][]int{
+		{},
+		{4},
+		{5, 6},
+	}
+	for i := 0; i < len(s); i++ {
+		for j := 0; j < len(s[i]); j++ {
+			t[i][j] = s[i][j]
+		}
+	}
+	for i := 0; i < len(s); i++ {
+		for j := 0; j < len(s[i]); j++ {
+			if t[i][j] != s[i][j] {
+				return 0
+			}
+		}
+	}
+	return 17
+}
+
 func main() {
 	runTest := func(test func() int) {
 		funcFullName := runtime.FuncForPC(reflect.ValueOf(test).Pointer()).Name()
@@ -215,4 +271,6 @@ func main() {
 	runTest(Test13)
 	runTest(Test14)
 	runTest(Test15)
+	runTest(Test16)
+	runTest(Test17)
 }
