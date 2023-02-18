@@ -362,6 +362,9 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 			panic(fmt.Sprintf("unknown callee: %s, %T", callee, callee))
 		}
 
+	case *ssa.ChangeType:
+		fmt.Fprintf(ctx.stream, "%s = (%s){ %s };\n", createValueRelName(instr), createType(instr.X.Type(), ""), createValueRelName(instr.X))
+
 	case *ssa.FieldAddr:
 		fmt.Fprintf(ctx.stream, "%s = &%s->%s;\n", createValueRelName(instr), createValueRelName(instr.X), instr.X.Type().Underlying().(*types.Pointer).Elem().Underlying().(*types.Struct).Field(instr.Field).Name())
 
@@ -574,6 +577,9 @@ func (ctx *Context) emitValueDeclaration(value ssa.Value) {
 
 	case *ssa.Call:
 		ctx.emitCallCommonDeclaration(val.Common())
+
+	case *ssa.ChangeType:
+		ctx.emitValueDeclaration(val.X)
 
 	case *ssa.Const:
 		canEmit = false
@@ -826,6 +832,9 @@ func (ctx *Context) emitUnderlyingTypeDefinition(typ types.Type) {
 			fmt.Fprintf(ctx.stream, "\t%s; // %s\n", createType(field.Type(), id), field)
 		}
 		fmt.Fprintf(ctx.stream, "};\n")
+
+	case *types.Basic:
+		// do nothing
 
 	case *types.Interface:
 		// do nothing
