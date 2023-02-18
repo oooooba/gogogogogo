@@ -816,8 +816,8 @@ func (ctx *Context) emitFunctionDefinition(function *ssa.Function) {
 	}
 }
 
-func (ctx *Context) emitTypeDefinition(typ *ssa.Type) {
-	switch typ := typ.Type().Underlying().(type) {
+func (ctx *Context) emitUnderlyingTypeDefinition(typ types.Type) {
+	switch typ := typ.(type) {
 	case *types.Struct:
 		fmt.Fprintf(ctx.stream, "%s { // %s\n", createType(typ, ""), typ)
 		for i := 0; i < typ.NumFields(); i++ {
@@ -831,7 +831,22 @@ func (ctx *Context) emitTypeDefinition(typ *ssa.Type) {
 		// do nothing
 
 	default:
-		panic(fmt.Sprintf("not implemented: %s", typ))
+		panic(fmt.Sprintf("not implemented: %s %T", typ, typ))
+	}
+}
+
+func (ctx *Context) emitTypeDefinition(typ *ssa.Type) {
+	switch typ := typ.Type().(type) {
+	case *types.Named:
+		ctx.emitUnderlyingTypeDefinition(typ.Underlying())
+		extractTypeName := func(typ types.Type) string {
+			return strings.Split(typ.String(), ".")[1]
+		}
+		typeName := extractTypeName(typ)
+		inner := createType(typ.Underlying(), "inner")
+		fmt.Fprintf(ctx.stream, "struct %s { %s; };\n", typeName, inner)
+	default:
+		panic(fmt.Sprintf("not implemented: %s %T", typ, typ))
 	}
 }
 
