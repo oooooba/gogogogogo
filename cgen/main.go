@@ -82,6 +82,10 @@ func encode(str string) string {
 			s = "___"
 		case '$':
 			s = "_S_"
+		case '<':
+			s = "_lt_"
+		case '>':
+			s = "_gt_"
 		default:
 			s = string(c)
 		}
@@ -165,6 +169,17 @@ func createTypeName(typ types.Type) string {
 		return fmt.Sprintf("Slice")
 	case *types.Struct:
 		return encode(fmt.Sprintf("Struct%p", t))
+	case *types.Tuple:
+		name := "Tuple<"
+		for i := 0; i < t.Len(); i++ {
+			elemType := t.At(i).Type().Underlying()
+			if i != 0 {
+				name += "$"
+			}
+			name += createTypeName(elemType)
+		}
+		name += ">"
+		return encode(name)
 	}
 	panic(fmt.Sprintf("type not supported: %s", typ.String()))
 }
@@ -183,7 +198,7 @@ func createType(typ types.Type, id string) string {
 			elemType = et.Elem()
 		}
 		return fmt.Sprintf("%s* %s", createType(elemType, ""), id)
-	case *types.Interface, *types.Signature, *types.Slice, *types.Struct:
+	case *types.Interface, *types.Signature, *types.Slice, *types.Struct, *types.Tuple:
 		return fmt.Sprintf("struct %s %s", createTypeName(t), id)
 	}
 	panic(fmt.Sprintf("type not supported: %s", typ.String()))
@@ -213,9 +228,6 @@ func (ctx *Context) switchFunction(nextFunction string, callCommon *ssa.CallComm
 	}
 
 	if signature.Results().Len() > 0 {
-		if signature.Results().Len() != 1 {
-			panic("only 0 or 1 return value supported")
-		}
 		fmt.Fprintf(ctx.stream, "signature->result_ptr = &%s;\n", result)
 	}
 
@@ -395,11 +407,13 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 		}
 
 		resultSize := "0"
-		if signature.Results().Len() > 0 {
-			if signature.Results().Len() != 1 {
-				panic("only 0 or 1 return value supported")
-			}
+		switch signature.Results().Len() {
+		case 0:
+			// do nothing
+		case 1:
 			resultSize = fmt.Sprintf("sizeof(%s)", createType(signature.Results().At(0).Type(), ""))
+		default:
+			resultSize = fmt.Sprintf("sizeof(%s)", createType(signature.Results(), ""))
 		}
 
 		ctx.switchFunctionToCallRuntimeApi("gox5_spawn", "StackFrameSpawn", createInstructionName(instr), nil,
@@ -470,11 +484,15 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 
 	case *ssa.Return:
 		fmt.Fprintf(ctx.stream, "ctx->stack_pointer = frame->common.prev_stack_pointer;\n")
-		if len(instr.Results) > 0 {
-			if len(instr.Results) != 1 {
-				panic("only 0 or 1 return value supported")
-			}
+		switch len(instr.Results) {
+		case 0:
+			// do nothing
+		case 1:
 			fmt.Fprintf(ctx.stream, "*frame->signature.result_ptr = %s;\n", createValueRelName(instr.Results[0]))
+		default:
+			for i, v := range instr.Results {
+				fmt.Fprintf(ctx.stream, "frame->signature.result_ptr->e%d = %s;\n", i, createValueRelName(v))
+			}
 		}
 		fmt.Fprintf(ctx.stream, "return frame->common.resume_func;\n")
 
@@ -679,11 +697,13 @@ func createSignatureName(signature *types.Signature, makesReceiverInterface bool
 	}
 
 	name += "Results$"
-	if signature.Results().Len() > 0 {
-		if signature.Results().Len() != 1 {
-			panic("only 0 or 1 return value supported")
-		}
+	switch signature.Results().Len() {
+	case 0:
+		// do nothing
+	case 1:
 		name += createTypeName(signature.Results().At(0).Type())
+	default:
+		name += createTypeName(signature.Results())
 	}
 
 	return encode(name)
@@ -698,11 +718,13 @@ func (ctx *Context) tryEmitSignatureDefinition(signature *types.Signature, signa
 
 	fmt.Fprintf(ctx.stream, "%s { /* %p */\n", signatureName, signature)
 
-	if signature.Results().Len() > 0 {
-		if signature.Results().Len() != 1 {
-			panic("only 0 or 1 return value supported")
-		}
+	switch signature.Results().Len() {
+	case 0:
+		// do nothing
+	case 1:
 		fmt.Fprintf(ctx.stream, "\t%s* result_ptr;\n", createType(signature.Results().At(0).Type(), ""))
+	default:
+		fmt.Fprintf(ctx.stream, "\t%s* result_ptr;\n", createType(signature.Results(), ""))
 	}
 
 	base := 0
@@ -1037,6 +1059,12 @@ struct StackFrameSpawn {
 	void* arg_buffer[0];
 };
 DECLARE_RUNTIME_API(spawn, StackFrameSpawn);
+
+// ToDo: generate only when needed
+struct Tuple_lt_intptr___t_S_intptr___t_gt_ {
+	intptr_t e0;
+	intptr_t e1;
+};
 `)
 
 	mainPkg := findMainPackage(program)
