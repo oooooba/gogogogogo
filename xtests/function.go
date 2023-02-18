@@ -148,6 +148,14 @@ func Test12() int {
 	return 12
 }
 
+func Test13() int {
+	f := func() (int, int) {
+		return 13, 10
+	}
+	a, _ := f()
+	return a
+}
+
 func main() {
 	runTest := func(test func() int) {
 		funcFullName := runtime.FuncForPC(reflect.ValueOf(test).Pointer()).Name()
@@ -166,4 +174,5 @@ func main() {
 	runTest(Test10)
 	runTest(Test11)
 	runTest(Test12)
+	runTest(Test13)
 }

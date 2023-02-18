@@ -36,6 +36,7 @@ func main() {
 
 	if false {
 		var keywords []string
+		keywords = []string{"Test2"}
 		ctx.visitAllFunctions(prog, func(function *ssa.Function) {
 			for _, keyword := range keywords {
 				if strings.Contains(function.Name(), keyword) {
@@ -377,6 +378,9 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 	case *ssa.ChangeType:
 		fmt.Fprintf(ctx.stream, "%s = (%s){ %s };\n", createValueRelName(instr), createType(instr.X.Type(), ""), createValueRelName(instr.X))
 
+	case *ssa.Extract:
+		fmt.Fprintf(ctx.stream, "%s = %s.e%d;\n", createValueRelName(instr), createValueRelName(instr.Tuple), instr.Index)
+
 	case *ssa.FieldAddr:
 		fmt.Fprintf(ctx.stream, "%s = &%s->%s;\n", createValueRelName(instr), createValueRelName(instr.X), instr.X.Type().Underlying().(*types.Pointer).Elem().Underlying().(*types.Struct).Field(instr.Field).Name())
 
@@ -601,6 +605,9 @@ func (ctx *Context) emitValueDeclaration(value ssa.Value) {
 
 	case *ssa.Const:
 		canEmit = false
+
+	case *ssa.Extract:
+		ctx.emitValueDeclaration(val.Tuple)
 
 	case *ssa.FieldAddr:
 		ctx.emitValueDeclaration(val.X)
