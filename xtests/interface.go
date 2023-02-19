@@ -167,6 +167,27 @@ func Test10() int {
 	return i.f()
 }
 
+type T1 int
+
+func (t1 T1) f() int {
+	return int(t1) + 1
+}
+
+func Test11() int {
+	var i I
+	t := T(1)
+	i = &t
+	if i.f() != 1 {
+		return 1
+	}
+	t1 := T1(2)
+	i = &t1
+	if i.f() != 3 {
+		return 3
+	}
+	return 11
+}
+
 func main() {
 	runTest := func(test func() int) {
 		funcFullName := runtime.FuncForPC(reflect.ValueOf(test).Pointer()).Name()
@@ -183,4 +204,5 @@ func main() {
 	runTest(Test8)
 	runTest(Test9)
 	runTest(Test10)
+	runTest(Test11)
 }
