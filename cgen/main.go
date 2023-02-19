@@ -104,7 +104,7 @@ func wrapInFunctionObject(s string) string {
 func createValueName(value ssa.Value) string {
 	if val, ok := value.(*ssa.Const); ok {
 		if val.IsNil() {
-			switch val.Type().Underlying().(type) {
+			switch val.Type().(type) {
 			case *types.Signature:
 				return wrapInFunctionObject("NULL")
 			case *types.Slice:
@@ -305,11 +305,11 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 		if instr.Heap {
 			result := createValueRelName(instr)
 			ctx.switchFunctionToCallRuntimeApi("gox5_new", "StackFrameNew", createInstructionName(instr), &result, nil,
-				paramArgPair{param: "size", arg: fmt.Sprintf("sizeof(%s)", createType(instr.Type().Underlying().(*types.Pointer).Elem(), ""))},
+				paramArgPair{param: "size", arg: fmt.Sprintf("sizeof(%s)", createType(instr.Type().(*types.Pointer).Elem(), ""))},
 			)
 		} else {
 			address_of_op := "&"
-			if _, ok := instr.Type().Underlying().(*types.Pointer).Elem().(*types.Array); ok {
+			if _, ok := instr.Type().(*types.Pointer).Elem().(*types.Array); ok {
 				address_of_op = ""
 			}
 			fmt.Fprintf(ctx.stream, `
@@ -321,10 +321,10 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 	case *ssa.BinOp:
 		switch op := instr.Op; op {
 		case token.EQL, token.NEQ:
-			if instr.X.Type().Underlying() != instr.Y.Type().Underlying() {
+			if instr.X.Type() != instr.Y.Type() {
 				panic(fmt.Sprintf("type mismatch: %s (%s) vs %s (%s)", instr.X, instr.X.Type(), instr.Y, instr.Y.Type()))
 			}
-			switch instr.X.Type().Underlying().(type) {
+			switch instr.X.Type().(type) {
 			case *types.Signature, *types.Slice:
 				fmt.Fprintf(ctx.stream, "%s = memcmp(&%s, &%s, sizeof(%s)) %s 0;\n", createValueRelName(instr), createValueRelName(instr.X), createValueRelName(instr.Y), createValueRelName(instr.X), instr.Op)
 			default:
@@ -396,10 +396,10 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 		fmt.Fprintf(ctx.stream, "%s = %s.e%d;\n", createValueRelName(instr), createValueRelName(instr.Tuple), instr.Index)
 
 	case *ssa.FieldAddr:
-		fmt.Fprintf(ctx.stream, "%s = &%s->inner.%s;\n", createValueRelName(instr), createValueRelName(instr.X), instr.X.Type().Underlying().(*types.Pointer).Elem().Underlying().(*types.Struct).Field(instr.Field).Name())
+		fmt.Fprintf(ctx.stream, "%s = &%s->inner.%s;\n", createValueRelName(instr), createValueRelName(instr.X), instr.X.Type().(*types.Pointer).Elem().Underlying().(*types.Struct).Field(instr.Field).Name())
 
 	case *ssa.IndexAddr:
-		if _, ok := instr.X.Type().Underlying().(*types.Slice); ok {
+		if _, ok := instr.X.Type().(*types.Slice); ok {
 			fmt.Fprintf(ctx.stream, "%s = &((%s)%s.addr)[%s];\n", createValueRelName(instr), createType(instr.Type(), ""), createValueRelName(instr.X), createValueRelName(instr.Index))
 		} else {
 			fmt.Fprintf(ctx.stream, "%s = &%s[%s];\n", createValueRelName(instr), createValueRelName(instr.X), createValueRelName(instr.Index))
@@ -545,7 +545,7 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 		fmt.Fprintf(ctx.stream, "%s.capacity = %s - %s;\n", createValueRelName(instr), length, startIndex)
 
 	case *ssa.Store:
-		if _, ok := instr.Val.Type().Underlying().(*types.Array); ok {
+		if _, ok := instr.Val.Type().(*types.Array); ok {
 			fmt.Fprintf(ctx.stream, "memcpy(%s, %s, sizeof(%s));\n", createValueRelName(instr.Addr), createValueRelName(instr.Val), createValueRelName(instr.Val))
 		} else {
 			fmt.Fprintf(ctx.stream, "*%s = %s;\n", createValueRelName(instr.Addr), createValueRelName(instr.Val))
@@ -890,9 +890,10 @@ func (ctx *Context) emitUnderlyingTypeDefinition(typ types.Type) {
 func (ctx *Context) emitTypeDefinition(typ *ssa.Type) {
 	switch typ := typ.Type().(type) {
 	case *types.Named:
-		ctx.emitUnderlyingTypeDefinition(typ.Underlying())
+		underlyingType := typ.Underlying()
+		ctx.emitUnderlyingTypeDefinition(underlyingType)
 		typeName := createTypeName(typ)
-		inner := createType(typ.Underlying(), "inner")
+		inner := createType(underlyingType, "inner")
 		fmt.Fprintf(ctx.stream, "struct %s { %s; };\n", typeName, inner)
 	default:
 		panic(fmt.Sprintf("not implemented: %s %T", typ, typ))
