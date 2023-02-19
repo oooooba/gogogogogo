@@ -30,6 +30,7 @@ func main() {
 	ctx := Context{
 		stream:           os.Stdout,
 		program:          prog,
+		foundTypeSet:     make(map[types.Type]struct{}),
 		latestNameMap:    make(map[*ssa.BasicBlock]string),
 		signatureNameSet: make(map[string]struct{}),
 	}
@@ -54,6 +55,7 @@ type Context struct {
 	stream           *os.File
 	program          *ssa.Program
 	foundValueSet    map[ssa.Value]struct{}
+	foundTypeSet     map[types.Type]struct{}
 	latestNameMap    map[*ssa.BasicBlock]string
 	signatureNameSet map[string]struct{}
 }
@@ -111,7 +113,17 @@ func createValueName(value ssa.Value) string {
 				return "NULL"
 			}
 		} else {
-			return val.Value.String()
+			cst := val.Value.String()
+			switch val.Type().(type) {
+			case *types.Basic:
+				return cst
+
+			case *types.Named:
+				return fmt.Sprintf("(struct %s){.inner=%s}", createTypeName(val.Type()), cst)
+
+			default:
+				panic(fmt.Sprintf("val=%s, %T, %s, %T", val, val, val.Type(), val.Type()))
+			}
 		}
 	} else if val, ok := value.(*ssa.Function); ok {
 		return fmt.Sprintf("%s", wrapInFunctionObject(createFunctionName(val)))
@@ -144,7 +156,7 @@ func createValueRelName(value ssa.Value) string {
 }
 
 func createTypeName(typ types.Type) string {
-	switch t := typ.Underlying().(type) {
+	switch t := typ.(type) {
 	case *types.Array:
 		return fmt.Sprintf("%s_arr%d", createTypeName(t.Elem()), t.Len())
 	case *types.Basic:
@@ -158,8 +170,10 @@ func createTypeName(typ types.Type) string {
 		return fmt.Sprintf("Channel_ptr")
 	case *types.Interface:
 		return fmt.Sprintf("Interface")
+	case *types.Named:
+		return strings.Split(typ.String(), ".")[1] // remove "command-line-arguments."
 	case *types.Pointer:
-		elemType := t.Elem().Underlying()
+		elemType := t.Elem()
 		if et, ok := elemType.(*types.Array); ok {
 			elemType = et.Elem()
 		}
@@ -173,7 +187,7 @@ func createTypeName(typ types.Type) string {
 	case *types.Tuple:
 		name := "Tuple<"
 		for i := 0; i < t.Len(); i++ {
-			elemType := t.At(i).Type().Underlying()
+			elemType := t.At(i).Type()
 			if i != 0 {
 				name += "$"
 			}
@@ -186,7 +200,7 @@ func createTypeName(typ types.Type) string {
 }
 
 func createType(typ types.Type, id string) string {
-	switch t := typ.Underlying().(type) {
+	switch t := typ.(type) {
 	case *types.Array:
 		return fmt.Sprintf("%s %s[%d]", createType(t.Elem(), ""), id, t.Len())
 	case *types.Basic:
@@ -194,12 +208,12 @@ func createType(typ types.Type, id string) string {
 	case *types.Chan:
 		return fmt.Sprintf("struct Channel* %s", id)
 	case *types.Pointer:
-		elemType := t.Elem().Underlying()
+		elemType := t.Elem()
 		if et, ok := elemType.(*types.Array); ok {
 			elemType = et.Elem()
 		}
 		return fmt.Sprintf("%s* %s", createType(elemType, ""), id)
-	case *types.Interface, *types.Signature, *types.Slice, *types.Struct, *types.Tuple:
+	case *types.Interface, *types.Named, *types.Signature, *types.Slice, *types.Struct, *types.Tuple:
 		return fmt.Sprintf("struct %s %s", createTypeName(t), id)
 	}
 	panic(fmt.Sprintf("type not supported: %s", typ.String()))
@@ -236,7 +250,7 @@ func (ctx *Context) switchFunction(nextFunction string, callCommon *ssa.CallComm
 	argBase := 0
 	if callCommon.IsInvoke() {
 		arg := callCommon.Value
-		fmt.Fprintf(ctx.stream, "signature->param%d = %s.receiver; // receiver: %s\n",
+		fmt.Fprintf(ctx.stream, "signature->param%d = %s.inner.receiver; // receiver: %s\n",
 			paramBase, createValueRelName(arg), signature.Recv())
 		paramBase++
 	} else if signature.Recv() != nil {
@@ -326,7 +340,7 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 			methodName := callCommon.Method.Name()
 			fmt.Fprintf(ctx.stream, `
 			struct FunctionObject next_function = {.func_ptr = NULL};
-			struct Interface* interface = &%s;
+			struct Interface* interface = &%s.inner;
 			for (uintptr_t i = 0; i < interface->num_methods; ++i) {
 				struct InterfaceTableEntry* entry = &interface->interface_table[i];
 				if (strcmp(entry->method_name, "%s") == 0) {
@@ -376,13 +390,13 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 		}
 
 	case *ssa.ChangeType:
-		fmt.Fprintf(ctx.stream, "%s = (%s){ %s };\n", createValueRelName(instr), createType(instr.X.Type(), ""), createValueRelName(instr.X))
+		fmt.Fprintf(ctx.stream, "%s = %s.inner;\n", createValueRelName(instr), createValueRelName(instr.X))
 
 	case *ssa.Extract:
 		fmt.Fprintf(ctx.stream, "%s = %s.e%d;\n", createValueRelName(instr), createValueRelName(instr.Tuple), instr.Index)
 
 	case *ssa.FieldAddr:
-		fmt.Fprintf(ctx.stream, "%s = &%s->%s;\n", createValueRelName(instr), createValueRelName(instr.X), instr.X.Type().Underlying().(*types.Pointer).Elem().Underlying().(*types.Struct).Field(instr.Field).Name())
+		fmt.Fprintf(ctx.stream, "%s = &%s->inner.%s;\n", createValueRelName(instr), createValueRelName(instr.X), instr.X.Type().Underlying().(*types.Pointer).Elem().Underlying().(*types.Struct).Field(instr.Field).Name())
 
 	case *ssa.IndexAddr:
 		if _, ok := instr.X.Type().Underlying().(*types.Slice); ok {
@@ -474,9 +488,9 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 	case *ssa.MakeInterface:
 		valueName := createValueRelName(instr)
 		interfaceTableName := fmt.Sprintf("interfaceTable_%s", createTypeName(instr.X.Type()))
-		fmt.Fprintf(ctx.stream, "%s.receiver = %s;\n", valueName, createValueRelName(instr.X))
-		fmt.Fprintf(ctx.stream, "%s.num_methods = sizeof(%s.entries)/sizeof(%s.entries[0]);\n", valueName, interfaceTableName, interfaceTableName)
-		fmt.Fprintf(ctx.stream, "%s.interface_table = &%s.entries[0];\n", valueName, interfaceTableName)
+		fmt.Fprintf(ctx.stream, "%s.inner.receiver = %s;\n", valueName, createValueRelName(instr.X))
+		fmt.Fprintf(ctx.stream, "%s.inner.num_methods = sizeof(%s.entries)/sizeof(%s.entries[0]);\n", valueName, interfaceTableName, interfaceTableName)
+		fmt.Fprintf(ctx.stream, "%s.inner.interface_table = &%s.entries[0];\n", valueName, interfaceTableName)
 
 	case *ssa.Phi:
 		basicBlock := instr.Block()
@@ -877,10 +891,7 @@ func (ctx *Context) emitTypeDefinition(typ *ssa.Type) {
 	switch typ := typ.Type().(type) {
 	case *types.Named:
 		ctx.emitUnderlyingTypeDefinition(typ.Underlying())
-		extractTypeName := func(typ types.Type) string {
-			return strings.Split(typ.String(), ".")[1]
-		}
-		typeName := extractTypeName(typ)
+		typeName := createTypeName(typ)
 		inner := createType(typ.Underlying(), "inner")
 		fmt.Fprintf(ctx.stream, "struct %s { %s; };\n", typeName, inner)
 	default:
