@@ -250,8 +250,14 @@ func (ctx *Context) switchFunction(nextFunction string, callCommon *ssa.CallComm
 	argBase := 0
 	if callCommon.IsInvoke() {
 		arg := callCommon.Value
-		fmt.Fprintf(ctx.stream, "signature->param%d = %s.inner.receiver; // receiver: %s\n",
-			paramBase, createValueRelName(arg), signature.Recv())
+		if arg.Type().Underlying().(*types.Interface).Empty() {
+			// ToDo: empty interface workaround
+			fmt.Fprintf(ctx.stream, "signature->param%d = %s.receiver; // receiver: %s\n",
+				paramBase, createValueRelName(arg), signature.Recv())
+		} else {
+			fmt.Fprintf(ctx.stream, "signature->param%d = %s.inner.receiver; // receiver: %s\n",
+				paramBase, createValueRelName(arg), signature.Recv())
+		}
 		paramBase++
 	} else if signature.Recv() != nil {
 		arg := callCommon.Args[argBase]
@@ -488,9 +494,16 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 	case *ssa.MakeInterface:
 		valueName := createValueRelName(instr)
 		interfaceTableName := fmt.Sprintf("interfaceTable_%s", createTypeName(instr.X.Type()))
-		fmt.Fprintf(ctx.stream, "%s.inner.receiver = %s;\n", valueName, createValueRelName(instr.X))
-		fmt.Fprintf(ctx.stream, "%s.inner.num_methods = sizeof(%s.entries)/sizeof(%s.entries[0]);\n", valueName, interfaceTableName, interfaceTableName)
-		fmt.Fprintf(ctx.stream, "%s.inner.interface_table = &%s.entries[0];\n", valueName, interfaceTableName)
+		if instr.Type().Underlying().(*types.Interface).Empty() {
+			// ToDo: empty interface workaround
+			fmt.Fprintf(ctx.stream, "%s.receiver = (void*) %s;\n", valueName, createValueRelName(instr.X)) // ToDo: only support int
+			fmt.Fprintf(ctx.stream, "%s.num_methods = 0;\n", valueName)
+			fmt.Fprintf(ctx.stream, "%s.interface_table = NULL;\n", valueName)
+		} else {
+			fmt.Fprintf(ctx.stream, "%s.inner.receiver = %s;\n", valueName, createValueRelName(instr.X))
+			fmt.Fprintf(ctx.stream, "%s.inner.num_methods = sizeof(%s.entries)/sizeof(%s.entries[0]);\n", valueName, interfaceTableName, interfaceTableName)
+			fmt.Fprintf(ctx.stream, "%s.inner.interface_table = &%s.entries[0];\n", valueName, interfaceTableName)
+		}
 
 	case *ssa.Phi:
 		basicBlock := instr.Block()
