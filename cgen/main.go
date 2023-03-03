@@ -171,7 +171,9 @@ func createTypeName(typ types.Type) string {
 	case *types.Interface:
 		return fmt.Sprintf("Interface")
 	case *types.Named:
-		return strings.Split(typ.String(), ".")[1] // remove "command-line-arguments."
+		// remove "command-line-arguments."
+		l := strings.Split(typ.String(), ".")
+		return l[len(l)-1]
 	case *types.Pointer:
 		elemType := t.Elem()
 		if et, ok := elemType.(*types.Array); ok {
@@ -942,6 +944,28 @@ func findMainPackage(program *ssa.Program) *ssa.Package {
 	panic("main package not found")
 }
 
+func findLibraryFunctions(program *ssa.Program) []*ssa.Function {
+	var functions []*ssa.Function
+	for _, pkg := range program.AllPackages() {
+		if pkg.Pkg.Name() != "fmt" {
+			continue
+		}
+		for symbol := range pkg.Members {
+			function, ok := pkg.Members[symbol].(*ssa.Function)
+			if !ok {
+				continue
+			}
+
+			if symbol != "Println" {
+				continue
+			}
+
+			functions = append(functions, function)
+		}
+	}
+	return functions
+}
+
 func (ctx *Context) visitAllFunctions(program *ssa.Program, procedure func(function *ssa.Function)) {
 	var f func(function *ssa.Function)
 	f = func(function *ssa.Function) {
@@ -1097,6 +1121,22 @@ struct Tuple_lt_intptr___t_S_intptr___t_gt_ {
 	intptr_t e0;
 	intptr_t e1;
 };
+
+// ToDo: WA to handle fmt.Println
+
+struct StackFramePrintln {
+	struct StackFrameCommon common;
+	void* result_ptr;
+	struct Slice param0;
+};
+DECLARE_RUNTIME_API(println, StackFramePrintln);
+
+#define f_S_Println gox5_println
+
+struct Tuple_lt_intptr___t_S_error_gt_ {
+	intptr_t e0;
+	struct Interface e1;
+};
 `)
 
 	mainPkg := findMainPackage(program)
@@ -1112,6 +1152,15 @@ struct Tuple_lt_intptr___t_S_intptr___t_gt_ {
 	ctx.visitAllFunctions(program, func(function *ssa.Function) {
 		ctx.emitFunctionDeclaration(function)
 	})
+
+	libraryFunctions := findLibraryFunctions(program)
+	for _, function := range libraryFunctions {
+		ctx.emitFunctionHeader(createFunctionName(function), ";")
+
+		signature := function.Signature
+		concreteSignatureName := createSignatureName(signature, false)
+		ctx.tryEmitSignatureDefinition(signature, concreteSignatureName, false)
+	}
 
 	for member := range mainPkg.Members {
 		typ, ok := mainPkg.Members[member].(*ssa.Type)
