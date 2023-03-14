@@ -376,7 +376,19 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 			case "cap":
 				fmt.Fprintf(ctx.stream, "%s = %s.capacity;\n", createValueRelName(instr), createValueRelName(callCommon.Args[0]))
 			case "len":
-				fmt.Fprintf(ctx.stream, "%s = %s.size;\n", createValueRelName(instr), createValueRelName(callCommon.Args[0]))
+				switch t := callCommon.Args[0].Type().(type) {
+				case *types.Basic:
+					switch t.Kind() {
+					case types.String:
+						fmt.Fprintf(ctx.stream, "%s = strlen(%s);\n", createValueRelName(instr), createValueRelName(callCommon.Args[0]))
+					default:
+						panic(fmt.Sprintf("unsuported argument for len: %s (%s)", callCommon.Args[0], t))
+					}
+				case *types.Slice:
+					fmt.Fprintf(ctx.stream, "%s = %s.size;\n", createValueRelName(instr), createValueRelName(callCommon.Args[0]))
+				default:
+					panic(fmt.Sprintf("unsuported argument for len: %s", callCommon.Args[0]))
+				}
 			case "ssa:wrapnilchk":
 				fmt.Fprintf(ctx.stream, "assert(%s); // ssa:wrapnilchk\n", createValueRelName(callCommon.Args[0]))
 				fmt.Fprintf(ctx.stream, "%s = %s;\n", createValueRelName(instr), createValueRelName(callCommon.Args[0]))
