@@ -67,6 +67,14 @@ impl PartialEq<UserFunctionInner> for UserFunction {
 
 unsafe impl Send for UserFunction {}
 
+#[derive(Debug)]
+#[repr(C)]
+pub struct Interface {
+    receiver: ObjectPtr,
+    num_methods: usize,
+    interface_table: *const (),
+}
+
 #[repr(C)]
 struct StackFrameCommon {
     resume_func: FunctionObject,
@@ -387,6 +395,34 @@ pub async fn spawn(ctx: &mut LightWeightThreadContext<'_>) -> FunctionObject {
     leave_runtime_api(ctx)
 }
 
+#[repr(C)]
+struct StackFrameValueOf {
+    common: StackFrameCommon,
+    result_ptr: *mut ObjectPtr,
+    param0: Interface,
+}
+
+pub fn value_of(ctx: &mut LightWeightThreadContext) -> FunctionObject {
+    let (param0, result) = unsafe {
+        let (param0_ptr, result_ptr) = {
+            let stack_frame = &mut ctx.stack_pointer.value_of;
+            (
+                &mut stack_frame.param0 as *mut Interface,
+                stack_frame.result_ptr as *mut ObjectPtr,
+            )
+        };
+        (&mut *param0_ptr, &mut *result_ptr)
+    };
+
+    unsafe {
+        let function_object_ptr = param0.receiver.0 as *const FunctionObject;
+        let function_object_inner = (*function_object_ptr).0;
+        *result = ObjectPtr(function_object_inner as *mut ());
+    }
+
+    leave_runtime_api(ctx)
+}
+
 fn leave_runtime_api(ctx: &mut LightWeightThreadContext) -> FunctionObject {
     unsafe {
         let stack_frame = &mut ctx.stack_pointer.common;
@@ -407,6 +443,7 @@ pub union StackFrame {
     recv: ManuallyDrop<StackFrameRecv>,
     send: ManuallyDrop<StackFrameSend>,
     spawn: ManuallyDrop<StackFrameSpawn>,
+    value_of: ManuallyDrop<StackFrameValueOf>,
 }
 
 unsafe impl Send for StackFrame {}

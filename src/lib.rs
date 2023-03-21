@@ -79,6 +79,11 @@ pub extern "C" fn gox5_spawn(_ctx: &mut LightWeightThreadContext) -> FunctionObj
     unreachable!()
 }
 
+#[no_mangle]
+pub extern "C" fn gox5_value_of(ctx: &mut LightWeightThreadContext) -> FunctionObject {
+    api::value_of(ctx)
+}
+
 extern "C" fn terminate(_ctx: &mut LightWeightThreadContext) -> FunctionObject {
     unreachable!()
 }

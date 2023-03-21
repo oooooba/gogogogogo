@@ -332,7 +332,7 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 				panic(fmt.Sprintf("type mismatch: %s (%s) vs %s (%s)", instr.X, instr.X.Type(), instr.Y, instr.Y.Type()))
 			}
 			switch instr.X.Type().(type) {
-			case *types.Signature, *types.Slice:
+			case *types.Named, *types.Signature, *types.Slice:
 				fmt.Fprintf(ctx.stream, "%s = memcmp(&%s, &%s, sizeof(%s)) %s 0;\n", createValueRelName(instr), createValueRelName(instr.X), createValueRelName(instr.Y), createValueRelName(instr.X), instr.Op)
 			default:
 				fmt.Fprintf(ctx.stream, "%s = %s %s %s;\n", createValueRelName(instr), createValueRelName(instr.X), instr.Op.String(), createValueRelName(instr.Y))
@@ -508,11 +508,13 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 		valueName := createValueRelName(instr)
 		interfaceTableName := fmt.Sprintf("interfaceTable_%s", createTypeName(instr.X.Type()))
 		if instr.Type().Underlying().(*types.Interface).Empty() {
-			if _, ok := instr.X.(*ssa.Const); ok {
+			switch instrX := instr.X.(type) {
+			case *ssa.Const, *ssa.Function:
 				id := fmt.Sprintf("tmp_%s", createValueName(instr))
-				fmt.Fprintf(ctx.stream, "frame->%s = %s;\n", id, createValueRelName(instr.X))
+				fmt.Fprintf(ctx.stream, "frame->%s = %s;\n", id, createValueRelName(instrX))
 				fmt.Fprintf(ctx.stream, "%s.receiver = &frame->%s;\n", valueName, id)
-			} else {
+
+			default:
 				fmt.Fprintf(ctx.stream, "%s.receiver = %s;\n", valueName, createValueRelName(instr.X)) // ToDo: only support int
 			}
 			fmt.Fprintf(ctx.stream, "%s.num_methods = 0;\n", valueName)
@@ -679,9 +681,10 @@ func (ctx *Context) emitValueDeclaration(value ssa.Value) {
 	case *ssa.MakeInterface:
 		ctx.emitValueDeclaration(val.X)
 		if val.Type().Underlying().(*types.Interface).Empty() {
-			if _, ok := val.X.(*ssa.Const); ok {
+			switch valX := val.X.(type) {
+			case *ssa.Const, *ssa.Function:
 				id := fmt.Sprintf("tmp_%s", createValueName(val))
-				fmt.Fprintf(ctx.stream, "\t%s; // %s : %s\n", createType(val.X.Type(), id), val.X.String(), val.X.Type())
+				fmt.Fprintf(ctx.stream, "\t%s; // %s : %s\n", createType(valX.Type(), id), valX.String(), valX.Type())
 			}
 		}
 
@@ -985,6 +988,23 @@ func findLibraryFunctions(program *ssa.Program) []*ssa.Function {
 			functions = append(functions, function)
 		}
 	}
+	for _, pkg := range program.AllPackages() {
+		if pkg.Pkg.Name() != "reflect" {
+			continue
+		}
+		for symbol := range pkg.Members {
+			function, ok := pkg.Members[symbol].(*ssa.Function)
+			if !ok {
+				continue
+			}
+
+			if symbol != "ValueOf" {
+				continue
+			}
+
+			functions = append(functions, function)
+		}
+	}
 	return functions
 }
 
@@ -1158,6 +1178,21 @@ DECLARE_RUNTIME_API(println, StackFramePrintln);
 struct Tuple_lt_intptr___t_S_error_gt_ {
 	intptr_t e0;
 	struct Interface e1;
+};
+
+// ToDo: WA to handle reflect.ValueOf
+
+struct StackFrameValueOf {
+	struct StackFrameCommon common;
+	void* result_ptr;
+	struct Interface param0;
+};
+DECLARE_RUNTIME_API(value_of, StackFrameValueOf);
+
+#define f_S_ValueOf gox5_value_of
+
+struct Value {
+	intptr_t e0;
 };
 `)
 
