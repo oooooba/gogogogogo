@@ -253,7 +253,6 @@ func (ctx *Context) switchFunction(nextFunction string, callCommon *ssa.CallComm
 	if callCommon.IsInvoke() {
 		arg := callCommon.Value
 		if arg.Type().Underlying().(*types.Interface).Empty() {
-			// ToDo: empty interface workaround
 			fmt.Fprintf(ctx.stream, "signature->param%d = %s.receiver; // receiver: %s\n",
 				paramBase, createValueRelName(arg), signature.Recv())
 		} else {
@@ -509,8 +508,13 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 		valueName := createValueRelName(instr)
 		interfaceTableName := fmt.Sprintf("interfaceTable_%s", createTypeName(instr.X.Type()))
 		if instr.Type().Underlying().(*types.Interface).Empty() {
-			// ToDo: empty interface workaround
-			fmt.Fprintf(ctx.stream, "%s.receiver = (void*) %s;\n", valueName, createValueRelName(instr.X)) // ToDo: only support int
+			if _, ok := instr.X.(*ssa.Const); ok {
+				id := fmt.Sprintf("tmp_%s", createValueName(instr))
+				fmt.Fprintf(ctx.stream, "frame->%s = %s;\n", id, createValueRelName(instr.X))
+				fmt.Fprintf(ctx.stream, "%s.receiver = &frame->%s;\n", valueName, id)
+			} else {
+				fmt.Fprintf(ctx.stream, "%s.receiver = %s;\n", valueName, createValueRelName(instr.X)) // ToDo: only support int
+			}
 			fmt.Fprintf(ctx.stream, "%s.num_methods = 0;\n", valueName)
 			fmt.Fprintf(ctx.stream, "%s.interface_table = NULL;\n", valueName)
 		} else {
@@ -674,6 +678,12 @@ func (ctx *Context) emitValueDeclaration(value ssa.Value) {
 
 	case *ssa.MakeInterface:
 		ctx.emitValueDeclaration(val.X)
+		if val.Type().Underlying().(*types.Interface).Empty() {
+			if _, ok := val.X.(*ssa.Const); ok {
+				id := fmt.Sprintf("tmp_%s", createValueName(val))
+				fmt.Fprintf(ctx.stream, "\t%s; // %s : %s\n", createType(val.X.Type(), id), val.X.String(), val.X.Type())
+			}
+		}
 
 	case *ssa.Parameter:
 		canEmit = false

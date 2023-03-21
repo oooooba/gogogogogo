@@ -299,8 +299,8 @@ pub fn println(ctx: &mut LightWeightThreadContext) -> FunctionObject {
     };
 
     unsafe {
-        let p = param0.addr as *const isize;
-        println!("{}", *p);
+        let p = param0.addr as *const *const isize;
+        println!("{}", **p);
     }
 
     *result = ObjectPtr(ptr::null_mut());
