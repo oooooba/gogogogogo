@@ -331,7 +331,13 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 			if instr.X.Type() != instr.Y.Type() {
 				panic(fmt.Sprintf("type mismatch: %s (%s) vs %s (%s)", instr.X, instr.X.Type(), instr.Y, instr.Y.Type()))
 			}
-			switch instr.X.Type().(type) {
+			switch t := instr.X.Type().(type) {
+			case *types.Basic:
+				if t.Kind() == types.String {
+					fmt.Fprintf(ctx.stream, "%s = strcmp(%s, %s) %s 0;\n", createValueRelName(instr), createValueRelName(instr.X), createValueRelName(instr.Y), instr.Op)
+				} else {
+					fmt.Fprintf(ctx.stream, "%s = %s %s %s;\n", createValueRelName(instr), createValueRelName(instr.X), instr.Op.String(), createValueRelName(instr.Y))
+				}
 			case *types.Named, *types.Signature, *types.Slice:
 				fmt.Fprintf(ctx.stream, "%s = memcmp(&%s, &%s, sizeof(%s)) %s 0;\n", createValueRelName(instr), createValueRelName(instr.X), createValueRelName(instr.Y), createValueRelName(instr.X), instr.Op)
 			default:
