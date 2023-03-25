@@ -32,6 +32,30 @@ func Test3() int {
 	}
 }
 
+func Test4() int {
+	s1 := "a"
+	s2 := "a"
+	return func(s1, s2 string) int {
+		if s1 == s2 {
+			return 4
+		} else {
+			return 0
+		}
+	}(s1, s2)
+}
+
+func Test5() int {
+	s1 := "a"
+	s2 := "b"
+	return func(s1, s2 string) int {
+		if s1 == s2 {
+			return 0
+		} else {
+			return 5
+		}
+	}(s1, s2)
+}
+
 func main() {
 	runTest := func(test func() int) {
 		funcFullName := runtime.FuncForPC(reflect.ValueOf(test).Pointer()).Name()
@@ -41,4 +65,6 @@ func main() {
 	runTest(Test1)
 	runTest(Test2)
 	runTest(Test3)
+	runTest(Test4)
+	runTest(Test5)
 }

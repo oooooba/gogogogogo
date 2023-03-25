@@ -114,9 +114,13 @@ func createValueName(value ssa.Value) string {
 			}
 		} else {
 			cst := val.Value.String()
-			switch val.Type().(type) {
+			switch t := val.Type().(type) {
 			case *types.Basic:
-				return cst
+				if t.Kind() == types.String {
+					return fmt.Sprintf("(struct StringObject){.str_ptr=%s}", cst)
+				} else {
+					return cst
+				}
 
 			case *types.Named:
 				return fmt.Sprintf("(struct %s){.inner=%s}", createTypeName(val.Type()), cst)
@@ -165,6 +169,8 @@ func createTypeName(typ types.Type) string {
 			return fmt.Sprintf("bool")
 		case types.Int, types.Int8, types.Int16, types.Int32, types.Int64, types.Uint, types.Uint8, types.Uint16, types.Uint32, types.Uint64, types.Uintptr:
 			return fmt.Sprintf("intptr_t")
+		case types.String:
+			return fmt.Sprintf("StringObject")
 		}
 	case *types.Chan:
 		return fmt.Sprintf("Channel_ptr")
@@ -206,7 +212,11 @@ func createType(typ types.Type, id string) string {
 	case *types.Array:
 		return fmt.Sprintf("%s %s[%d]", createType(t.Elem(), ""), id, t.Len())
 	case *types.Basic:
-		return fmt.Sprintf("%s %s", createTypeName(t), id)
+		if t.Kind() == types.String {
+			return fmt.Sprintf("struct %s %s", createTypeName(t), id)
+		} else {
+			return fmt.Sprintf("%s %s", createTypeName(t), id)
+		}
 	case *types.Chan:
 		return fmt.Sprintf("struct Channel* %s", id)
 	case *types.Pointer:
@@ -334,7 +344,7 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 			switch t := instr.X.Type().(type) {
 			case *types.Basic:
 				if t.Kind() == types.String {
-					fmt.Fprintf(ctx.stream, "%s = strcmp(%s, %s) %s 0;\n", createValueRelName(instr), createValueRelName(instr.X), createValueRelName(instr.Y), instr.Op)
+					fmt.Fprintf(ctx.stream, "%s = strcmp(%s.str_ptr, %s.str_ptr) %s 0;\n", createValueRelName(instr), createValueRelName(instr.X), createValueRelName(instr.Y), instr.Op)
 				} else {
 					fmt.Fprintf(ctx.stream, "%s = %s %s %s;\n", createValueRelName(instr), createValueRelName(instr.X), instr.Op.String(), createValueRelName(instr.Y))
 				}
@@ -385,7 +395,7 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 				case *types.Basic:
 					switch t.Kind() {
 					case types.String:
-						fmt.Fprintf(ctx.stream, "%s = strlen(%s);\n", createValueRelName(instr), createValueRelName(callCommon.Args[0]))
+						fmt.Fprintf(ctx.stream, "%s = strlen(%s.str_ptr);\n", createValueRelName(instr), createValueRelName(callCommon.Args[0]))
 					default:
 						panic(fmt.Sprintf("unsuported argument for len: %s (%s)", callCommon.Args[0], t))
 					}
@@ -1130,6 +1140,10 @@ struct UserFunction {
 
 struct FunctionObject {
 	const void* func_ptr;
+};
+
+struct StringObject {
+	const char* str_ptr;
 };
 
 struct StackFrameCommon {
