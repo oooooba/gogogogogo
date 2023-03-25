@@ -1185,19 +1185,20 @@ struct Tuple_lt_intptr___t_S_intptr___t_gt_ {
 
 // ToDo: WA to handle fmt.Println
 
+struct PrintlnResult {
+	intptr_t e0;
+	struct Interface e1;
+};
+
 struct StackFramePrintln {
 	struct StackFrameCommon common;
-	void* result_ptr;
+	struct PrintlnResult* result_ptr;
 	struct Slice param0;
 };
 DECLARE_RUNTIME_API(println, StackFramePrintln);
 
 #define f_S_Println gox5_println
-
-struct Tuple_lt_intptr___t_S_error_gt_ {
-	intptr_t e0;
-	struct Interface e1;
-};
+#define Tuple_lt_intptr___t_S_error_gt_ PrintlnResult
 
 // ToDo: WA to handle reflect.ValueOf
 

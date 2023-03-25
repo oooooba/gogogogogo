@@ -300,9 +300,15 @@ pub fn new(ctx: &mut LightWeightThreadContext) -> FunctionObject {
 }
 
 #[repr(C)]
+struct PrintlnResult {
+    e0: isize,
+    e1: Interface,
+}
+
+#[repr(C)]
 struct StackFramePrintln {
     common: StackFrameCommon,
-    result_ptr: *mut ObjectPtr,
+    result_ptr: *mut PrintlnResult,
     param0: Slice,
 }
 
@@ -312,7 +318,7 @@ pub fn println(ctx: &mut LightWeightThreadContext) -> FunctionObject {
             let stack_frame = &mut ctx.stack_pointer.println;
             (
                 &mut stack_frame.param0 as *mut Slice,
-                stack_frame.result_ptr as *mut ObjectPtr,
+                stack_frame.result_ptr as *mut PrintlnResult,
             )
         };
         (&mut *param0_ptr, &mut *result_ptr)
@@ -323,7 +329,9 @@ pub fn println(ctx: &mut LightWeightThreadContext) -> FunctionObject {
         println!("{}", **p);
     }
 
-    *result = ObjectPtr(ptr::null_mut());
+    unsafe {
+        ptr::write_bytes(result, 0, 1);
+    }
 
     leave_runtime_api(ctx)
 }
