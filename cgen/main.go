@@ -1004,6 +1004,25 @@ func findLibraryFunctions(program *ssa.Program) []*ssa.Function {
 
 			functions = append(functions, function)
 		}
+
+		typ, ok := pkg.Members["Value"].(*ssa.Type)
+		if !ok {
+			continue
+		}
+
+		methodSet := program.MethodSets.MethodSet(typ.Type())
+		for i := 0; i < methodSet.Len(); i++ {
+			function := program.MethodValue(methodSet.At(i))
+			if function == nil {
+				continue
+			}
+			l := strings.Split(function.String(), ".")
+			methodName := l[len(l)-1]
+			if methodName != "Pointer" {
+				continue
+			}
+			functions = append(functions, function)
+		}
 	}
 	return functions
 }
@@ -1194,6 +1213,17 @@ DECLARE_RUNTIME_API(value_of, StackFrameValueOf);
 struct Value {
 	intptr_t e0;
 };
+
+// ToDo: WA to handle reflect.Value.Pointer
+
+struct StackFrameValuePointer {
+	struct StackFrameCommon common;
+	void* result_ptr;
+	struct Value param0;
+};
+DECLARE_RUNTIME_API(value_pointer, StackFrameValuePointer);
+
+#define f_S_Pointer_S_Value gox5_value_pointer
 `)
 
 	mainPkg := findMainPackage(program)

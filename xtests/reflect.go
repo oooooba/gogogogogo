@@ -35,6 +35,26 @@ func Test2() int {
 	}
 }
 
+func Test3() int {
+	v1 := reflect.ValueOf(test1_f).Pointer()
+	v2 := reflect.ValueOf(test1_f).Pointer()
+	if v1 == v2 {
+		return 3
+	} else {
+		return 0
+	}
+}
+
+func Test4() int {
+	v1 := reflect.ValueOf(test1_f).Pointer()
+	v2 := reflect.ValueOf(test2_f).Pointer()
+	if v1 == v2 {
+		return 0
+	} else {
+		return 4
+	}
+}
+
 func main() {
 	runTest := func(test func() int) {
 		funcFullName := runtime.FuncForPC(reflect.ValueOf(test).Pointer()).Name()
@@ -43,4 +63,6 @@ func main() {
 	}
 	runTest(Test1)
 	runTest(Test2)
+	runTest(Test3)
+	runTest(Test4)
 }

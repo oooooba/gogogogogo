@@ -446,6 +446,20 @@ struct StackFrameValuePointer {
     param0: Value,
 }
 
+pub fn value_pointer(ctx: &mut LightWeightThreadContext) -> FunctionObject {
+    let (param0, result) = unsafe {
+        let (param0_ptr, result_ptr) = {
+            let stack_frame = &mut ctx.stack_pointer.value_pointer;
+            (
+                &mut stack_frame.param0 as *const Value,
+                stack_frame.result_ptr as *mut ObjectPtr,
+            )
+        };
+        (&*param0_ptr, &mut *result_ptr)
+    };
+
+    *result = ObjectPtr(param0.object as *mut ());
+
     leave_runtime_api(ctx)
 }
 
@@ -470,6 +484,7 @@ pub union StackFrame {
     send: ManuallyDrop<StackFrameSend>,
     spawn: ManuallyDrop<StackFrameSpawn>,
     value_of: ManuallyDrop<StackFrameValueOf>,
+    value_pointer: ManuallyDrop<StackFrameValuePointer>,
 }
 
 unsafe impl Send for StackFrame {}

@@ -84,6 +84,11 @@ pub extern "C" fn gox5_value_of(ctx: &mut LightWeightThreadContext) -> FunctionO
     api::value_of(ctx)
 }
 
+#[no_mangle]
+pub extern "C" fn gox5_value_pointer(ctx: &mut LightWeightThreadContext) -> FunctionObject {
+    api::value_pointer(ctx)
+}
+
 extern "C" fn terminate(_ctx: &mut LightWeightThreadContext) -> FunctionObject {
     unreachable!()
 }
