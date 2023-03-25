@@ -76,6 +76,17 @@ pub struct Interface {
 }
 
 #[repr(C)]
+struct Value {
+    object: *mut ObjectPtr,
+}
+
+impl Value {
+    fn new(object: *mut ObjectPtr) -> Self {
+        Value { object }
+    }
+}
+
+#[repr(C)]
 struct StackFrameCommon {
     resume_func: FunctionObject,
     prev_stack_pointer: *mut StackFrame,
@@ -414,11 +425,26 @@ pub fn value_of(ctx: &mut LightWeightThreadContext) -> FunctionObject {
         (&mut *param0_ptr, &mut *result_ptr)
     };
 
-    unsafe {
+    let object = unsafe {
         let function_object_ptr = param0.receiver.0 as *const FunctionObject;
-        let function_object_inner = (*function_object_ptr).0;
-        *result = ObjectPtr(function_object_inner as *mut ());
+        (*function_object_ptr).0 as *mut ObjectPtr
+    };
+
+    let value = Value::new(object);
+    unsafe {
+        ptr::copy_nonoverlapping(&value, result as *mut ObjectPtr as *mut Value, 1);
     }
+    mem::forget(value);
+
+    leave_runtime_api(ctx)
+}
+
+#[repr(C)]
+struct StackFrameValuePointer {
+    common: StackFrameCommon,
+    result_ptr: *mut ObjectPtr,
+    param0: Value,
+}
 
     leave_runtime_api(ctx)
 }
