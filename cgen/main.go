@@ -1202,24 +1202,24 @@ DECLARE_RUNTIME_API(println, StackFramePrintln);
 
 // ToDo: WA to handle reflect.ValueOf
 
+struct Value {
+	intptr_t e0;
+};
+
 struct StackFrameValueOf {
 	struct StackFrameCommon common;
-	void* result_ptr;
+	struct Value* result_ptr;
 	struct Interface param0;
 };
 DECLARE_RUNTIME_API(value_of, StackFrameValueOf);
 
 #define f_S_ValueOf gox5_value_of
 
-struct Value {
-	intptr_t e0;
-};
-
 // ToDo: WA to handle reflect.Value.Pointer
 
 struct StackFrameValuePointer {
 	struct StackFrameCommon common;
-	void* result_ptr;
+	intptr_t* result_ptr;
 	struct Value param0;
 };
 DECLARE_RUNTIME_API(value_pointer, StackFrameValuePointer);

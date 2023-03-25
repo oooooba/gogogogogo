@@ -418,7 +418,7 @@ pub async fn spawn(ctx: &mut LightWeightThreadContext<'_>) -> FunctionObject {
 #[repr(C)]
 struct StackFrameValueOf {
     common: StackFrameCommon,
-    result_ptr: *mut ObjectPtr,
+    result_ptr: *mut Value,
     param0: Interface,
 }
 
@@ -428,7 +428,7 @@ pub fn value_of(ctx: &mut LightWeightThreadContext) -> FunctionObject {
             let stack_frame = &mut ctx.stack_pointer.value_of;
             (
                 &mut stack_frame.param0 as *mut Interface,
-                stack_frame.result_ptr as *mut ObjectPtr,
+                stack_frame.result_ptr as *mut Value,
             )
         };
         (&mut *param0_ptr, &mut *result_ptr)
@@ -441,7 +441,7 @@ pub fn value_of(ctx: &mut LightWeightThreadContext) -> FunctionObject {
 
     let value = Value::new(object);
     unsafe {
-        ptr::copy_nonoverlapping(&value, result as *mut ObjectPtr as *mut Value, 1);
+        ptr::copy_nonoverlapping(&value, result, 1);
     }
     mem::forget(value);
 
@@ -451,7 +451,7 @@ pub fn value_of(ctx: &mut LightWeightThreadContext) -> FunctionObject {
 #[repr(C)]
 struct StackFrameValuePointer {
     common: StackFrameCommon,
-    result_ptr: *mut ObjectPtr,
+    result_ptr: *mut isize,
     param0: Value,
 }
 
@@ -461,13 +461,13 @@ pub fn value_pointer(ctx: &mut LightWeightThreadContext) -> FunctionObject {
             let stack_frame = &mut ctx.stack_pointer.value_pointer;
             (
                 &mut stack_frame.param0 as *const Value,
-                stack_frame.result_ptr as *mut ObjectPtr,
+                stack_frame.result_ptr as *mut isize,
             )
         };
         (&*param0_ptr, &mut *result_ptr)
     };
 
-    *result = ObjectPtr(param0.object as *mut ());
+    *result = param0.object as isize;
 
     leave_runtime_api(ctx)
 }
