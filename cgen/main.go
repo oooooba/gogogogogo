@@ -960,6 +960,24 @@ func (ctx *Context) emitInterfaceTable(typ *ssa.Type) {
 	fmt.Fprintln(ctx.stream, "}};")
 }
 
+func (ctx *Context) emitRuntimeInfo() {
+	fmt.Fprintln(ctx.stream, "struct Func runtime_info_funcs[] = {")
+	ctx.visitAllFunctions(ctx.program, func(function *ssa.Function) {
+		fmt.Fprintf(ctx.stream, "{ \"%s\", (struct UserFunction){.func_ptr = %s} },\n", function.Name(), createFunctionName(function))
+	})
+	fmt.Fprintln(ctx.stream, "};")
+
+	fmt.Fprint(ctx.stream, `
+size_t runtime_info_get_funcs_count(void) {
+	return sizeof(runtime_info_funcs)/sizeof(runtime_info_funcs[0]);
+}
+
+const struct Func* runtime_info_refer_func(size_t i) {
+	return &runtime_info_funcs[i];
+}
+`)
+}
+
 func findMainPackage(program *ssa.Program) *ssa.Package {
 	for _, pkg := range program.AllPackages() {
 		if pkg.Pkg.Name() == "main" {
@@ -1021,6 +1039,23 @@ func findLibraryFunctions(program *ssa.Program) []*ssa.Function {
 			if methodName != "Pointer" {
 				continue
 			}
+			functions = append(functions, function)
+		}
+	}
+	for _, pkg := range program.AllPackages() {
+		if pkg.Pkg.Name() != "runtime" {
+			continue
+		}
+		for symbol := range pkg.Members {
+			function, ok := pkg.Members[symbol].(*ssa.Function)
+			if !ok {
+				continue
+			}
+
+			if symbol != "FuncForPC" {
+				continue
+			}
+
 			functions = append(functions, function)
 		}
 	}
@@ -1225,6 +1260,23 @@ struct StackFrameValuePointer {
 DECLARE_RUNTIME_API(value_pointer, StackFrameValuePointer);
 
 #define f_S_Pointer_S_Value gox5_value_pointer
+
+// ToDo: WA to handle runtime.FuncForPC
+
+struct Func {
+	const char* name;
+	struct UserFunction function;
+	//void* function; 
+};
+
+struct StackFrameFuncForPc {
+	struct StackFrameCommon common;
+	const struct Func** result_ptr;
+	uintptr_t param0;
+};
+DECLARE_RUNTIME_API(func_for_pc, StackFrameFuncForPc);
+
+#define f_S_FuncForPC gox5_func_for_pc
 `)
 
 	mainPkg := findMainPackage(program)
@@ -1263,6 +1315,8 @@ DECLARE_RUNTIME_API(value_pointer, StackFrameValuePointer);
 			ctx.emitFunctionDefinition(function)
 		}
 	})
+
+	ctx.emitRuntimeInfo()
 
 	fmt.Fprintln(ctx.stream, "struct { const char* name; void* function; } test_entry_points[] = {")
 	for symbol := range mainPkg.Members {

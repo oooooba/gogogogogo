@@ -94,6 +94,12 @@ impl Value {
 }
 
 #[repr(C)]
+struct Func {
+    name: *const libc::c_char,
+    function: UserFunction,
+}
+
+#[repr(C)]
 struct StackFrameCommon {
     resume_func: FunctionObject,
     prev_stack_pointer: *mut StackFrame,
@@ -179,6 +185,44 @@ pub fn append(ctx: &mut LightWeightThreadContext) -> FunctionObject {
         let result_raw_slice = result.as_raw_slice().unwrap();
         for i in 0..elements_raw_slice.len() {
             result_raw_slice[base.size + i] = elements_raw_slice[i];
+        }
+    }
+
+    leave_runtime_api(ctx)
+}
+
+#[repr(C)]
+struct StackFrameFuncForPc {
+    common: StackFrameCommon,
+    result_ptr: *mut *const Func,
+    param0: usize,
+}
+
+pub fn func_for_pc(ctx: &mut LightWeightThreadContext) -> FunctionObject {
+    let (param0, result) = unsafe {
+        let (param0_ptr, result_ptr) = {
+            let stack_frame = &mut ctx.stack_pointer.func_for_pc;
+            (
+                &stack_frame.param0 as *const usize,
+                stack_frame.result_ptr as *mut *const Func,
+            )
+        };
+        (*param0_ptr, &mut *result_ptr)
+    };
+
+    extern "C" {
+        fn runtime_info_get_funcs_count() -> libc::size_t;
+        fn runtime_info_refer_func(i: libc::size_t) -> *const Func;
+    }
+
+    *result = ptr::null();
+    unsafe {
+        for i in 0..runtime_info_get_funcs_count() {
+            let func = runtime_info_refer_func(i);
+            if (*func).function.0 as usize == param0 {
+                *result = func;
+                break;
+            }
         }
     }
 
@@ -485,6 +529,7 @@ pub union StackFrame {
     pub words: [*mut (); 0],
     common: ManuallyDrop<StackFrameCommon>,
     append: ManuallyDrop<StackFrameAppend>,
+    func_for_pc: ManuallyDrop<StackFrameFuncForPc>,
     make_chan: ManuallyDrop<StackFrameMakeChan>,
     make_closure: ManuallyDrop<StackFrameMakeClosure>,
     new: ManuallyDrop<StackFrameNew>,
