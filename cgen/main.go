@@ -1140,7 +1140,7 @@ DECLARE_RUNTIME_API(make_chan, StackFrameMakeChan);
 
 struct StackFrameMakeClosure {
 	struct StackFrameCommon common;
-	void* result_ptr;
+	struct FunctionObject* result_ptr;
 	struct UserFunction user_function;
 	uintptr_t num_object_ptrs;
 	void* object_ptrs[0];

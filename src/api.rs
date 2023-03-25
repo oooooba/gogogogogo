@@ -18,6 +18,13 @@ impl FunctionObject {
         FunctionObject(user_function.0 as *const ())
     }
 
+    pub fn from_closure_layout_ptr(closure_layout_ptr: *const ()) -> Self {
+        let addr = closure_layout_ptr as usize;
+        let flag = 1 << 63;
+        assert_eq!(addr & flag, 0);
+        FunctionObject((addr | flag) as *const ())
+    }
+
     pub fn new_null() -> Self {
         FunctionObject(ptr::null_mut())
     }
@@ -224,7 +231,7 @@ pub fn make_chan(ctx: &mut LightWeightThreadContext) -> FunctionObject {
 #[repr(C)]
 struct StackFrameMakeClosure {
     common: StackFrameCommon,
-    result_ptr: *mut ObjectPtr,
+    result_ptr: *mut FunctionObject,
     user_function: UserFunction,
     num_object_ptrs: usize,
     object_ptrs: [ObjectPtr; 0],
@@ -259,15 +266,9 @@ pub fn make_closure(ctx: &mut LightWeightThreadContext) -> FunctionObject {
         let prev_object_ptrs = mem::replace(&mut closure_layout.object_ptrs, object_ptrs);
         mem::forget(prev_object_ptrs);
     };
-    let ptr = {
-        let addr = ptr as usize;
-        let flag = 1 << 63;
-        assert_eq!(addr & flag, 0);
-        ObjectPtr((addr | flag) as *mut ())
-    };
     unsafe {
         let stack_frame = &mut ctx.stack_pointer.make_closure;
-        *stack_frame.result_ptr = ptr;
+        *stack_frame.result_ptr = FunctionObject::from_closure_layout_ptr(ptr as *const ());
     };
     leave_runtime_api(ctx)
 }
