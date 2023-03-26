@@ -116,14 +116,14 @@ struct Slice {
 }
 
 impl Slice {
-    fn as_raw_slice(&self) -> Option<&mut [isize]> {
+    fn as_raw_slice<T>(&self) -> Option<&mut [T]> {
         if self.capacity == 0 {
             return None;
         }
         assert_ne!(self.addr, ptr::null_mut());
         unsafe {
             Some(slice::from_raw_parts_mut(
-                self.addr as *mut isize,
+                self.addr as *mut T,
                 self.capacity,
             ))
         }
@@ -173,7 +173,7 @@ pub fn append(ctx: &mut LightWeightThreadContext) -> FunctionObject {
         result.capacity = new_capacity;
     }
 
-    if let Some(base_raw_slice) = base.as_raw_slice() {
+    if let Some(base_raw_slice) = base.as_raw_slice::<isize>() {
         if !has_space {
             let result_raw_slice = result.as_raw_slice().unwrap();
             result_raw_slice[..base_raw_slice.len()]
@@ -181,7 +181,7 @@ pub fn append(ctx: &mut LightWeightThreadContext) -> FunctionObject {
         }
     }
 
-    if let Some(elements_raw_slice) = elements.as_raw_slice() {
+    if let Some(elements_raw_slice) = elements.as_raw_slice::<isize>() {
         let result_raw_slice = result.as_raw_slice().unwrap();
         for i in 0..elements_raw_slice.len() {
             result_raw_slice[base.size + i] = elements_raw_slice[i];
