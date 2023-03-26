@@ -1075,6 +1075,23 @@ func findLibraryFunctions(program *ssa.Program) []*ssa.Function {
 			functions = append(functions, function)
 		}
 	}
+	for _, pkg := range program.AllPackages() {
+		if pkg.Pkg.Name() != "strings" {
+			continue
+		}
+		for symbol := range pkg.Members {
+			function, ok := pkg.Members[symbol].(*ssa.Function)
+			if !ok {
+				continue
+			}
+
+			if symbol != "Split" {
+				continue
+			}
+
+			functions = append(functions, function)
+		}
+	}
 	return functions
 }
 
@@ -1297,6 +1314,18 @@ struct StackFrameFuncForPc {
 DECLARE_RUNTIME_API(func_for_pc, StackFrameFuncForPc);
 
 #define f_S_FuncForPC gox5_func_for_pc
+
+// ToDo: WA to handle strings.Split
+
+struct StackFrameSplit {
+	struct StackFrameCommon common;
+	struct Slice* result_ptr;
+	struct StringObject param0;
+	struct StringObject param1;
+};
+DECLARE_RUNTIME_API(func_for_pc, StackFrameFuncForPc);
+
+#define f_S_Split gox5_split
 `)
 
 	mainPkg := findMainPackage(program)

@@ -85,6 +85,11 @@ pub extern "C" fn gox5_spawn(_ctx: &mut LightWeightThreadContext) -> FunctionObj
 }
 
 #[no_mangle]
+pub extern "C" fn gox5_split(ctx: &mut LightWeightThreadContext) -> FunctionObject {
+    api::split(ctx)
+}
+
+#[no_mangle]
 pub extern "C" fn gox5_value_of(ctx: &mut LightWeightThreadContext) -> FunctionObject {
     api::value_of(ctx)
 }

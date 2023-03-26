@@ -1,3 +1,4 @@
+use std::ffi;
 use std::mem;
 use std::mem::ManuallyDrop;
 use std::ptr;
@@ -82,6 +83,10 @@ pub struct Interface {
     interface_table: *const (),
 }
 
+#[derive(Clone, PartialEq, Eq, Debug)]
+#[repr(C)]
+pub struct StringObject(*const libc::c_char);
+
 #[repr(C)]
 struct Value {
     object: *mut ObjectPtr,
@@ -116,6 +121,14 @@ struct Slice {
 }
 
 impl Slice {
+    fn new(addr: *mut (), size: usize, capacity: usize) -> Self {
+        Slice {
+            addr,
+            size,
+            capacity,
+        }
+    }
+
     fn as_raw_slice<T>(&self) -> Option<&mut [T]> {
         if self.capacity == 0 {
             return None;
@@ -460,6 +473,71 @@ pub async fn spawn(ctx: &mut LightWeightThreadContext<'_>) -> FunctionObject {
 }
 
 #[repr(C)]
+struct StackFrameSplit {
+    common: StackFrameCommon,
+    result_ptr: *mut Slice,
+    param0: StringObject,
+    param1: StringObject,
+}
+
+pub fn split(ctx: &mut LightWeightThreadContext) -> FunctionObject {
+    let (param0, param1) = unsafe {
+        let (param0_ptr, param1_ptr) = {
+            let stack_frame = &mut ctx.stack_pointer.split;
+            (
+                &stack_frame.param0 as *const StringObject,
+                &stack_frame.param1 as *const StringObject,
+            )
+        };
+        (&*param0_ptr, &*param1_ptr)
+    };
+
+    let (target, sep) = unsafe {
+        let target = ffi::CStr::from_ptr(param0.0).to_str().unwrap();
+        let sep = ffi::CStr::from_ptr(param1.0).to_str().unwrap();
+        (target, sep)
+    };
+    let words: Vec<&str> = target.split(sep).collect();
+
+    let slice = {
+        let size = words.len();
+        let capacity = size;
+        let buffer_size = capacity * mem::size_of::<StringObject>();
+        let addr = ctx.global_context.process(|mut global_context| {
+            global_context.allocator().allocate(buffer_size, |_ptr| {})
+        });
+        Slice::new(addr, size, capacity)
+    };
+
+    if let Some(raw_slice) = slice.as_raw_slice::<StringObject>() {
+        for i in 0..raw_slice.len() {
+            let src_bytes = words[i].as_bytes();
+            let len = src_bytes.len();
+
+            let ptr = ctx.global_context.process(|mut global_context| {
+                global_context.allocator().allocate(len + 1, |_| {}) as *mut libc::c_char
+            });
+            let dst_bytes = unsafe { slice::from_raw_parts_mut(ptr, len + 1) };
+
+            for j in 0..len {
+                dst_bytes[j] = src_bytes[j] as libc::c_char;
+            }
+            dst_bytes[len] = 0;
+
+            raw_slice[i] = StringObject(ptr)
+        }
+    }
+
+    unsafe {
+        let stack_frame = &mut ctx.stack_pointer.split;
+        ptr::copy_nonoverlapping(&slice, stack_frame.result_ptr, 1);
+    }
+    mem::forget(slice);
+
+    leave_runtime_api(ctx)
+}
+
+#[repr(C)]
 struct StackFrameValueOf {
     common: StackFrameCommon,
     result_ptr: *mut Value,
@@ -536,6 +614,7 @@ pub union StackFrame {
     println: ManuallyDrop<StackFramePrintln>,
     recv: ManuallyDrop<StackFrameRecv>,
     send: ManuallyDrop<StackFrameSend>,
+    split: ManuallyDrop<StackFrameSplit>,
     spawn: ManuallyDrop<StackFrameSpawn>,
     value_of: ManuallyDrop<StackFrameValueOf>,
     value_pointer: ManuallyDrop<StackFrameValuePointer>,

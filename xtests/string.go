@@ -75,6 +75,36 @@ func Test6() int {
 	return 6
 }
 
+func Test7() int {
+	s := "a"
+	ss := strings.Split(s, ".")
+	if len(ss) != 1 {
+		return 0
+	}
+	if ss[0] != "a" {
+		return 1
+	}
+	return 7
+}
+
+func Test8() int {
+	s := "ab_cde_f"
+	ss := strings.Split(s, "_")
+	if len(ss) != 3 {
+		return 0
+	}
+	if ss[0] != "ab" {
+		return 1
+	}
+	if ss[1] != "cde" {
+		return 2
+	}
+	if ss[2] != "f" {
+		return 3
+	}
+	return 8
+}
+
 func main() {
 	runTest := func(test func() int) {
 		funcFullName := runtime.FuncForPC(reflect.ValueOf(test).Pointer()).Name()
@@ -87,4 +117,6 @@ func main() {
 	runTest(Test4)
 	runTest(Test5)
 	runTest(Test6)
+	runTest(Test7)
+	runTest(Test8)
 }
