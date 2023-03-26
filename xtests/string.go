@@ -56,6 +56,25 @@ func Test5() int {
 	}(s1, s2)
 }
 
+func Test6() int {
+	var s []string
+	s = append(s, "a")
+	if len(s) != 1 {
+		return 0
+	}
+	if s[0] != "a" {
+		return 1
+	}
+	s = append(s, "b")
+	if len(s) != 2 {
+		return 2
+	}
+	if s[1] != "b" {
+		return 3
+	}
+	return 6
+}
+
 func main() {
 	runTest := func(test func() int) {
 		funcFullName := runtime.FuncForPC(reflect.ValueOf(test).Pointer()).Name()
@@ -67,4 +86,5 @@ func main() {
 	runTest(Test3)
 	runTest(Test4)
 	runTest(Test5)
+	runTest(Test6)
 }
