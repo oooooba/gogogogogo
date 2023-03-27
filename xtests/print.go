@@ -12,6 +12,11 @@ func Test1() int {
 	return 1
 }
 
+func Test2() int {
+	fmt.Println("abc")
+	return 2
+}
+
 func main() {
 	runTest := func(test func() int) {
 		funcFullName := runtime.FuncForPC(reflect.ValueOf(test).Pointer()).Name()
@@ -19,4 +24,5 @@ func main() {
 		fmt.Printf("%s: %d\n", funcName, test())
 	}
 	runTest(Test1)
+	runTest(Test2)
 }

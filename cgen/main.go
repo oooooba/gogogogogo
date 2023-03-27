@@ -534,7 +534,17 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 				fmt.Fprintf(ctx.stream, "%s.receiver = %s;\n", valueName, createValueRelName(instr.X)) // ToDo: only support int
 			}
 			fmt.Fprintf(ctx.stream, "%s.num_methods = 0;\n", valueName)
-			fmt.Fprintf(ctx.stream, "%s.interface_table = NULL;\n", valueName)
+			typ := "NULL"
+			switch t := instr.X.Type().(type) {
+			case *types.Basic:
+				switch t.Kind() {
+				case types.Int, types.Int8, types.Int16, types.Int32, types.Int64, types.Uint, types.Uint8, types.Uint16, types.Uint32, types.Uint64, types.Uintptr:
+					typ = "1"
+				case types.String:
+					typ = "2"
+				}
+			}
+			fmt.Fprintf(ctx.stream, "%s.interface_table = (void*)%s;\n", valueName, typ)
 		} else {
 			fmt.Fprintf(ctx.stream, "%s.inner.receiver = %s;\n", valueName, createValueRelName(instr.X))
 			fmt.Fprintf(ctx.stream, "%s.inner.num_methods = sizeof(%s.entries)/sizeof(%s.entries[0]);\n", valueName, interfaceTableName, interfaceTableName)
@@ -1186,7 +1196,7 @@ struct InterfaceTableEntry {
 struct Interface {
 	void* receiver;
 	uintptr_t num_methods;
-	struct InterfaceTableEntry* interface_table;
+	struct InterfaceTableEntry* interface_table; // ToDo: use distinguish object type for empty interface (1: int, 2 string)
 };
 
 struct Slice {

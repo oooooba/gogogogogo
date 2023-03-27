@@ -382,8 +382,19 @@ pub fn println(ctx: &mut LightWeightThreadContext) -> FunctionObject {
     };
 
     unsafe {
-        let p = param0.addr as *const *const isize;
-        println!("{}", **p);
+        let interface = &param0.as_raw_slice::<Interface>().unwrap()[0];
+        let typ = interface.interface_table as usize;
+        if typ == 1 {
+            let p = interface.receiver.0 as *const isize;
+            let n = *p;
+            println!("{}", n);
+        } else if typ == 2 {
+            let p = interface.receiver.0 as *const *const libc::c_char;
+            let s = ffi::CStr::from_ptr(*p).to_str().unwrap();
+            println!("{}", s);
+        } else {
+            unreachable!()
+        }
     }
 
     unsafe {
