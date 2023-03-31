@@ -34,9 +34,7 @@ impl ObjectPtr {
 unsafe impl Send for ObjectPtr {}
 
 extern "C" {
-    fn test_entry_point_num() -> libc::size_t;
-    fn test_entry_point_name(i: libc::size_t) -> *const libc::c_char;
-    fn test_entry_point_function(i: libc::size_t) -> UserFunction;
+    fn runtime_info_get_entry_point() -> UserFunction;
 }
 
 #[no_mangle]
@@ -242,27 +240,15 @@ async fn main() {
     let allocator = Box::new(RuntimeObjectAllocator::new());
     let global_context = global_context::create_global_context(allocator);
     let mut ctx = create_light_weight_thread_context(global_context);
-    let stack_pointer = ctx.stack_pointer as *mut StackFrame;
-    unsafe {
-        for i in 0..test_entry_point_num() {
-            let entry_func = test_entry_point_function(i);
-            start_light_weight_thread(
-                FunctionObject::from_user_function(entry_func),
-                &mut ctx,
-                mem::size_of::<isize>(),
-                ObjectPtr(ptr::NonNull::dangling().as_ptr()),
-                0,
-            )
-            .await;
-            let result = *(stack_pointer as *const isize);
-            let name = ffi::CStr::from_ptr(test_entry_point_name(i))
-                .to_str()
-                .unwrap();
-            println!("{}: {}", name, result);
-
-            ctx.stack_pointer = &mut *stack_pointer;
-        }
-    }
+    let entry_func = unsafe { runtime_info_get_entry_point() };
+    start_light_weight_thread(
+        FunctionObject::from_user_function(entry_func),
+        &mut ctx,
+        mem::size_of::<isize>(),
+        ObjectPtr(ptr::NonNull::dangling().as_ptr()),
+        0,
+    )
+    .await;
 }
 
 #[cfg(test)]

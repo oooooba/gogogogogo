@@ -1000,6 +1000,10 @@ size_t runtime_info_get_funcs_count(void) {
 const struct Func* runtime_info_refer_func(size_t i) {
 	return &runtime_info_funcs[i];
 }
+
+struct UserFunction runtime_info_get_entry_point(void) {
+	return (struct UserFunction) { .func_ptr = f_S_main };
+}
 `)
 }
 
@@ -1139,7 +1143,7 @@ func (ctx *Context) visitAllFunctions(program *ssa.Program, procedure func(funct
 			continue
 		}
 
-		if symbol == "main" || symbol == "init" {
+		if symbol == "init" {
 			continue
 		}
 
@@ -1416,34 +1420,4 @@ DECLARE_RUNTIME_API(func_for_pc, StackFrameFuncForPc);
 	})
 
 	ctx.emitRuntimeInfo()
-
-	fmt.Fprintln(ctx.stream, "struct { const char* name; void* function; } test_entry_points[] = {")
-	for symbol := range mainPkg.Members {
-		function, ok := mainPkg.Members[symbol].(*ssa.Function)
-		if !ok {
-			continue
-		}
-		if symbol != "main" {
-			continue
-		}
-		testTargetFunctions := extractTestTargetFunctions(function)
-		for _, testTargetFunction := range testTargetFunctions {
-			fmt.Fprintf(ctx.stream, "{ \"%s\", %s },\n", testTargetFunction.Name(), createFunctionName(testTargetFunction))
-		}
-	}
-	fmt.Fprintln(ctx.stream, "};")
-
-	fmt.Fprint(ctx.stream, `
-size_t test_entry_point_num(void) {
-	return sizeof(test_entry_points)/sizeof(test_entry_points[0]);
-}
-
-const char* test_entry_point_name(size_t i) {
-	return test_entry_points[i].name;
-}
-
-void* test_entry_point_function(size_t i) {
-	return test_entry_points[i].function;
-}
-`)
 }
