@@ -33,6 +33,15 @@ func Test4() int {
 	}(s)
 }
 
+func Test5() int {
+	n := 44
+	s := "ghi"
+	return func(n int, s string) int {
+		fmt.Printf("%s: %d\n", s, n)
+		return 5
+	}(n, s)
+}
+
 func main() {
 	runTest := func(test func() int) {
 		funcFullName := runtime.FuncForPC(reflect.ValueOf(test).Pointer()).Name()
@@ -43,4 +52,5 @@ func main() {
 	runTest(Test2)
 	runTest(Test3)
 	runTest(Test4)
+	runTest(Test5)
 }

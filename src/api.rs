@@ -379,6 +379,70 @@ pub fn new(ctx: &mut LightWeightThreadContext) -> FunctionObject {
 }
 
 #[repr(C)]
+struct StackFramePrintf {
+    common: StackFrameCommon,
+    result_ptr: *mut PrintlnResult,
+    param0: StringObject,
+    param1: Slice,
+}
+
+pub fn printf(ctx: &mut LightWeightThreadContext) -> FunctionObject {
+    let (param0, param1) = unsafe {
+        let stack_frame = &mut ctx.stack_pointer.printf;
+        (&stack_frame.param0, &stack_frame.param1)
+    };
+
+    let interfaces = vec![
+        &param1.as_raw_slice::<Interface>().unwrap()[0],
+        &param1.as_raw_slice::<Interface>().unwrap()[1],
+    ];
+
+    let len = unsafe {
+        let s = ffi::CStr::from_ptr(param0.0).to_str().unwrap();
+        s.len()
+    };
+
+    let fmt_bytes = unsafe { slice::from_raw_parts(param0.0, len + 1) };
+    assert_eq!(fmt_bytes[len], 0);
+
+    let mut i = 0;
+    let mut j = 0;
+    while i < len {
+        let c = fmt_bytes[i] as u8 as char;
+        if c == '%' {
+            let f = fmt_bytes[i + 1] as u8 as char;
+            let interface = &interfaces[j];
+            let typ = interface.interface_table as usize;
+            match (f, typ) {
+                ('d', 1) => {
+                    let p = interface.receiver.0 as *const isize;
+                    let n = unsafe { *p };
+                    print!("{}", n);
+                }
+                ('s', 2) => {
+                    let p = interface.receiver.0 as *const *const libc::c_char;
+                    let s = unsafe { ffi::CStr::from_ptr(*p).to_str().unwrap() };
+                    print!("{}", s);
+                }
+                _ => panic!(),
+            }
+            i += 1;
+            j += 1;
+        } else {
+            print!("{}", c);
+        }
+        i += 1;
+    }
+
+    unsafe {
+        let stack_frame = &mut ctx.stack_pointer.printf;
+        ptr::write_bytes(stack_frame.result_ptr, 0, 1);
+    }
+
+    leave_runtime_api(ctx)
+}
+
+#[repr(C)]
 struct PrintlnResult {
     e0: isize,
     e1: Interface,
@@ -645,6 +709,7 @@ pub union StackFrame {
     make_chan: ManuallyDrop<StackFrameMakeChan>,
     make_closure: ManuallyDrop<StackFrameMakeClosure>,
     new: ManuallyDrop<StackFrameNew>,
+    printf: ManuallyDrop<StackFramePrintf>,
     println: ManuallyDrop<StackFramePrintln>,
     recv: ManuallyDrop<StackFrameRecv>,
     send: ManuallyDrop<StackFrameSend>,

@@ -1024,7 +1024,7 @@ func findLibraryFunctions(program *ssa.Program) []*ssa.Function {
 				continue
 			}
 
-			if symbol != "Println" {
+			if symbol != "Println" && symbol != "Printf" {
 				continue
 			}
 
@@ -1299,6 +1299,18 @@ DECLARE_RUNTIME_API(println, StackFramePrintln);
 
 #define f_S_Println gox5_println
 #define Tuple_lt_intptr___t_S_error_gt_ PrintlnResult
+
+// ToDo: WA to handle fmt.Printf
+
+struct StackFramePrintf {
+	struct StackFrameCommon common;
+	struct PrintlnResult* result_ptr;
+	struct StringObject param0;
+	struct Slice param1;
+};
+DECLARE_RUNTIME_API(printf, StackFramePrintf);
+
+#define f_S_Printf gox5_printf
 
 // ToDo: WA to handle reflect.ValueOf
 
