@@ -37,7 +37,6 @@ func main() {
 
 	if false {
 		var keywords []string
-		keywords = []string{"Test2"}
 		ctx.visitAllFunctions(prog, func(function *ssa.Function) {
 			for _, keyword := range keywords {
 				if strings.Contains(function.Name(), keyword) {
