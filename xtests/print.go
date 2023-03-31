@@ -17,6 +17,22 @@ func Test2() int {
 	return 2
 }
 
+func Test3() int {
+	n := 43
+	return func(n int) int {
+		fmt.Println(n)
+		return 3
+	}(n)
+}
+
+func Test4() int {
+	s := "def"
+	return func(s string) int {
+		fmt.Println(s)
+		return 4
+	}(s)
+}
+
 func main() {
 	runTest := func(test func() int) {
 		funcFullName := runtime.FuncForPC(reflect.ValueOf(test).Pointer()).Name()
@@ -25,4 +41,6 @@ func main() {
 	}
 	runTest(Test1)
 	runTest(Test2)
+	runTest(Test3)
+	runTest(Test4)
 }

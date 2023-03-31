@@ -531,7 +531,7 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 				fmt.Fprintf(ctx.stream, "%s.receiver = &frame->%s;\n", valueName, id)
 
 			default:
-				fmt.Fprintf(ctx.stream, "%s.receiver = %s;\n", valueName, createValueRelName(instr.X)) // ToDo: only support int
+				fmt.Fprintf(ctx.stream, "%s.receiver = &%s;\n", valueName, createValueRelName(instr.X))
 			}
 			fmt.Fprintf(ctx.stream, "%s.num_methods = 0;\n", valueName)
 			typ := "NULL"
