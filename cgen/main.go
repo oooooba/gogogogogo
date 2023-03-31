@@ -989,7 +989,7 @@ func (ctx *Context) emitInterfaceTable(typ *ssa.Type) {
 func (ctx *Context) emitRuntimeInfo() {
 	fmt.Fprintln(ctx.stream, "struct Func runtime_info_funcs[] = {")
 	ctx.visitAllFunctions(ctx.program, func(function *ssa.Function) {
-		fmt.Fprintf(ctx.stream, "{ (struct StringObject){.str_ptr = \"%s\" }, (struct UserFunction){.func_ptr = %s} },\n", function.Name(), createFunctionName(function))
+		fmt.Fprintf(ctx.stream, "{ (struct StringObject){.str_ptr = \"main.%s\" }, (struct UserFunction){.func_ptr = %s} },\n", function.Name(), createFunctionName(function))
 	})
 	fmt.Fprintln(ctx.stream, "};")
 
