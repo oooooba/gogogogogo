@@ -75,6 +75,26 @@ func Test6() int {
 	}
 }
 
+func Test7() int {
+	v1 := runtime.FuncForPC(reflect.ValueOf(test1_f).Pointer()).Name()
+	v2 := runtime.FuncForPC(reflect.ValueOf(test1_f).Pointer()).Name()
+	if v1 == v2 {
+		return 7
+	} else {
+		return 0
+	}
+}
+
+func Test8() int {
+	v1 := runtime.FuncForPC(reflect.ValueOf(test1_f).Pointer()).Name()
+	v2 := runtime.FuncForPC(reflect.ValueOf(test2_f).Pointer()).Name()
+	if v1 == v2 {
+		return 0
+	} else {
+		return 8
+	}
+}
+
 func main() {
 	runTest := func(test func() int) {
 		funcFullName := runtime.FuncForPC(reflect.ValueOf(test).Pointer()).Name()
@@ -87,4 +107,6 @@ func main() {
 	runTest(Test4)
 	runTest(Test5)
 	runTest(Test6)
+	runTest(Test7)
+	runTest(Test8)
 }

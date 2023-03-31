@@ -50,6 +50,11 @@ pub extern "C" fn gox5_func_for_pc(ctx: &mut LightWeightThreadContext) -> Functi
 }
 
 #[no_mangle]
+pub extern "C" fn gox5_func_name(ctx: &mut LightWeightThreadContext) -> FunctionObject {
+    api::func_name(ctx)
+}
+
+#[no_mangle]
 pub extern "C" fn gox5_make_chan(ctx: &mut LightWeightThreadContext) -> FunctionObject {
     api::make_chan(ctx)
 }

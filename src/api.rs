@@ -100,7 +100,7 @@ impl Value {
 
 #[repr(C)]
 struct Func {
-    name: *const libc::c_char,
+    name: StringObject,
     function: UserFunction,
 }
 
@@ -237,6 +237,28 @@ pub fn func_for_pc(ctx: &mut LightWeightThreadContext) -> FunctionObject {
                 break;
             }
         }
+    }
+
+    leave_runtime_api(ctx)
+}
+
+#[repr(C)]
+struct StackFrameFuncName {
+    common: StackFrameCommon,
+    result_ptr: *mut StringObject,
+    param0: *const Func,
+}
+
+pub fn func_name(ctx: &mut LightWeightThreadContext) -> FunctionObject {
+    let (param0, result) = unsafe {
+        let stack_frame = &mut ctx.stack_pointer.func_name;
+        (&*stack_frame.param0, &mut *stack_frame.result_ptr)
+    };
+
+    let s = param0.name.clone();
+
+    unsafe {
+        ptr::copy_nonoverlapping(&s, result, 1);
     }
 
     leave_runtime_api(ctx)
@@ -619,6 +641,7 @@ pub union StackFrame {
     common: ManuallyDrop<StackFrameCommon>,
     append: ManuallyDrop<StackFrameAppend>,
     func_for_pc: ManuallyDrop<StackFrameFuncForPc>,
+    func_name: ManuallyDrop<StackFrameFuncName>,
     make_chan: ManuallyDrop<StackFrameMakeChan>,
     make_closure: ManuallyDrop<StackFrameMakeClosure>,
     new: ManuallyDrop<StackFrameNew>,
