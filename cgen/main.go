@@ -550,6 +550,10 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 			fmt.Fprintf(ctx.stream, "%s.inner.interface_table = &%s.entries[0];\n", valueName, interfaceTableName)
 		}
 
+	case *ssa.Panic:
+		fmt.Fprintf(ctx.stream, "fprintf(stderr, \"panic\\n\");\n")
+		fmt.Fprintf(ctx.stream, "assert(false);\n")
+
 	case *ssa.Phi:
 		basicBlock := instr.Block()
 		for i, edge := range instr.Edges {
