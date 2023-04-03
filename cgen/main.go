@@ -137,6 +137,8 @@ func createValueName(value ssa.Value) string {
 			}
 		}
 		panic(fmt.Sprintf("unreachable: val=%s, params=%v", val, val.Parent().Params))
+	} else if _, ok := value.(*ssa.Global); ok {
+		return encode(fmt.Sprintf("gv$%s$%p", value.Name(), value))
 	} else {
 		parentName := value.Parent().Name()
 		return encode(fmt.Sprintf("v$%s$%s$%p", value.Name(), parentName, value))
@@ -153,6 +155,8 @@ func createValueRelName(value ssa.Value) string {
 	} else if _, ok := value.(*ssa.FreeVar); ok {
 		return fmt.Sprintf("((struct FreeVars_%s*)frame->common.free_vars)->%s",
 			createFunctionName(value.Parent()), createValueName(value))
+	} else if _, ok := value.(*ssa.Global); ok {
+		return fmt.Sprintf("&%s", createValueName(value))
 	} else {
 		return fmt.Sprintf("frame->%s", createValueName(value))
 	}
@@ -688,6 +692,9 @@ func (ctx *Context) emitValueDeclaration(value ssa.Value) {
 	case *ssa.FieldAddr:
 		ctx.emitValueDeclaration(val.X)
 
+	case *ssa.Global:
+		canEmit = false
+
 	case *ssa.FreeVar:
 		canEmit = false
 
@@ -987,6 +994,11 @@ func (ctx *Context) emitInterfaceTable(typ *ssa.Type) {
 		fmt.Fprintf(ctx.stream, "\t{\"%s\", %s},\n", methodName, method)
 	}
 	fmt.Fprintln(ctx.stream, "}};")
+}
+
+func (ctx *Context) emitGlobalVariable(gv *ssa.Global) {
+	name := createValueName(gv)
+	fmt.Fprintf(ctx.stream, "%s;\n", createType(gv.Type().(*types.Pointer).Elem(), name))
 }
 
 func (ctx *Context) emitRuntimeInfo() {
@@ -1415,6 +1427,14 @@ DECLARE_RUNTIME_API(func_for_pc, StackFrameFuncForPc);
 			continue
 		}
 		ctx.emitInterfaceTable(typ)
+	}
+
+	for member := range mainPkg.Members {
+		gv, ok := mainPkg.Members[member].(*ssa.Global)
+		if !ok {
+			continue
+		}
+		ctx.emitGlobalVariable(gv)
 	}
 
 	ctx.visitAllFunctions(program, func(function *ssa.Function) {
