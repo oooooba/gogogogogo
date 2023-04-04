@@ -156,7 +156,7 @@ func createValueRelName(value ssa.Value) string {
 		return fmt.Sprintf("((struct FreeVars_%s*)frame->common.free_vars)->%s",
 			createFunctionName(value.Parent()), createValueName(value))
 	} else if _, ok := value.(*ssa.Global); ok {
-		return fmt.Sprintf("&%s", createValueName(value))
+		return fmt.Sprintf("(&%s)", createValueName(value))
 	} else {
 		return fmt.Sprintf("frame->%s", createValueName(value))
 	}

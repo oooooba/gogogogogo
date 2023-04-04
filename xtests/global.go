@@ -23,6 +23,30 @@ func Test2() int {
 	return v2
 }
 
+type S3 struct {
+	x int
+}
+
+var v3 S3
+
+func Test3() int {
+	if v3.x != 0 {
+		return 0
+	}
+	return 3
+}
+
+type S4 struct {
+	x int
+}
+
+var v4 S4
+
+func Test4() int {
+	v4 = S4{4}
+	return v4.x
+}
+
 func main() {
 	runTest := func(test func() int) {
 		funcFullName := runtime.FuncForPC(reflect.ValueOf(test).Pointer()).Name()
@@ -31,4 +55,6 @@ func main() {
 	}
 	runTest(Test1)
 	runTest(Test2)
+	runTest(Test3)
+	runTest(Test4)
 }
