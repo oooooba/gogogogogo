@@ -668,12 +668,7 @@ func (ctx *Context) emitValueDeclaration(value ssa.Value) {
 	canEmit := true
 	switch val := value.(type) {
 	case *ssa.Alloc:
-		if val.Heap {
-			// do nothing
-		} else {
-			id := fmt.Sprintf("%s_buf", createValueName(value))
-			fmt.Fprintf(ctx.stream, "\t%s;\n", createType(value.Type().(*types.Pointer).Elem(), id))
-		}
+		// do nothing
 
 	case *ssa.BinOp:
 		ctx.emitValueDeclaration(val.X)
@@ -875,6 +870,14 @@ func (ctx *Context) emitFunctionDeclaration(function *ssa.Function) {
 	fmt.Fprintf(ctx.stream, "\t%s signature;\n", concreteSignatureName)
 
 	if function.Blocks != nil {
+		for _, local := range function.Locals {
+			if local.Heap {
+				panic(fmt.Sprintf("%s", local))
+			}
+			id := fmt.Sprintf("%s_buf", createValueName(local))
+			fmt.Fprintf(ctx.stream, "\t%s;\n", createType(local.Type().(*types.Pointer).Elem(), id))
+		}
+
 		ctx.foundValueSet = make(map[ssa.Value]struct{})
 		for _, basicBlock := range function.DomPreorder() {
 			for _, instr := range basicBlock.Instrs {
