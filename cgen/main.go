@@ -122,7 +122,7 @@ func createValueName(value ssa.Value) string {
 				}
 
 			case *types.Named:
-				return fmt.Sprintf("(struct %s){.inner=%s}", createTypeName(val.Type()), cst)
+				return fmt.Sprintf("(%s){.inner=%s}", createTypeName(val.Type()), cst)
 
 			default:
 				panic(fmt.Sprintf("val=%s, %T, %s, %T", val, val, val.Type(), val.Type()))
@@ -228,7 +228,9 @@ func createType(typ types.Type, id string) string {
 			elemType = et.Elem()
 		}
 		return fmt.Sprintf("%s* %s", createType(elemType, ""), id)
-	case *types.Interface, *types.Named, *types.Signature, *types.Slice, *types.Struct, *types.Tuple:
+	case *types.Named, *types.Struct:
+		return fmt.Sprintf("%s %s", createTypeName(t), id)
+	case *types.Interface, *types.Signature, *types.Slice, *types.Tuple:
 		return fmt.Sprintf("struct %s %s", createTypeName(t), id)
 	}
 	panic(fmt.Sprintf("type not supported: %s", typ.String()))
@@ -944,13 +946,13 @@ func (ctx *Context) emitFunctionDefinition(function *ssa.Function) {
 func (ctx *Context) emitUnderlyingTypeDefinition(typ types.Type) {
 	switch typ := typ.(type) {
 	case *types.Struct:
-		fmt.Fprintf(ctx.stream, "%s { // %s\n", createType(typ, ""), typ)
+		fmt.Fprintf(ctx.stream, "typedef struct { // %s\n", typ)
 		for i := 0; i < typ.NumFields(); i++ {
 			field := typ.Field(i)
 			id := fmt.Sprintf("%s", field.Name())
 			fmt.Fprintf(ctx.stream, "\t%s; // %s\n", createType(field.Type(), id), field)
 		}
-		fmt.Fprintf(ctx.stream, "};\n")
+		fmt.Fprintf(ctx.stream, "} %s;\n", createTypeName(typ))
 
 	case *types.Basic:
 		// do nothing
@@ -970,7 +972,7 @@ func (ctx *Context) emitTypeDefinition(typ *ssa.Type) {
 		ctx.emitUnderlyingTypeDefinition(underlyingType)
 		typeName := createTypeName(typ)
 		inner := createType(underlyingType, "inner")
-		fmt.Fprintf(ctx.stream, "struct %s { %s; };\n", typeName, inner)
+		fmt.Fprintf(ctx.stream, "typedef struct { %s; } %s;\n", inner, typeName)
 	default:
 		panic(fmt.Sprintf("not implemented: %s %T", typ, typ))
 	}
@@ -1002,7 +1004,7 @@ func (ctx *Context) emitGlobalVariable(gv *ssa.Global) {
 }
 
 func (ctx *Context) emitRuntimeInfo() {
-	fmt.Fprintln(ctx.stream, "struct Func runtime_info_funcs[] = {")
+	fmt.Fprintln(ctx.stream, "Func runtime_info_funcs[] = {")
 	ctx.visitAllFunctions(ctx.program, func(function *ssa.Function) {
 		fmt.Fprintf(ctx.stream, "{ (struct StringObject){.str_ptr = \"main.%s\" }, (struct UserFunction){.func_ptr = %s} },\n", function.Name(), createFunctionName(function))
 	})
@@ -1013,7 +1015,7 @@ size_t runtime_info_get_funcs_count(void) {
 	return sizeof(runtime_info_funcs)/sizeof(runtime_info_funcs[0]);
 }
 
-const struct Func* runtime_info_refer_func(size_t i) {
+const Func* runtime_info_refer_func(size_t i) {
 	return &runtime_info_funcs[i];
 }
 
@@ -1334,13 +1336,13 @@ DECLARE_RUNTIME_API(printf, StackFramePrintf);
 
 // ToDo: WA to handle reflect.ValueOf
 
-struct Value {
+typedef struct {
 	intptr_t e0;
-};
+} Value;
 
 struct StackFrameValueOf {
 	struct StackFrameCommon common;
-	struct Value* result_ptr;
+	Value* result_ptr;
 	struct Interface param0;
 };
 DECLARE_RUNTIME_API(value_of, StackFrameValueOf);
@@ -1352,7 +1354,7 @@ DECLARE_RUNTIME_API(value_of, StackFrameValueOf);
 struct StackFrameValuePointer {
 	struct StackFrameCommon common;
 	intptr_t* result_ptr;
-	struct Value param0;
+	Value param0;
 };
 DECLARE_RUNTIME_API(value_pointer, StackFrameValuePointer);
 
@@ -1360,14 +1362,14 @@ DECLARE_RUNTIME_API(value_pointer, StackFrameValuePointer);
 
 // ToDo: WA to handle runtime.FuncForPC
 
-struct Func {
+typedef struct {
 	struct StringObject name;
 	struct UserFunction function;
-};
+} Func;
 
 struct StackFrameFuncForPc {
 	struct StackFrameCommon common;
-	const struct Func** result_ptr;
+	const Func** result_ptr;
 	uintptr_t param0;
 };
 DECLARE_RUNTIME_API(func_for_pc, StackFrameFuncForPc);
@@ -1379,7 +1381,7 @@ DECLARE_RUNTIME_API(func_for_pc, StackFrameFuncForPc);
 struct StackFrameFuncName {
 	struct StackFrameCommon common;
 	struct StringObject* result_ptr;
-	struct Func* param0;
+	Func* param0;
 };
 DECLARE_RUNTIME_API(func_name, StackFrameFuncName);
 
