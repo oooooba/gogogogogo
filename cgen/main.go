@@ -1448,6 +1448,10 @@ DECLARE_RUNTIME_API(func_for_pc, StackFrameFuncForPc);
 		if !ok {
 			continue
 		}
+		typ := gv.Type().(*types.Pointer).Elem()
+		if t, ok := typ.(*types.Struct); ok {
+			ctx.emitUnderlyingTypeDefinition(t)
+		}
 		ctx.emitGlobalVariable(gv)
 	}
 

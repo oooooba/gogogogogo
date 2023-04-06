@@ -47,6 +47,26 @@ func Test4() int {
 	return v4.x
 }
 
+var v5 struct {
+	x int
+}
+
+func Test5() int {
+	if v5.x != 0 {
+		return 0
+	}
+	return 5
+}
+
+var v6 struct {
+	x int
+}
+
+func Test6() int {
+	v6.x = 6
+	return v6.x
+}
+
 func main() {
 	runTest := func(test func() int) {
 		funcFullName := runtime.FuncForPC(reflect.ValueOf(test).Pointer()).Name()
@@ -57,4 +77,6 @@ func main() {
 	runTest(Test2)
 	runTest(Test3)
 	runTest(Test4)
+	runTest(Test5)
+	runTest(Test6)
 }
