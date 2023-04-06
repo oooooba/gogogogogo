@@ -122,7 +122,7 @@ func createValueName(value ssa.Value) string {
 				}
 
 			case *types.Named:
-				return fmt.Sprintf("(%s){.inner=%s}", createTypeName(val.Type()), cst)
+				return fmt.Sprintf("(%s){%s}", createTypeName(val.Type()), cst)
 
 			default:
 				panic(fmt.Sprintf("val=%s, %T, %s, %T", val, val, val.Type(), val.Type()))
@@ -228,9 +228,9 @@ func createType(typ types.Type, id string) string {
 			elemType = et.Elem()
 		}
 		return fmt.Sprintf("%s* %s", createType(elemType, ""), id)
-	case *types.Named, *types.Struct:
+	case *types.Interface, *types.Named, *types.Struct:
 		return fmt.Sprintf("%s %s", createTypeName(t), id)
-	case *types.Interface, *types.Signature, *types.Slice, *types.Tuple:
+	case *types.Signature, *types.Slice, *types.Tuple:
 		return fmt.Sprintf("struct %s %s", createTypeName(t), id)
 	}
 	panic(fmt.Sprintf("type not supported: %s", typ.String()))
@@ -271,7 +271,7 @@ func (ctx *Context) switchFunction(nextFunction string, callCommon *ssa.CallComm
 			fmt.Fprintf(ctx.stream, "signature->param%d = %s.receiver; // receiver: %s\n",
 				paramBase, createValueRelName(arg), signature.Recv())
 		} else {
-			fmt.Fprintf(ctx.stream, "signature->param%d = %s.inner.receiver; // receiver: %s\n",
+			fmt.Fprintf(ctx.stream, "signature->param%d = %s.receiver; // receiver: %s\n",
 				paramBase, createValueRelName(arg), signature.Recv())
 		}
 		paramBase++
@@ -368,7 +368,7 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 			methodName := callCommon.Method.Name()
 			fmt.Fprintf(ctx.stream, `
 			struct FunctionObject next_function = {.func_ptr = NULL};
-			struct Interface* interface = &%s.inner;
+			Interface* interface = &%s;
 			for (uintptr_t i = 0; i < interface->num_methods; ++i) {
 				struct InterfaceTableEntry* entry = &interface->interface_table[i];
 				if (strcmp(entry->method_name, "%s") == 0) {
@@ -430,13 +430,13 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 		}
 
 	case *ssa.ChangeType:
-		fmt.Fprintf(ctx.stream, "%s = %s.inner;\n", createValueRelName(instr), createValueRelName(instr.X))
+		fmt.Fprintf(ctx.stream, "%s = %s;\n", createValueRelName(instr), createValueRelName(instr.X))
 
 	case *ssa.Extract:
 		fmt.Fprintf(ctx.stream, "%s = %s.e%d;\n", createValueRelName(instr), createValueRelName(instr.Tuple), instr.Index)
 
 	case *ssa.FieldAddr:
-		fmt.Fprintf(ctx.stream, "%s = &%s->inner.%s;\n", createValueRelName(instr), createValueRelName(instr.X), instr.X.Type().(*types.Pointer).Elem().Underlying().(*types.Struct).Field(instr.Field).Name())
+		fmt.Fprintf(ctx.stream, "%s = &%s->%s;\n", createValueRelName(instr), createValueRelName(instr.X), instr.X.Type().(*types.Pointer).Elem().Underlying().(*types.Struct).Field(instr.Field).Name())
 
 	case *ssa.IndexAddr:
 		if _, ok := instr.X.Type().(*types.Slice); ok {
@@ -551,9 +551,9 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 			}
 			fmt.Fprintf(ctx.stream, "%s.interface_table = (void*)%s;\n", valueName, typ)
 		} else {
-			fmt.Fprintf(ctx.stream, "%s.inner.receiver = %s;\n", valueName, createValueRelName(instr.X))
-			fmt.Fprintf(ctx.stream, "%s.inner.num_methods = sizeof(%s.entries)/sizeof(%s.entries[0]);\n", valueName, interfaceTableName, interfaceTableName)
-			fmt.Fprintf(ctx.stream, "%s.inner.interface_table = &%s.entries[0];\n", valueName, interfaceTableName)
+			fmt.Fprintf(ctx.stream, "%s.receiver = %s;\n", valueName, createValueRelName(instr.X))
+			fmt.Fprintf(ctx.stream, "%s.num_methods = sizeof(%s.entries)/sizeof(%s.entries[0]);\n", valueName, interfaceTableName, interfaceTableName)
+			fmt.Fprintf(ctx.stream, "%s.interface_table = &%s.entries[0];\n", valueName, interfaceTableName)
 		}
 
 	case *ssa.Panic:
@@ -971,8 +971,8 @@ func (ctx *Context) emitTypeDefinition(typ *ssa.Type) {
 		underlyingType := typ.Underlying()
 		ctx.emitUnderlyingTypeDefinition(underlyingType)
 		typeName := createTypeName(typ)
-		inner := createType(underlyingType, "inner")
-		fmt.Fprintf(ctx.stream, "typedef struct { %s; } %s;\n", inner, typeName)
+		underlyingTypeName := createTypeName(underlyingType)
+		fmt.Fprintf(ctx.stream, "typedef %s %s;\n", underlyingTypeName, typeName)
 	default:
 		panic(fmt.Sprintf("not implemented: %s %T", typ, typ))
 	}
@@ -1233,11 +1233,11 @@ struct InterfaceTableEntry {
 	struct FunctionObject method;
 };
 
-struct Interface {
+typedef struct {
 	void* receiver;
 	uintptr_t num_methods;
 	struct InterfaceTableEntry* interface_table; // ToDo: use distinguish object type for empty interface (1: int, 2 string)
-};
+} Interface;
 
 struct Slice {
 	void* addr;
@@ -1309,7 +1309,7 @@ struct Tuple_lt_intptr___t_S_intptr___t_gt_ {
 
 struct PrintlnResult {
 	intptr_t e0;
-	struct Interface e1;
+	Interface e1;
 };
 
 struct StackFramePrintln {
@@ -1343,7 +1343,7 @@ typedef struct {
 struct StackFrameValueOf {
 	struct StackFrameCommon common;
 	Value* result_ptr;
-	struct Interface param0;
+	Interface param0;
 };
 DECLARE_RUNTIME_API(value_of, StackFrameValueOf);
 
