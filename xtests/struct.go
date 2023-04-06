@@ -122,6 +122,11 @@ func Test15() int {
 	return s.methodCopyRead()
 }
 
+func Test16() int {
+	s := struct{ x int }{16}
+	return s.x
+}
+
 func main() {
 	runTest := func(test func() int) {
 		funcFullName := runtime.FuncForPC(reflect.ValueOf(test).Pointer()).Name()
@@ -143,4 +148,5 @@ func main() {
 	runTest(Test13)
 	runTest(Test14)
 	runTest(Test15)
+	runTest(Test16)
 }

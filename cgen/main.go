@@ -1411,6 +1411,15 @@ DECLARE_RUNTIME_API(func_for_pc, StackFrameFuncForPc);
 	}
 
 	ctx.visitAllFunctions(program, func(function *ssa.Function) {
+		for _, local := range function.Locals {
+			typ := local.Type().(*types.Pointer).Elem()
+			if t, ok := typ.(*types.Struct); ok {
+				ctx.emitUnderlyingTypeDefinition(t)
+			}
+		}
+	})
+
+	ctx.visitAllFunctions(program, func(function *ssa.Function) {
 		ctx.emitFunctionDeclaration(function)
 	})
 
