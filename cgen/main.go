@@ -944,7 +944,7 @@ func (ctx *Context) emitFunctionDefinition(function *ssa.Function) {
 	}
 }
 
-func (ctx *Context) emitUnderlyingTypeDefinition(typ types.Type) {
+func (ctx *Context) emitTypeDefinition(typ types.Type) {
 	switch typ := typ.(type) {
 	case *types.Struct:
 		fmt.Fprintf(ctx.stream, "typedef struct { // %s\n", typ)
@@ -966,16 +966,44 @@ func (ctx *Context) emitUnderlyingTypeDefinition(typ types.Type) {
 	}
 }
 
-func (ctx *Context) emitTypeDefinition(typ *ssa.Type) {
-	switch typ := typ.Type().(type) {
-	case *types.Named:
-		underlyingType := typ.Underlying()
-		ctx.emitUnderlyingTypeDefinition(underlyingType)
-		typeName := createTypeName(typ)
-		underlyingTypeName := createTypeName(underlyingType)
-		fmt.Fprintf(ctx.stream, "typedef %s %s;\n", underlyingTypeName, typeName)
-	default:
-		panic(fmt.Sprintf("not implemented: %s %T", typ, typ))
+func (ctx *Context) emitType() {
+	mainPkg := findMainPackage(ctx.program)
+
+	for member := range mainPkg.Members {
+		typ, ok := mainPkg.Members[member].(*ssa.Type)
+		if !ok {
+			continue
+		}
+		switch typ := typ.Type().(type) {
+		case *types.Named:
+			underlyingType := typ.Underlying()
+			ctx.emitTypeDefinition(underlyingType)
+			typeName := createTypeName(typ)
+			underlyingTypeName := createTypeName(underlyingType)
+			fmt.Fprintf(ctx.stream, "typedef %s %s;\n", underlyingTypeName, typeName)
+		default:
+			panic(fmt.Sprintf("not implemented: %s %T", typ, typ))
+		}
+	}
+
+	ctx.visitAllFunctions(ctx.program, func(function *ssa.Function) {
+		for _, local := range function.Locals {
+			typ := local.Type().(*types.Pointer).Elem()
+			if t, ok := typ.(*types.Struct); ok {
+				ctx.emitTypeDefinition(t)
+			}
+		}
+	})
+
+	for member := range mainPkg.Members {
+		gv, ok := mainPkg.Members[member].(*ssa.Global)
+		if !ok {
+			continue
+		}
+		typ := gv.Type().(*types.Pointer).Elem()
+		if t, ok := typ.(*types.Struct); ok {
+			ctx.emitTypeDefinition(t)
+		}
 	}
 }
 
@@ -1401,24 +1429,9 @@ DECLARE_RUNTIME_API(func_for_pc, StackFrameFuncForPc);
 #define f_S_Split gox5_split
 `)
 
+	ctx.emitType()
+
 	mainPkg := findMainPackage(program)
-
-	for member := range mainPkg.Members {
-		typ, ok := mainPkg.Members[member].(*ssa.Type)
-		if !ok {
-			continue
-		}
-		ctx.emitTypeDefinition(typ)
-	}
-
-	ctx.visitAllFunctions(program, func(function *ssa.Function) {
-		for _, local := range function.Locals {
-			typ := local.Type().(*types.Pointer).Elem()
-			if t, ok := typ.(*types.Struct); ok {
-				ctx.emitUnderlyingTypeDefinition(t)
-			}
-		}
-	})
 
 	ctx.visitAllFunctions(program, func(function *ssa.Function) {
 		ctx.emitFunctionDeclaration(function)
@@ -1445,10 +1458,6 @@ DECLARE_RUNTIME_API(func_for_pc, StackFrameFuncForPc);
 		gv, ok := mainPkg.Members[member].(*ssa.Global)
 		if !ok {
 			continue
-		}
-		typ := gv.Type().(*types.Pointer).Elem()
-		if t, ok := typ.(*types.Struct); ok {
-			ctx.emitUnderlyingTypeDefinition(t)
 		}
 		ctx.emitGlobalVariable(gv)
 	}
