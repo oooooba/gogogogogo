@@ -30,7 +30,7 @@ func main() {
 	ctx := Context{
 		stream:           os.Stdout,
 		program:          prog,
-		foundTypeSet:     make(map[types.Type]struct{}),
+		foundTypeSet:     make(map[string]struct{}),
 		latestNameMap:    make(map[*ssa.BasicBlock]string),
 		signatureNameSet: make(map[string]struct{}),
 	}
@@ -54,7 +54,7 @@ type Context struct {
 	stream           *os.File
 	program          *ssa.Program
 	foundValueSet    map[ssa.Value]struct{}
-	foundTypeSet     map[types.Type]struct{}
+	foundTypeSet     map[string]struct{}
 	latestNameMap    map[*ssa.BasicBlock]string
 	signatureNameSet map[string]struct{}
 }
@@ -175,7 +175,7 @@ func createValueRelName(value ssa.Value) string {
 func createTypeName(typ types.Type) string {
 	switch t := typ.(type) {
 	case *types.Array:
-		return fmt.Sprintf("%s_arr%d", createTypeName(t.Elem()), t.Len())
+		return encode(fmt.Sprintf("Array<%s$%d>", createTypeName(t.Elem()), t.Len()))
 	case *types.Basic:
 		switch t.Kind() {
 		case types.Bool:
@@ -222,8 +222,8 @@ func createTypeName(typ types.Type) string {
 
 func createType(typ types.Type, id string) string {
 	switch t := typ.(type) {
-	case *types.Array:
-		return fmt.Sprintf("%s %s[%d]", createType(t.Elem(), ""), id, t.Len())
+	case *types.Array, *types.Interface, *types.Named, *types.Signature, *types.Slice, *types.Struct, *types.Tuple:
+		return fmt.Sprintf("%s %s", createTypeName(t), id)
 	case *types.Basic:
 		if t.Kind() == types.String {
 			return fmt.Sprintf("%s %s", createTypeName(t), id)
@@ -238,8 +238,6 @@ func createType(typ types.Type, id string) string {
 			elemType = et.Elem()
 		}
 		return fmt.Sprintf("%s* %s", createType(elemType, ""), id)
-	case *types.Interface, *types.Named, *types.Signature, *types.Slice, *types.Struct, *types.Tuple:
-		return fmt.Sprintf("%s %s", createTypeName(t), id)
 	}
 	panic(fmt.Sprintf("type not supported: %s", typ.String()))
 }
@@ -338,14 +336,13 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 				paramArgPair{param: "size", arg: fmt.Sprintf("sizeof(%s)", createType(instr.Type().(*types.Pointer).Elem(), ""))},
 			)
 		} else {
-			address_of_op := "&"
+			v := createValueRelName(instr)
 			if _, ok := instr.Type().(*types.Pointer).Elem().(*types.Array); ok {
-				address_of_op = ""
+				fmt.Fprintf(ctx.stream, "%s = %s_buf.raw;\n", v, v)
+			} else {
+				fmt.Fprintf(ctx.stream, "%s = &%s_buf;\n", v, v)
 			}
-			fmt.Fprintf(ctx.stream, `
-	%s = %s%s_buf;
-	memset(%s, 0, sizeof(%s_buf));
-`, createValueRelName(instr), address_of_op, createValueRelName(instr), createValueRelName(instr), createValueRelName(instr))
+			fmt.Fprintf(ctx.stream, "memset(%s, 0, sizeof(%s_buf));\n", v, v)
 		}
 
 	case *ssa.BinOp:
@@ -631,7 +628,7 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 
 	case *ssa.Store:
 		if _, ok := instr.Val.Type().(*types.Array); ok {
-			fmt.Fprintf(ctx.stream, "memcpy(%s, %s, sizeof(%s));\n", createValueRelName(instr.Addr), createValueRelName(instr.Val), createValueRelName(instr.Val))
+			fmt.Fprintf(ctx.stream, "memcpy(%s, %s.raw, sizeof(%s));\n", createValueRelName(instr.Addr), createValueRelName(instr.Val), createValueRelName(instr.Val))
 		} else {
 			fmt.Fprintf(ctx.stream, "*%s = %s;\n", createValueRelName(instr.Addr), createValueRelName(instr.Val))
 		}
@@ -964,7 +961,19 @@ func (ctx *Context) emitFunctionDefinition(function *ssa.Function) {
 }
 
 func (ctx *Context) emitTypeDefinition(typ types.Type) {
+	name := createTypeName(typ)
+	_, ok := ctx.foundTypeSet[name]
+	if ok {
+		return
+	}
+	ctx.foundTypeSet[name] = struct{}{}
+
 	switch typ := typ.(type) {
+	case *types.Array:
+		fmt.Fprintf(ctx.stream, "typedef struct { // %s\n", typ)
+		fmt.Fprintf(ctx.stream, "\t%s raw[%d];\n", createType(typ.Elem(), ""), typ.Len())
+		fmt.Fprintf(ctx.stream, "} %s;\n", name)
+
 	case *types.Struct:
 		fmt.Fprintf(ctx.stream, "typedef struct { // %s\n", typ)
 		for i := 0; i < typ.NumFields(); i++ {
@@ -972,12 +981,25 @@ func (ctx *Context) emitTypeDefinition(typ types.Type) {
 			id := fmt.Sprintf("%s", field.Name())
 			fmt.Fprintf(ctx.stream, "\t%s; // %s\n", createType(field.Type(), id), field)
 		}
-		fmt.Fprintf(ctx.stream, "} %s;\n", createTypeName(typ))
+		fmt.Fprintf(ctx.stream, "} %s;\n", name)
 
 	case *types.Basic:
 		// do nothing
 
+	case *types.Chan:
+		// do nothing
+
 	case *types.Interface:
+		// do nothing
+
+	case *types.Named:
+		underlyingType := typ.Underlying()
+		ctx.emitTypeDefinition(underlyingType)
+		typeName := createTypeName(typ)
+		underlyingTypeName := createTypeName(underlyingType)
+		fmt.Fprintf(ctx.stream, "typedef %s %s;\n", underlyingTypeName, typeName)
+
+	case *types.Pointer:
 		// do nothing
 
 	default:
@@ -993,16 +1015,7 @@ func (ctx *Context) emitType() {
 		if !ok {
 			continue
 		}
-		switch typ := typ.Type().(type) {
-		case *types.Named:
-			underlyingType := typ.Underlying()
-			ctx.emitTypeDefinition(underlyingType)
-			typeName := createTypeName(typ)
-			underlyingTypeName := createTypeName(underlyingType)
-			fmt.Fprintf(ctx.stream, "typedef %s %s;\n", underlyingTypeName, typeName)
-		default:
-			panic(fmt.Sprintf("not implemented: %s %T", typ, typ))
-		}
+		ctx.emitTypeDefinition(typ.Type())
 	}
 
 	ctx.visitAllFunctions(ctx.program, func(function *ssa.Function) {
@@ -1010,6 +1023,26 @@ func (ctx *Context) emitType() {
 			typ := local.Type().(*types.Pointer).Elem()
 			if t, ok := typ.(*types.Struct); ok {
 				ctx.emitTypeDefinition(t)
+			}
+			if t, ok := local.Type().(*types.Array); ok {
+				ctx.emitTypeDefinition(t)
+			}
+			if t, ok := typ.(*types.Array); ok {
+				ctx.emitTypeDefinition(t)
+			}
+		}
+	})
+
+	ctx.visitAllFunctions(ctx.program, func(function *ssa.Function) {
+		if function.Blocks == nil {
+			return
+		}
+		for _, basicBlock := range function.DomPreorder() {
+			for _, instr := range basicBlock.Instrs {
+				if alloc, ok := instr.(*ssa.Alloc); ok && alloc.Heap {
+					t := alloc.Type().(*types.Pointer).Elem()
+					ctx.emitTypeDefinition(t)
+				}
 			}
 		}
 	})
