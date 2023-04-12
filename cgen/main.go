@@ -186,7 +186,7 @@ func createTypeName(typ types.Type) string {
 			return fmt.Sprintf("StringObject")
 		}
 	case *types.Chan:
-		return fmt.Sprintf("Channel_ptr")
+		return fmt.Sprintf("ChannelObject")
 	case *types.Interface:
 		return fmt.Sprintf("Interface")
 	case *types.Named:
@@ -231,7 +231,7 @@ func createType(typ types.Type, id string) string {
 			return fmt.Sprintf("%s %s", createTypeName(t), id)
 		}
 	case *types.Chan:
-		return fmt.Sprintf("Channel* %s", id)
+		return fmt.Sprintf("ChannelObject %s", id)
 	case *types.Pointer:
 		elemType := t.Elem()
 		if et, ok := elemType.(*types.Array); ok {
@@ -1291,6 +1291,10 @@ typedef struct {
 } BoolObject;
 
 typedef struct {
+	void* raw;
+} ChannelObject;
+
+typedef struct {
 	const void* func_ptr;
 } FunctionObject;
 
@@ -1314,8 +1318,6 @@ typedef struct {
 	UserFunction prev_func;
 	intptr_t marker;
 } LightWeightThreadContext;
-
-typedef struct Channel Channel;
 
 typedef struct {
 	const char* method_name;
@@ -1344,7 +1346,7 @@ DECLARE_RUNTIME_API(append, StackFrameAppend);
 
 typedef struct {
 	StackFrameCommon common;
-	Channel** result_ptr;
+	ChannelObject* result_ptr;
 	IntObject size; // ToDo: correct to proper type
 } StackFrameMakeChan;
 DECLARE_RUNTIME_API(make_chan, StackFrameMakeChan);
@@ -1368,13 +1370,13 @@ DECLARE_RUNTIME_API(new, StackFrameNew);
 typedef struct {
 	StackFrameCommon common;
 	IntObject* result_ptr;
-	Channel* channel;
+	ChannelObject channel;
 } StackFrameRecv;
 DECLARE_RUNTIME_API(recv, StackFrameRecv);
 
 typedef struct {
 	StackFrameCommon common;
-	Channel* channel;
+	ChannelObject channel;
 	IntObject data;
 } StackFrameSend;
 DECLARE_RUNTIME_API(send, StackFrameSend);
