@@ -115,7 +115,7 @@ func createValueName(value ssa.Value) string {
 			case *types.Signature:
 				return wrapInFunctionObject("NULL")
 			case *types.Slice:
-				return "(Slice){0}"
+				return fmt.Sprintf("(%s){0}", createTypeName(val.Type()))
 			default:
 				return "NULL"
 			}
@@ -202,7 +202,7 @@ func createTypeName(typ types.Type) string {
 	case *types.Signature:
 		return fmt.Sprintf("FunctionObject")
 	case *types.Slice:
-		return fmt.Sprintf("Slice")
+		return encode(fmt.Sprintf("Slice<%s>", createTypeName(t.Elem())))
 	case *types.Struct:
 		return encode(fmt.Sprintf("Struct%p", t))
 	case *types.Tuple:
@@ -360,7 +360,8 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 					raw = fmt.Sprintf("%s.raw %s %s.raw", createValueRelName(instr.X), instr.Op.String(), createValueRelName(instr.Y))
 				}
 			case *types.Named, *types.Signature, *types.Slice:
-				raw = fmt.Sprintf("memcmp(&%s, &%s, sizeof(%s)) %s 0", createValueRelName(instr.X), createValueRelName(instr.Y), createValueRelName(instr.X), instr.Op)
+				fmt.Fprintf(ctx.stream, "bool raw = memcmp(&%s, &%s, sizeof(%s)) %s 0;", createValueRelName(instr.X), createValueRelName(instr.Y), createValueRelName(instr.X), instr.Op)
+				raw = "raw"
 			default:
 				raw = fmt.Sprintf("%s %s %s", createValueRelName(instr.X), instr.Op.String(), createValueRelName(instr.Y))
 			}
@@ -399,14 +400,15 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 			switch callee.Name() {
 			case "append":
 				result := createValueRelName(instr)
+				result += ".raw"
 				ctx.switchFunctionToCallRuntimeApi("gox5_append", "StackFrameAppend", createInstructionName(instr), &result, nil,
-					paramArgPair{param: "base", arg: fmt.Sprintf("%s", createValueRelName(callCommon.Args[0]))},
-					paramArgPair{param: "elements", arg: fmt.Sprintf("%s", createValueRelName(callCommon.Args[1]))},
+					paramArgPair{param: "base", arg: fmt.Sprintf("%s.raw", createValueRelName(callCommon.Args[0]))},
+					paramArgPair{param: "elements", arg: fmt.Sprintf("%s.raw", createValueRelName(callCommon.Args[1]))},
 				)
 				return
 			case "cap":
-				raw := fmt.Sprintf("%s.capacity", createValueRelName(callCommon.Args[0]))
-				fmt.Fprintf(ctx.stream, "%s = %s;\n", createValueRelName(instr), wrapInIntObject(raw))
+				fmt.Fprintf(ctx.stream, "intptr_t raw = %s.typed.capacity;", createValueRelName(callCommon.Args[0]))
+				fmt.Fprintf(ctx.stream, "%s = %s;\n", createValueRelName(instr), wrapInIntObject("raw"))
 			case "len":
 				switch t := callCommon.Args[0].Type().(type) {
 				case *types.Basic:
@@ -418,8 +420,8 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 						panic(fmt.Sprintf("unsuported argument for len: %s (%s)", callCommon.Args[0], t))
 					}
 				case *types.Slice:
-					raw := fmt.Sprintf("%s.size", createValueRelName(callCommon.Args[0]))
-					fmt.Fprintf(ctx.stream, "%s = %s;\n", createValueRelName(instr), wrapInIntObject(raw))
+					fmt.Fprintf(ctx.stream, "intptr_t raw = %s.typed.size;", createValueRelName(callCommon.Args[0]))
+					fmt.Fprintf(ctx.stream, "%s = %s;\n", createValueRelName(instr), wrapInIntObject("raw"))
 				default:
 					panic(fmt.Sprintf("unsuported argument for len: %s", callCommon.Args[0]))
 				}
@@ -454,7 +456,7 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 
 	case *ssa.IndexAddr:
 		if _, ok := instr.X.Type().(*types.Slice); ok {
-			fmt.Fprintf(ctx.stream, "%s = &((%s)%s.addr)[%s.raw];\n", createValueRelName(instr), createType(instr.Type(), ""), createValueRelName(instr.X), createValueRelName(instr.Index))
+			fmt.Fprintf(ctx.stream, "%s = &((%s)%s.typed.ptr)[%s.raw];\n", createValueRelName(instr), createType(instr.Type(), ""), createValueRelName(instr.X), createValueRelName(instr.Index))
 		} else {
 			fmt.Fprintf(ctx.stream, "%s = &%s[%s.raw];\n", createValueRelName(instr), createValueRelName(instr.X), createValueRelName(instr.Index))
 		}
@@ -603,7 +605,7 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 		)
 
 	case *ssa.Slice:
-		fmt.Fprintf(ctx.stream, "memset(&%s, 0, sizeof(Slice));\n", createValueRelName(instr))
+		fmt.Fprintf(ctx.stream, "memset(&%s, 0, sizeof(%s));\n", createValueRelName(instr), createTypeName(instr.Type()))
 		startIndex := wrapInIntObject("0")
 		if instr.Low != nil {
 			startIndex = createValueRelName(instr.Low)
@@ -622,9 +624,9 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 			endIndex = createValueRelName(instr.High)
 		}
 
-		fmt.Fprintf(ctx.stream, "%s.addr = %s + %s.raw;\n", createValueRelName(instr), createValueRelName(instr.X), startIndex)
-		fmt.Fprintf(ctx.stream, "%s.size = %s.raw - %s.raw;\n", createValueRelName(instr), endIndex, startIndex)
-		fmt.Fprintf(ctx.stream, "%s.capacity = %s.raw - %s.raw;\n", createValueRelName(instr), length, startIndex)
+		fmt.Fprintf(ctx.stream, "%s.typed.ptr = %s + %s.raw;\n", createValueRelName(instr), createValueRelName(instr.X), startIndex)
+		fmt.Fprintf(ctx.stream, "%s.typed.size = %s.raw - %s.raw;\n", createValueRelName(instr), endIndex, startIndex)
+		fmt.Fprintf(ctx.stream, "%s.typed.capacity = %s.raw - %s.raw;\n", createValueRelName(instr), length, startIndex)
 
 	case *ssa.Store:
 		if _, ok := instr.Val.Type().(*types.Array); ok {
@@ -993,13 +995,33 @@ func (ctx *Context) emitTypeDefinition(typ types.Type) {
 		// do nothing
 
 	case *types.Named:
+		typeName := createTypeName(typ)
+		if typeName == "Value" { // ToDo: ignore standard library definition
+			return
+		}
 		underlyingType := typ.Underlying()
 		ctx.emitTypeDefinition(underlyingType)
-		typeName := createTypeName(typ)
 		underlyingTypeName := createTypeName(underlyingType)
 		fmt.Fprintf(ctx.stream, "typedef %s %s;\n", underlyingTypeName, typeName)
 
 	case *types.Pointer:
+		// do nothing
+
+	case *types.Signature:
+		// do nothing
+
+	case *types.Slice:
+		fmt.Fprintf(ctx.stream, `
+typedef union { // %s
+	SliceObject raw;
+	struct {
+		%s* ptr;
+		uintptr_t size;
+		uintptr_t capacity;
+	} typed;
+} %s;`, typ, createTypeName(typ.Elem()), name)
+
+	case *types.Tuple:
 		// do nothing
 
 	default:
@@ -1008,6 +1030,19 @@ func (ctx *Context) emitTypeDefinition(typ types.Type) {
 }
 
 func (ctx *Context) emitType() {
+	ctx.visitAllFunctions(ctx.program, func(function *ssa.Function) {
+		if function.Blocks == nil {
+			return
+		}
+		for _, basicBlock := range function.DomPreorder() {
+			for _, instr := range basicBlock.Instrs {
+				if value, ok := instr.(ssa.Value); ok {
+					ctx.emitTypeDefinition(value.Type())
+				}
+			}
+		}
+	})
+
 	mainPkg := findMainPackage(ctx.program)
 
 	for member := range mainPkg.Members {
@@ -1334,13 +1369,13 @@ typedef struct {
 	void* addr;
 	uintptr_t size;
 	uintptr_t capacity;
-} Slice;
+} SliceObject;
 
 typedef struct {
 	StackFrameCommon common;
-	Slice* result_ptr;
-	Slice base;
-	Slice elements;
+	SliceObject* result_ptr;
+	SliceObject base;
+	SliceObject elements;
 } StackFrameAppend;
 DECLARE_RUNTIME_API(append, StackFrameAppend);
 
@@ -1406,7 +1441,7 @@ typedef struct {
 typedef struct {
 	StackFrameCommon common;
 	PrintlnResult* result_ptr;
-	Slice param0;
+	SliceObject param0;
 } StackFramePrintln;
 DECLARE_RUNTIME_API(println, StackFramePrintln);
 
@@ -1419,7 +1454,7 @@ typedef struct {
 	StackFrameCommon common;
 	PrintlnResult* result_ptr;
 	StringObject param0;
-	Slice param1;
+	SliceObject param1;
 } StackFramePrintf;
 DECLARE_RUNTIME_API(printf, StackFramePrintf);
 
@@ -1482,7 +1517,7 @@ DECLARE_RUNTIME_API(func_name, StackFrameFuncName);
 
 typedef struct {
 	StackFrameCommon common;
-	Slice* result_ptr;
+	SliceObject* result_ptr;
 	StringObject param0;
 	StringObject param1;
 } StackFrameSplit;
