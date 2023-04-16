@@ -177,67 +177,55 @@ func createValueRelName(value ssa.Value) string {
 }
 
 func createTypeName(typ types.Type) string {
-	switch t := typ.(type) {
-	case *types.Array:
-		return encode(fmt.Sprintf("Array<%s$%d>", createTypeName(t.Elem()), t.Len()))
-	case *types.Basic:
-		switch t.Kind() {
-		case types.Bool:
-			return fmt.Sprintf("BoolObject")
-		case types.Int, types.Int8, types.Int16, types.Int32, types.Int64, types.Uint, types.Uint8, types.Uint16, types.Uint32, types.Uint64, types.Uintptr:
-			return fmt.Sprintf("IntObject")
-		case types.String:
-			return fmt.Sprintf("StringObject")
-		}
-	case *types.Chan:
-		return fmt.Sprintf("ChannelObject")
-	case *types.Interface:
-		return fmt.Sprintf("Interface")
-	case *types.Named:
-		// remove "command-line-arguments."
-		l := strings.Split(typ.String(), ".")
-		return l[len(l)-1]
-	case *types.Pointer:
-		elemType := t.Elem()
-		if et, ok := elemType.(*types.Array); ok {
-			elemType = et.Elem()
-		}
-		return encode(fmt.Sprintf("Pointer<%s>", createTypeName(elemType)))
-	case *types.Signature:
-		return fmt.Sprintf("FunctionObject")
-	case *types.Slice:
-		return encode(fmt.Sprintf("Slice<%s>", createTypeName(t.Elem())))
-	case *types.Struct:
-		return encode(fmt.Sprintf("Struct%p", t))
-	case *types.Tuple:
-		name := "Tuple<"
-		for i := 0; i < t.Len(); i++ {
-			elemType := t.At(i).Type()
-			if i != 0 {
-				name += "$"
+	var f func(typ types.Type) string
+	f = func(typ types.Type) string {
+		switch t := typ.(type) {
+		case *types.Array:
+			return fmt.Sprintf("Array<%s$%d>", f(t.Elem()), t.Len())
+		case *types.Basic:
+			switch t.Kind() {
+			case types.Bool:
+				return fmt.Sprintf("BoolObject")
+			case types.Int, types.Int8, types.Int16, types.Int32, types.Int64, types.Uint, types.Uint8, types.Uint16, types.Uint32, types.Uint64, types.Uintptr:
+				return fmt.Sprintf("IntObject")
+			case types.String:
+				return fmt.Sprintf("StringObject")
 			}
-			name += createTypeName(elemType)
+		case *types.Chan:
+			return fmt.Sprintf("ChannelObject")
+		case *types.Interface:
+			return fmt.Sprintf("Interface")
+		case *types.Named:
+			// remove "command-line-arguments."
+			l := strings.Split(typ.String(), ".")
+			return l[len(l)-1]
+		case *types.Pointer:
+			elemType := t.Elem()
+			if et, ok := elemType.(*types.Array); ok {
+				elemType = et.Elem()
+			}
+			return fmt.Sprintf("Pointer<%s>", f(elemType))
+		case *types.Signature:
+			return fmt.Sprintf("FunctionObject")
+		case *types.Slice:
+			return fmt.Sprintf("Slice<%s>", f(t.Elem()))
+		case *types.Struct:
+			return fmt.Sprintf("Struct%p", t)
+		case *types.Tuple:
+			name := "Tuple<"
+			for i := 0; i < t.Len(); i++ {
+				elemType := t.At(i).Type()
+				if i != 0 {
+					name += "$"
+				}
+				name += f(elemType)
+			}
+			name += ">"
+			return name
 		}
-		name += ">"
-		return encode(name)
+		panic(fmt.Sprintf("type not supported: %s", typ.String()))
 	}
-	panic(fmt.Sprintf("type not supported: %s", typ.String()))
-}
-
-func createType(typ types.Type, id string) string {
-	switch t := typ.(type) {
-	case *types.Array, *types.Interface, *types.Named, *types.Pointer, *types.Signature, *types.Slice, *types.Struct, *types.Tuple:
-		return fmt.Sprintf("%s %s", createTypeName(t), id)
-	case *types.Basic:
-		if t.Kind() == types.String {
-			return fmt.Sprintf("%s %s", createTypeName(t), id)
-		} else {
-			return fmt.Sprintf("%s %s", createTypeName(t), id)
-		}
-	case *types.Chan:
-		return fmt.Sprintf("ChannelObject %s", id)
-	}
-	panic(fmt.Sprintf("type not supported: %s", typ.String()))
+	return encode(f(typ))
 }
 
 func (ctx *Context) switchFunction(nextFunction string, callCommon *ssa.CallCommon, result string, resumeFunction string) {
@@ -331,7 +319,7 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 		if instr.Heap {
 			result := createValueRelName(instr)
 			ctx.switchFunctionToCallRuntimeApi("gox5_new", "StackFrameNew", createInstructionName(instr), &result, nil,
-				paramArgPair{param: "size", arg: fmt.Sprintf("sizeof(%s)", createType(instr.Type().(*types.Pointer).Elem(), ""))},
+				paramArgPair{param: "size", arg: fmt.Sprintf("sizeof(%s)", createTypeName(instr.Type().(*types.Pointer).Elem()))},
 			)
 		} else {
 			fmt.Fprintf(ctx.stream, "{\n")
@@ -495,9 +483,9 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 		case 0:
 			// do nothing
 		case 1:
-			resultSize = fmt.Sprintf("sizeof(%s)", createType(signature.Results().At(0).Type(), ""))
+			resultSize = fmt.Sprintf("sizeof(%s)", createTypeName(signature.Results().At(0).Type()))
 		default:
-			resultSize = fmt.Sprintf("sizeof(%s)", createType(signature.Results(), ""))
+			resultSize = fmt.Sprintf("sizeof(%s)", createTypeName(signature.Results()))
 		}
 
 		ctx.switchFunctionToCallRuntimeApi("gox5_spawn", "StackFrameSpawn", createInstructionName(instr), nil,
@@ -505,7 +493,7 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 				fmt.Fprintf(ctx.stream, "intptr_t num_arg_buffer_words = 0;\n")
 				for i, arg := range callCommon.Args {
 					argValue := createValueRelName(arg)
-					argType := createType(arg.Type(), "")
+					argType := createTypeName(arg.Type())
 					tmpVar := fmt.Sprintf("tmp%d", i)
 					fmt.Fprintf(ctx.stream, "%s %s = %s; // param[%d]\n", argType, tmpVar, argValue, i)
 					fmt.Fprintf(ctx.stream, "memcpy(&next_frame->arg_buffer[num_arg_buffer_words], &%s, sizeof(%s));\n", tmpVar, tmpVar)
@@ -652,7 +640,7 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 				paramArgPair{param: "channel", arg: createValueRelName(instr.X)},
 			)
 		} else if instr.Op == token.MUL {
-			fmt.Fprintf(ctx.stream, "memcpy(&%s, %s.raw, sizeof(%s));\n", createValueRelName(instr), createValueRelName(instr.X), createType(instr.Type(), ""))
+			fmt.Fprintf(ctx.stream, "memcpy(&%s, %s.raw, sizeof(%s));\n", createValueRelName(instr), createValueRelName(instr.X), createTypeName(instr.Type()))
 		} else {
 			fmt.Fprintf(ctx.stream, "%s = %s %s;\n", createValueRelName(instr), instr.Op.String(), createValueRelName(instr.X))
 		}
@@ -743,7 +731,7 @@ func (ctx *Context) emitValueDeclaration(value ssa.Value) {
 			switch valX := val.X.(type) {
 			case *ssa.Const, *ssa.Function:
 				id := fmt.Sprintf("tmp_%s", createValueName(val))
-				fmt.Fprintf(ctx.stream, "\t%s; // %s : %s\n", createType(valX.Type(), id), valX.String(), valX.Type())
+				fmt.Fprintf(ctx.stream, "\t%s %s; // %s : %s\n", createTypeName(valX.Type()), id, valX.String(), valX.Type())
 			}
 		}
 
@@ -780,7 +768,7 @@ func (ctx *Context) emitValueDeclaration(value ssa.Value) {
 	fmt.Fprintf(ctx.stream, "\t// found %T: %s, %s\n", value, createValueName(value), value.String())
 	if canEmit {
 		id := fmt.Sprintf("%s", createValueName(value))
-		fmt.Fprintf(ctx.stream, "\t%s; // %s : %s\n", createType(value.Type(), id), value.String(), value.Type())
+		fmt.Fprintf(ctx.stream, "\t%s %s; // %s : %s\n", createTypeName(value.Type()), id, value.String(), value.Type())
 	}
 }
 
@@ -842,27 +830,27 @@ func (ctx *Context) tryEmitSignatureDefinition(signature *types.Signature, signa
 	case 0:
 		// do nothing
 	case 1:
-		fmt.Fprintf(ctx.stream, "\t%s* result_ptr;\n", createType(signature.Results().At(0).Type(), ""))
+		fmt.Fprintf(ctx.stream, "\t%s* result_ptr;\n", createTypeName(signature.Results().At(0).Type()))
 	default:
-		fmt.Fprintf(ctx.stream, "\t%s* result_ptr;\n", createType(signature.Results(), ""))
+		fmt.Fprintf(ctx.stream, "\t%s* result_ptr;\n", createTypeName(signature.Results()))
 	}
 
 	base := 0
 	if signature.Recv() != nil {
 		id := fmt.Sprintf("param%d", base)
-		var decl string
+		var typeName string
 		if makesReceiverInterface {
-			decl = fmt.Sprintf("void* %s", id)
+			typeName = "void*"
 		} else {
-			decl = createType(signature.Recv().Type(), id)
+			typeName = createTypeName(signature.Recv().Type())
 		}
-		fmt.Fprintf(ctx.stream, "\t%s; // receiver: %s\n", decl, signature.Recv().String())
+		fmt.Fprintf(ctx.stream, "\t%s %s; // receiver: %s\n", typeName, id, signature.Recv().String())
 		base++
 	}
 
 	for i := 0; i < signature.Params().Len(); i++ {
 		id := fmt.Sprintf("param%d", base+i)
-		fmt.Fprintf(ctx.stream, "\t%s; // parameter[%d]: %s\n", createType(signature.Params().At(i).Type(), id), i, signature.Params().At(i).String())
+		fmt.Fprintf(ctx.stream, "\t%s %s; // parameter[%d]: %s\n", createTypeName(signature.Params().At(i).Type()), id, i, signature.Params().At(i).String())
 	}
 
 	fmt.Fprintf(ctx.stream, "} %s;\n", signatureName)
@@ -887,7 +875,7 @@ func (ctx *Context) emitFunctionDeclaration(function *ssa.Function) {
 	for _, freeVar := range function.FreeVars {
 		fmt.Fprintf(ctx.stream, "\t// found %T: %s, %s\n", freeVar, createValueName(freeVar), freeVar.String())
 		id := fmt.Sprintf("%s", createValueName(freeVar))
-		fmt.Fprintf(ctx.stream, "\t%s; // %s : %s\n", createType(freeVar.Type(), id), freeVar.String(), freeVar.Type())
+		fmt.Fprintf(ctx.stream, "\t%s %s; // %s : %s\n", createTypeName(freeVar.Type()), id, freeVar.String(), freeVar.Type())
 	}
 	fmt.Fprintf(ctx.stream, "} FreeVars_%s;\n", createFunctionName(function))
 
@@ -901,7 +889,7 @@ func (ctx *Context) emitFunctionDeclaration(function *ssa.Function) {
 				panic(fmt.Sprintf("%s", local))
 			}
 			id := fmt.Sprintf("%s_buf", createValueName(local))
-			fmt.Fprintf(ctx.stream, "\t%s;\n", createType(local.Type().(*types.Pointer).Elem(), id))
+			fmt.Fprintf(ctx.stream, "\t%s %s;\n", createTypeName(local.Type().(*types.Pointer).Elem()), id)
 		}
 
 		ctx.foundValueSet = make(map[ssa.Value]struct{})
@@ -983,15 +971,14 @@ func (ctx *Context) emitTypeDefinition(typ types.Type) {
 	switch typ := typ.(type) {
 	case *types.Array:
 		fmt.Fprintf(ctx.stream, "typedef struct { // %s\n", typ)
-		fmt.Fprintf(ctx.stream, "\t%s raw[%d];\n", createType(typ.Elem(), ""), typ.Len())
+		fmt.Fprintf(ctx.stream, "\t%s raw[%d];\n", createTypeName(typ.Elem()), typ.Len())
 		fmt.Fprintf(ctx.stream, "} %s;\n", name)
 
 	case *types.Struct:
 		fmt.Fprintf(ctx.stream, "typedef struct { // %s\n", typ)
 		for i := 0; i < typ.NumFields(); i++ {
 			field := typ.Field(i)
-			id := fmt.Sprintf("%s", field.Name())
-			fmt.Fprintf(ctx.stream, "\t%s; // %s\n", createType(field.Type(), id), field)
+			fmt.Fprintf(ctx.stream, "\t%s %s; // %s\n", createTypeName(field.Type()), field.Name(), field)
 		}
 		fmt.Fprintf(ctx.stream, "} %s;\n", name)
 
@@ -1021,7 +1008,7 @@ func (ctx *Context) emitTypeDefinition(typ types.Type) {
 		}
 		ctx.emitTypeDefinition(typ.Elem())
 		fmt.Fprintf(ctx.stream, "typedef struct { // %s\n", typ)
-		fmt.Fprintf(ctx.stream, "\t%s* raw;\n", createType(elemType, ""))
+		fmt.Fprintf(ctx.stream, "\t%s* raw;\n", createTypeName(elemType))
 		fmt.Fprintf(ctx.stream, "} %s;\n", name)
 
 	case *types.Signature:
@@ -1115,7 +1102,7 @@ func (ctx *Context) emitInterfaceTable(typ *ssa.Type) {
 
 func (ctx *Context) emitGlobalVariable(gv *ssa.Global) {
 	name := createValueName(gv)
-	fmt.Fprintf(ctx.stream, "%s;\n", createType(gv.Type().(*types.Pointer).Elem(), name))
+	fmt.Fprintf(ctx.stream, "%s %s;\n", createTypeName(gv.Type().(*types.Pointer).Elem()), name)
 }
 
 func (ctx *Context) emitRuntimeInfo() {
