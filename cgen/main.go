@@ -1053,20 +1053,6 @@ func (ctx *Context) emitType() {
 			}
 		}
 	})
-
-	ctx.visitAllFunctions(ctx.program, func(function *ssa.Function) {
-		if function.Blocks == nil {
-			return
-		}
-		for _, basicBlock := range function.DomPreorder() {
-			for _, instr := range basicBlock.Instrs {
-				if alloc, ok := instr.(*ssa.Alloc); ok && alloc.Heap {
-					t := alloc.Type().(*types.Pointer).Elem()
-					ctx.emitTypeDefinition(t)
-				}
-			}
-		}
-	})
 }
 
 func (ctx *Context) emitInterfaceTable(typ *ssa.Type) {
