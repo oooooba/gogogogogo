@@ -31,6 +31,7 @@ func main() {
 		stream:           os.Stdout,
 		program:          prog,
 		foundTypeSet:     make(map[string]struct{}),
+		typeSlice:        make([](types.Type), 0),
 		latestNameMap:    make(map[*ssa.BasicBlock]string),
 		signatureNameSet: make(map[string]struct{}),
 	}
@@ -55,6 +56,7 @@ type Context struct {
 	program          *ssa.Program
 	foundValueSet    map[ssa.Value]struct{}
 	foundTypeSet     map[string]struct{}
+	typeSlice        [](types.Type)
 	latestNameMap    map[*ssa.BasicBlock]string
 	signatureNameSet map[string]struct{}
 }
@@ -952,59 +954,47 @@ func (ctx *Context) emitFunctionDefinition(function *ssa.Function) {
 	}
 }
 
-func (ctx *Context) emitTypeDefinition(typ types.Type) {
-	name := createTypeName(typ)
-	_, ok := ctx.foundTypeSet[name]
-	if ok {
-		return
-	}
-	ctx.foundTypeSet[name] = struct{}{}
+func (ctx *Context) emitType() {
+	for _, typ := range ctx.typeSlice {
+		name := createTypeName(typ)
+		switch typ := typ.(type) {
+		case *types.Array:
+			fmt.Fprintf(ctx.stream, "typedef struct { // %s\n", typ)
+			fmt.Fprintf(ctx.stream, "\t%s raw[%d];\n", createTypeName(typ.Elem()), typ.Len())
+			fmt.Fprintf(ctx.stream, "} %s;\n", name)
 
-	switch typ := typ.(type) {
-	case *types.Array:
-		fmt.Fprintf(ctx.stream, "typedef struct { // %s\n", typ)
-		fmt.Fprintf(ctx.stream, "\t%s raw[%d];\n", createTypeName(typ.Elem()), typ.Len())
-		fmt.Fprintf(ctx.stream, "} %s;\n", name)
+		case *types.Struct:
+			fmt.Fprintf(ctx.stream, "typedef struct { // %s\n", typ)
+			for i := 0; i < typ.NumFields(); i++ {
+				field := typ.Field(i)
+				fmt.Fprintf(ctx.stream, "\t%s %s; // %s\n", createTypeName(field.Type()), field.Name(), field)
+			}
+			fmt.Fprintf(ctx.stream, "} %s;\n", name)
 
-	case *types.Struct:
-		fmt.Fprintf(ctx.stream, "typedef struct { // %s\n", typ)
-		for i := 0; i < typ.NumFields(); i++ {
-			field := typ.Field(i)
-			fmt.Fprintf(ctx.stream, "\t%s %s; // %s\n", createTypeName(field.Type()), field.Name(), field)
-		}
-		fmt.Fprintf(ctx.stream, "} %s;\n", name)
+		case *types.Basic:
+			// do nothing
 
-	case *types.Basic:
-		// do nothing
+		case *types.Chan:
+			// do nothing
 
-	case *types.Chan:
-		// do nothing
+		case *types.Interface:
+			// do nothing
 
-	case *types.Interface:
-		// do nothing
+		case *types.Named:
+			underlyingTypeName := createTypeName(typ.Underlying())
+			fmt.Fprintf(ctx.stream, "typedef %s %s;\n", underlyingTypeName, name)
 
-	case *types.Named:
-		typeName := createTypeName(typ)
-		if typeName == "Value" || typeName == "Func" { // ToDo: ignore standard library definition
-			return
-		}
-		underlyingType := typ.Underlying()
-		ctx.emitTypeDefinition(underlyingType)
-		underlyingTypeName := createTypeName(underlyingType)
-		fmt.Fprintf(ctx.stream, "typedef %s %s;\n", underlyingTypeName, typeName)
+		case *types.Pointer:
+			elemType := typ.Elem()
+			fmt.Fprintf(ctx.stream, "typedef struct { // %s\n", typ)
+			fmt.Fprintf(ctx.stream, "\t%s* raw;\n", createTypeName(elemType))
+			fmt.Fprintf(ctx.stream, "} %s;\n", name)
 
-	case *types.Pointer:
-		elemType := typ.Elem()
-		ctx.emitTypeDefinition(typ.Elem())
-		fmt.Fprintf(ctx.stream, "typedef struct { // %s\n", typ)
-		fmt.Fprintf(ctx.stream, "\t%s* raw;\n", createTypeName(elemType))
-		fmt.Fprintf(ctx.stream, "} %s;\n", name)
+		case *types.Signature:
+			// do nothing
 
-	case *types.Signature:
-		// do nothing
-
-	case *types.Slice:
-		fmt.Fprintf(ctx.stream, `
+		case *types.Slice:
+			fmt.Fprintf(ctx.stream, `
 typedef union { // %s
 	SliceObject raw;
 	struct {
@@ -1012,17 +1002,72 @@ typedef union { // %s
 		uintptr_t size;
 		uintptr_t capacity;
 	} typed;
-} %s;`, typ, createTypeName(typ.Elem()), name)
+} %s;
+`, typ, createTypeName(typ.Elem()), name)
 
-	case *types.Tuple:
-		// do nothing
+		case *types.Tuple:
+			// do nothing
 
-	default:
-		panic(fmt.Sprintf("not implemented: %s %T", typ, typ))
+		default:
+			panic(fmt.Sprintf("not implemented: %s %T", typ, typ))
+		}
 	}
 }
 
-func (ctx *Context) emitType() {
+func (ctx *Context) collectTypes() {
+	var f func(typ types.Type)
+	f = func(typ types.Type) {
+		name := createTypeName(typ)
+		_, ok := ctx.foundTypeSet[name]
+		if ok {
+			return
+		}
+		ctx.foundTypeSet[name] = struct{}{}
+
+		switch typ := typ.(type) {
+		case *types.Array:
+			f(typ.Elem())
+
+		case *types.Struct:
+			for i := 0; i < typ.NumFields(); i++ {
+				f(typ.Field(i).Type())
+			}
+
+		case *types.Basic:
+			// do nothing
+
+		case *types.Chan:
+			// do nothing
+
+		case *types.Interface:
+			// do nothing
+
+		case *types.Named:
+			typeName := createTypeName(typ)
+			if typeName == "Value" || typeName == "Func" { // ToDo: ignore standard library definition
+				return
+			}
+			f(typ.Underlying())
+
+		case *types.Pointer:
+			f(typ.Elem())
+
+		case *types.Signature:
+			// do nothing
+
+		case *types.Slice:
+			f(typ.Elem())
+
+		case *types.Tuple:
+			// do nothing
+
+		default:
+			panic(fmt.Sprintf("not implemented: %s %T", typ, typ))
+		}
+
+		ctx.typeSlice = append(ctx.typeSlice, typ)
+	}
+
 	mainPkg := findMainPackage(ctx.program)
 
 	for member := range mainPkg.Members {
@@ -1030,7 +1075,7 @@ func (ctx *Context) emitType() {
 		if !ok {
 			continue
 		}
-		ctx.emitTypeDefinition(typ.Type())
+		f(typ.Type())
 	}
 
 	for member := range mainPkg.Members {
@@ -1038,7 +1083,7 @@ func (ctx *Context) emitType() {
 		if !ok {
 			continue
 		}
-		ctx.emitTypeDefinition(gv.Type())
+		f(gv.Type())
 	}
 
 	ctx.visitAllFunctions(ctx.program, func(function *ssa.Function) {
@@ -1048,7 +1093,7 @@ func (ctx *Context) emitType() {
 		for _, basicBlock := range function.DomPreorder() {
 			for _, instr := range basicBlock.Instrs {
 				if value, ok := instr.(ssa.Value); ok {
-					ctx.emitTypeDefinition(value.Type())
+					f(value.Type())
 				}
 			}
 		}
@@ -1487,6 +1532,7 @@ DECLARE_RUNTIME_API(func_for_pc, StackFrameFuncForPc);
 #define f_S_Split gox5_split
 `)
 
+	ctx.collectTypes()
 	ctx.emitType()
 
 	mainPkg := findMainPackage(program)
