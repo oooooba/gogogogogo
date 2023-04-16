@@ -335,23 +335,8 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 			if instr.X.Type() != instr.Y.Type() {
 				panic(fmt.Sprintf("type mismatch: %s (%s) vs %s (%s)", instr.X, instr.X.Type(), instr.Y, instr.Y.Type()))
 			}
-			raw := ""
-			switch t := instr.X.Type().(type) {
-			case *types.Basic:
-				if t.Kind() == types.String {
-					raw = fmt.Sprintf("strcmp(%s.str_ptr, %s.str_ptr) %s 0", createValueRelName(instr.X), createValueRelName(instr.Y), instr.Op)
-				} else {
-					raw = fmt.Sprintf("%s.raw %s %s.raw", createValueRelName(instr.X), instr.Op.String(), createValueRelName(instr.Y))
-				}
-			case *types.Named, *types.Signature, *types.Slice:
-				fmt.Fprintf(ctx.stream, "bool raw = memcmp(&%s, &%s, sizeof(%s)) %s 0;", createValueRelName(instr.X), createValueRelName(instr.Y), createValueRelName(instr.X), instr.Op)
-				raw = "raw"
-			case *types.Pointer:
-				raw = fmt.Sprintf("%s.raw %s %s.raw", createValueRelName(instr.X), instr.Op.String(), createValueRelName(instr.Y))
-			default:
-				raw = fmt.Sprintf("%s %s %s", createValueRelName(instr.X), instr.Op.String(), createValueRelName(instr.Y))
-			}
-			fmt.Fprintf(ctx.stream, "%s = %s;\n", createValueRelName(instr), wrapInBoolObject(raw))
+			fmt.Fprintf(ctx.stream, "bool raw = equal_%s(&%s, &%s) %s true;", createTypeName(instr.X.Type()), createValueRelName(instr.X), createValueRelName(instr.Y), instr.Op)
+			fmt.Fprintf(ctx.stream, "%s = %s;\n", createValueRelName(instr), wrapInBoolObject("raw"))
 		case token.LSS, token.LEQ, token.GTR, token.GEQ:
 			raw := fmt.Sprintf("%s.raw %s %s.raw", createValueRelName(instr.X), instr.Op.String(), createValueRelName(instr.Y))
 			fmt.Fprintf(ctx.stream, "%s = %s;\n", createValueRelName(instr), wrapInBoolObject(raw))
@@ -1014,6 +999,43 @@ typedef union { // %s
 	}
 }
 
+func (ctx *Context) emitEqualFunction() {
+	for _, typ := range ctx.typeSlice {
+		typeName := createTypeName(typ)
+		expr := ""
+		switch typ := typ.(type) {
+		case *types.Basic:
+			if typ.Kind() == types.String {
+				expr = "strcmp(lhs->str_ptr, rhs->str_ptr) == 0"
+			} else {
+				expr = "lhs->raw == rhs->raw"
+				fmt.Fprintln(ctx.stream)
+			}
+		case *types.Signature:
+			continue // ToDo: fix
+		case *types.Tuple:
+			if typ.Len() == 0 {
+				continue
+			}
+			expr = "memcmp(lhs, rhs, sizeof(*lhs)) == 0"
+		default:
+			expr = "memcmp(lhs, rhs, sizeof(*lhs)) == 0"
+		}
+		fmt.Fprintf(ctx.stream, "bool equal_%s(%s* lhs, %s* rhs) {\n", typeName, typeName, typeName)
+		fmt.Fprintf(ctx.stream, "\treturn %s;\n", expr)
+		fmt.Fprintf(ctx.stream, "}\n")
+	}
+	fmt.Fprintf(ctx.stream, `
+bool equal_FunctionObject(FunctionObject* lhs, FunctionObject* rhs) {
+	return memcmp(lhs, rhs, sizeof(*lhs)) == 0;
+}
+
+bool equal_Value(Value* lhs, Value* rhs) {
+	return memcmp(lhs, rhs, sizeof(*lhs)) == 0;
+}
+`)
+}
+
 func (ctx *Context) collectTypes() {
 	var f func(typ types.Type)
 	f = func(typ types.Type) {
@@ -1534,6 +1556,7 @@ DECLARE_RUNTIME_API(func_for_pc, StackFrameFuncForPc);
 
 	ctx.collectTypes()
 	ctx.emitType()
+	ctx.emitEqualFunction()
 
 	mainPkg := findMainPackage(program)
 
