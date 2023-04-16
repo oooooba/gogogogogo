@@ -1325,10 +1325,6 @@ func (ctx *Context) visitAllFunctions(program *ssa.Program, procedure func(funct
 			continue
 		}
 
-		if symbol == "init" {
-			continue
-		}
-
 		f(function)
 	}
 
