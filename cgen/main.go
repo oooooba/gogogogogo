@@ -621,7 +621,7 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 		} else if instr.Op == token.MUL {
 			fmt.Fprintf(ctx.stream, "%s = *(%s.raw);\n", createValueRelName(instr), createValueRelName(instr.X))
 		} else {
-			fmt.Fprintf(ctx.stream, "%s = %s %s;\n", createValueRelName(instr), instr.Op.String(), createValueRelName(instr.X))
+			fmt.Fprintf(ctx.stream, "%s = (%s){.raw=%s (%s.raw)};\n", createValueRelName(instr), createTypeName(instr.Type()), instr.Op.String(), createValueRelName(instr.X))
 		}
 
 	default:
