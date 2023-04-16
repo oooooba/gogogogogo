@@ -1013,15 +1013,7 @@ func (ctx *Context) emitEqualFunction() {
 				expr = "strcmp(lhs->str_ptr, rhs->str_ptr) == 0"
 			} else {
 				expr = "lhs->raw == rhs->raw"
-				fmt.Fprintln(ctx.stream)
 			}
-		case *types.Signature:
-			continue // ToDo: fix
-		case *types.Tuple:
-			if typ.Len() == 0 {
-				continue
-			}
-			expr = "memcmp(lhs, rhs, sizeof(*lhs)) == 0"
 		default:
 			expr = "memcmp(lhs, rhs, sizeof(*lhs)) == 0"
 		}
@@ -1030,10 +1022,6 @@ func (ctx *Context) emitEqualFunction() {
 		fmt.Fprintf(ctx.stream, "}\n")
 	}
 	fmt.Fprintf(ctx.stream, `
-bool equal_FunctionObject(FunctionObject* lhs, FunctionObject* rhs) {
-	return memcmp(lhs, rhs, sizeof(*lhs)) == 0;
-}
-
 bool equal_Value(Value* lhs, Value* rhs) {
 	return memcmp(lhs, rhs, sizeof(*lhs)) == 0;
 }
@@ -1112,6 +1100,32 @@ func (ctx *Context) collectTypes() {
 			continue
 		}
 		f(gv.Type())
+	}
+
+	var g func(function *ssa.Function)
+	g = func(function *ssa.Function) {
+		sig := function.Signature
+
+		for i := 0; i < sig.Results().Len(); i++ {
+			f(sig.Results().At(i).Type())
+		}
+
+		if sig.Recv() != nil {
+			f(sig.Recv().Type())
+		}
+
+		for i := 0; i < sig.Params().Len(); i++ {
+			f(sig.Params().At(i).Type())
+		}
+	}
+
+	ctx.visitAllFunctions(ctx.program, func(function *ssa.Function) {
+		g(function)
+	})
+
+	libraryFunctions := findLibraryFunctions(ctx.program)
+	for _, function := range libraryFunctions {
+		g(function)
 	}
 
 	ctx.visitAllFunctions(ctx.program, func(function *ssa.Function) {
