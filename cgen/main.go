@@ -948,14 +948,6 @@ func (ctx *Context) emitType() {
 			fmt.Fprintf(ctx.stream, "\t%s raw[%d];\n", createTypeName(typ.Elem()), typ.Len())
 			fmt.Fprintf(ctx.stream, "} %s;\n", name)
 
-		case *types.Struct:
-			fmt.Fprintf(ctx.stream, "typedef struct { // %s\n", typ)
-			for i := 0; i < typ.NumFields(); i++ {
-				field := typ.Field(i)
-				fmt.Fprintf(ctx.stream, "\t%s %s; // %s\n", createTypeName(field.Type()), field.Name(), field)
-			}
-			fmt.Fprintf(ctx.stream, "} %s;\n", name)
-
 		case *types.Basic:
 			// do nothing
 
@@ -990,8 +982,20 @@ typedef union { // %s
 } %s;
 `, typ, createTypeName(typ.Elem()), name)
 
+		case *types.Struct:
+			fmt.Fprintf(ctx.stream, "typedef struct { // %s\n", typ)
+			for i := 0; i < typ.NumFields(); i++ {
+				field := typ.Field(i)
+				fmt.Fprintf(ctx.stream, "\t%s %s; // %s\n", createTypeName(field.Type()), field.Name(), field)
+			}
+			fmt.Fprintf(ctx.stream, "} %s;\n", name)
+
 		case *types.Tuple:
-			// do nothing
+			fmt.Fprintf(ctx.stream, "typedef struct { // %s\n", typ)
+			for i := 0; i < typ.Len(); i++ {
+				fmt.Fprintf(ctx.stream, "\t%s e%d; // %s\n", createTypeName(typ.At(i).Type()), i, typ.At(i))
+			}
+			fmt.Fprintf(ctx.stream, "} %s;\n", name)
 
 		default:
 			panic(fmt.Sprintf("not implemented: %s %T", typ, typ))
@@ -1081,7 +1085,9 @@ func (ctx *Context) collectTypes() {
 			f(typ.Elem())
 
 		case *types.Tuple:
-			// do nothing
+			for i := 0; i < typ.Len(); i++ {
+				f(typ.At(i).Type())
+			}
 
 		default:
 			panic(fmt.Sprintf("not implemented: %s %T", typ, typ))
@@ -1453,34 +1459,22 @@ typedef struct {
 } StackFrameSpawn;
 DECLARE_RUNTIME_API(spawn, StackFrameSpawn);
 
-// ToDo: generate only when needed
-typedef struct {
-	IntObject e0;
-	IntObject e1;
-} Tuple_lt_IntObject_S_IntObject_gt_;
-
 // ToDo: WA to handle fmt.Println
 
 typedef struct {
-	IntObject e0;
-	Interface e1;
-} PrintlnResult;
-
-typedef struct {
 	StackFrameCommon common;
-	PrintlnResult* result_ptr;
+	void* result_ptr;
 	SliceObject param0;
 } StackFramePrintln;
 DECLARE_RUNTIME_API(println, StackFramePrintln);
 
 #define f_S_Println gox5_println
-#define Tuple_lt_IntObject_S_error_gt_ PrintlnResult
 
 // ToDo: WA to handle fmt.Printf
 
 typedef struct {
 	StackFrameCommon common;
-	PrintlnResult* result_ptr;
+	void* result_ptr;
 	StringObject param0;
 	SliceObject param1;
 } StackFramePrintf;
