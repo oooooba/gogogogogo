@@ -200,11 +200,7 @@ func createTypeName(typ types.Type) string {
 			l := strings.Split(typ.String(), ".")
 			return l[len(l)-1]
 		case *types.Pointer:
-			elemType := t.Elem()
-			if et, ok := elemType.(*types.Array); ok {
-				elemType = et.Elem()
-			}
-			return fmt.Sprintf("Pointer<%s>", f(elemType))
+			return fmt.Sprintf("Pointer<%s>", f(t.Elem()))
 		case *types.Signature:
 			return fmt.Sprintf("FunctionObject")
 		case *types.Slice:
@@ -326,11 +322,7 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 			v := createValueRelName(instr)
 			elemType := instr.Type().(*types.Pointer).Elem()
 			fmt.Fprintf(ctx.stream, "%s_buf = (%s){0};\n", v, createTypeName(elemType))
-			if t, ok := elemType.(*types.Array); ok {
-				fmt.Fprintf(ctx.stream, "%s* raw = %s_buf.raw;\n", createTypeName(t.Elem()), v)
-			} else {
-				fmt.Fprintf(ctx.stream, "%s* raw = &%s_buf;\n", createTypeName(elemType), v)
-			}
+			fmt.Fprintf(ctx.stream, "%s* raw = &%s_buf;\n", createTypeName(elemType), v)
 			fmt.Fprintf(ctx.stream, "%s = %s;\n", v, wrapInPointerObject("raw", instr.Type()))
 			fmt.Fprintf(ctx.stream, "}\n")
 		}
@@ -451,10 +443,14 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 
 	case *ssa.IndexAddr:
 		fmt.Fprintf(ctx.stream, "{\n")
-		if _, ok := instr.X.Type().(*types.Slice); ok {
-			fmt.Fprintf(ctx.stream, "%s* raw = &((%s.typed.ptr)[%s.raw]);\n", createTypeName(instr.X.Type().(*types.Slice).Elem()), createValueRelName(instr.X), createValueRelName(instr.Index))
-		} else {
-			fmt.Fprintf(ctx.stream, "%s* raw = &(%s.raw[%s.raw]);\n", createTypeName(instr.X.Type().(*types.Pointer).Elem().(*types.Array).Elem()), createValueRelName(instr.X), createValueRelName(instr.Index))
+		fmt.Fprintf(ctx.stream, "uintptr_t index = %s.raw;\n", createValueRelName(instr.Index))
+		switch t := instr.X.Type().(type) {
+		case *types.Slice:
+			fmt.Fprintf(ctx.stream, "%s* raw = &((%s.typed.ptr)[index]);\n", createTypeName(t.Elem()), createValueRelName(instr.X))
+		case *types.Pointer:
+			fmt.Fprintf(ctx.stream, "%s* raw = &(%s.raw->raw[index]);\n", createTypeName(t.Elem().(*types.Array).Elem()), createValueRelName(instr.X))
+		default:
+			panic(fmt.Sprintf("%s, %s, %s", instr, instr.X, t))
 		}
 		fmt.Fprintf(ctx.stream, "%s = %s;\n", createValueRelName(instr), wrapInPointerObject("raw", instr.Type()))
 		fmt.Fprintf(ctx.stream, "}\n")
@@ -622,16 +618,12 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 			endIndex = createValueRelName(instr.High)
 		}
 
-		fmt.Fprintf(ctx.stream, "%s.typed.ptr = %s.raw + %s.raw;\n", createValueRelName(instr), createValueRelName(instr.X), startIndex)
+		fmt.Fprintf(ctx.stream, "%s.typed.ptr = %s.raw->raw + %s.raw;\n", createValueRelName(instr), createValueRelName(instr.X), startIndex)
 		fmt.Fprintf(ctx.stream, "%s.typed.size = %s.raw - %s.raw;\n", createValueRelName(instr), endIndex, startIndex)
 		fmt.Fprintf(ctx.stream, "%s.typed.capacity = %s.raw - %s.raw;\n", createValueRelName(instr), length, startIndex)
 
 	case *ssa.Store:
-		if _, ok := instr.Val.Type().(*types.Array); ok {
-			fmt.Fprintf(ctx.stream, "memcpy(%s.raw, %s.raw, sizeof(%s));\n", createValueRelName(instr.Addr), createValueRelName(instr.Val), createValueRelName(instr.Val))
-		} else {
-			fmt.Fprintf(ctx.stream, "*(%s.raw) = %s;\n", createValueRelName(instr.Addr), createValueRelName(instr.Val))
-		}
+		fmt.Fprintf(ctx.stream, "*(%s.raw) = %s;\n", createValueRelName(instr.Addr), createValueRelName(instr.Val))
 
 	case *ssa.UnOp:
 		if instr.Op == token.ARROW {
@@ -1003,9 +995,6 @@ func (ctx *Context) emitTypeDefinition(typ types.Type) {
 
 	case *types.Pointer:
 		elemType := typ.Elem()
-		if et, ok := elemType.(*types.Array); ok {
-			elemType = et.Elem()
-		}
 		ctx.emitTypeDefinition(typ.Elem())
 		fmt.Fprintf(ctx.stream, "typedef struct { // %s\n", typ)
 		fmt.Fprintf(ctx.stream, "\t%s* raw;\n", createTypeName(elemType))
