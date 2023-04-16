@@ -632,7 +632,7 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 				paramArgPair{param: "channel", arg: createValueRelName(instr.X)},
 			)
 		} else if instr.Op == token.MUL {
-			fmt.Fprintf(ctx.stream, "memcpy(&%s, %s.raw, sizeof(%s));\n", createValueRelName(instr), createValueRelName(instr.X), createTypeName(instr.Type()))
+			fmt.Fprintf(ctx.stream, "%s = *(%s.raw);\n", createValueRelName(instr), createValueRelName(instr.X))
 		} else {
 			fmt.Fprintf(ctx.stream, "%s = %s %s;\n", createValueRelName(instr), instr.Op.String(), createValueRelName(instr.X))
 		}
