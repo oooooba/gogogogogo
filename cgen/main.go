@@ -325,12 +325,12 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 			fmt.Fprintf(ctx.stream, "{\n")
 			v := createValueRelName(instr)
 			elemType := instr.Type().(*types.Pointer).Elem()
+			fmt.Fprintf(ctx.stream, "%s_buf = (%s){0};\n", v, createTypeName(elemType))
 			if t, ok := elemType.(*types.Array); ok {
 				fmt.Fprintf(ctx.stream, "%s* raw = %s_buf.raw;\n", createTypeName(t.Elem()), v)
 			} else {
 				fmt.Fprintf(ctx.stream, "%s* raw = &%s_buf;\n", createTypeName(elemType), v)
 			}
-			fmt.Fprintf(ctx.stream, "memset(raw, 0, sizeof(%s_buf));\n", v)
 			fmt.Fprintf(ctx.stream, "%s = %s;\n", v, wrapInPointerObject("raw", instr.Type()))
 			fmt.Fprintf(ctx.stream, "}\n")
 		}
@@ -603,7 +603,7 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 		)
 
 	case *ssa.Slice:
-		fmt.Fprintf(ctx.stream, "memset(&%s, 0, sizeof(%s));\n", createValueRelName(instr), createTypeName(instr.Type()))
+		fmt.Fprintf(ctx.stream, "%s = (%s) {0};\n", createValueRelName(instr), createTypeName(instr.Type()))
 		startIndex := wrapInIntObject("0")
 		if instr.Low != nil {
 			startIndex = createValueRelName(instr.Low)
