@@ -592,12 +592,18 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 			startIndex = createValueRelName(instr.Low)
 		}
 
-		length := wrapInIntObject("0")
-		switch elemType := instr.X.Type().(*types.Pointer).Elem().(type) {
-		case *types.Array:
+		ptr := ""
+		length := ""
+		switch t := instr.X.Type().(type) {
+		case *types.Pointer:
+			ptr = "raw->raw"
+			elemType := t.Elem().(*types.Array)
 			length = wrapInIntObject(fmt.Sprintf("%d", elemType.Len()))
+		case *types.Slice:
+			ptr = "typed.ptr"
+			length = wrapInIntObject(fmt.Sprintf("%s.typed.capacity", createValueRelName(instr.X)))
 		default:
-			panic(fmt.Sprintf("not implemented: %s", elemType))
+			panic(fmt.Sprintf("not implemented: %s (%T)", t, t))
 		}
 
 		endIndex := length
@@ -605,7 +611,7 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 			endIndex = createValueRelName(instr.High)
 		}
 
-		fmt.Fprintf(ctx.stream, "%s.typed.ptr = %s.raw->raw + %s.raw;\n", createValueRelName(instr), createValueRelName(instr.X), startIndex)
+		fmt.Fprintf(ctx.stream, "%s.typed.ptr = %s.%s + %s.raw;\n", createValueRelName(instr), createValueRelName(instr.X), ptr, startIndex)
 		fmt.Fprintf(ctx.stream, "%s.typed.size = %s.raw - %s.raw;\n", createValueRelName(instr), endIndex, startIndex)
 		fmt.Fprintf(ctx.stream, "%s.typed.capacity = %s.raw - %s.raw;\n", createValueRelName(instr), length, startIndex)
 

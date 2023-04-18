@@ -270,6 +270,20 @@ func Test18() int {
 	return 18
 }
 
+func Test19() int {
+	var a [10]int
+	b := a[2:8]
+	c := b[3:5]
+	if len(c) != 2 {
+		return 0
+	}
+	if cap(c) != 5 {
+		return 1
+	}
+	c[1] = 19
+	return c[1]
+}
+
 func main() {
 	runTest := func(test func() int) {
 		funcFullName := runtime.FuncForPC(reflect.ValueOf(test).Pointer()).Name()
@@ -294,4 +308,5 @@ func main() {
 	runTest(Test16)
 	runTest(Test17)
 	runTest(Test18)
+	runTest(Test19)
 }
