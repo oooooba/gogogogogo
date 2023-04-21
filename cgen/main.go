@@ -340,6 +340,17 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 		case token.LSS, token.LEQ, token.GTR, token.GEQ:
 			raw := fmt.Sprintf("%s.raw %s %s.raw", createValueRelName(instr.X), instr.Op.String(), createValueRelName(instr.Y))
 			fmt.Fprintf(ctx.stream, "%s = %s;\n", createValueRelName(instr), wrapInBoolObject(raw))
+		case token.ADD:
+			if t, ok := instr.Type().(*types.Basic); ok && t.Kind() == types.String {
+				result := createValueRelName(instr)
+				ctx.switchFunctionToCallRuntimeApi("gox5_concat", "StackFrameConcat", createInstructionName(instr), &result, nil,
+					paramArgPair{param: "lhs", arg: createValueRelName(instr.X)},
+					paramArgPair{param: "rhs", arg: createValueRelName(instr.Y)},
+				)
+			} else {
+				raw := fmt.Sprintf("%s.raw %s %s.raw", createValueRelName(instr.X), instr.Op.String(), createValueRelName(instr.Y))
+				fmt.Fprintf(ctx.stream, "%s = %s;\n", createValueRelName(instr), wrapInIntObject(raw))
+			}
 		default:
 			raw := fmt.Sprintf("%s.raw %s %s.raw", createValueRelName(instr.X), instr.Op.String(), createValueRelName(instr.Y))
 			fmt.Fprintf(ctx.stream, "%s = %s;\n", createValueRelName(instr), wrapInIntObject(raw))
@@ -758,13 +769,20 @@ func (ctx *Context) emitValueDeclaration(value ssa.Value) {
 }
 
 func requireSwitchFunction(instruction ssa.Instruction) bool {
-	switch instruction.(type) {
+	switch t := instruction.(type) {
 	case *ssa.Alloc:
 		return instruction.(*ssa.Alloc).Heap
+	case *ssa.BinOp:
+		if t.Op == token.ADD {
+			if tt, ok := t.Type().(*types.Basic); ok && tt.Kind() == types.String {
+				return true
+			}
+		}
+		return false
 	case *ssa.Call, *ssa.Go, *ssa.MakeChan, *ssa.MakeClosure, *ssa.Send:
 		return true
 	case *ssa.UnOp:
-		if instruction.(*ssa.UnOp).Op == token.ARROW {
+		if t.Op == token.ARROW {
 			return true
 		}
 	}
@@ -1428,6 +1446,14 @@ typedef struct {
 	SliceObject elements;
 } StackFrameAppend;
 DECLARE_RUNTIME_API(append, StackFrameAppend);
+
+typedef struct {
+	StackFrameCommon common;
+	StringObject* result_ptr;
+	StringObject lhs;
+	StringObject rhs;
+} StackFrameConcat;
+DECLARE_RUNTIME_API(concat, StackFrameConcat);
 
 typedef struct {
 	StackFrameCommon common;

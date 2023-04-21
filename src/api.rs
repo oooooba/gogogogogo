@@ -205,6 +205,46 @@ pub fn append(ctx: &mut LightWeightThreadContext) -> FunctionObject {
 }
 
 #[repr(C)]
+struct StackFrameConcat {
+    common: StackFrameCommon,
+    result_ptr: *mut StringObject,
+    lhs: StringObject,
+    rhs: StringObject,
+}
+
+pub fn concat(ctx: &mut LightWeightThreadContext) -> FunctionObject {
+    let (lhs, rhs, result) = unsafe {
+        let stack_frame = &mut ctx.stack_pointer.concat;
+        let lhs = stack_frame.lhs.clone();
+        let rhs = stack_frame.rhs.clone();
+        (lhs, rhs, &mut (*stack_frame.result_ptr))
+    };
+
+    let concat_string = unsafe {
+        let lhs = ffi::CStr::from_ptr(lhs.0).to_str().unwrap();
+        let rhs = ffi::CStr::from_ptr(rhs.0).to_str().unwrap();
+        format!("{lhs}{rhs}")
+    };
+
+    let len = concat_string.len();
+    let ptr = ctx.global_context.process(|mut global_context| {
+        global_context.allocator().allocate(len + 1, |_| {}) as *mut libc::c_char
+    });
+    let dst_bytes = unsafe { slice::from_raw_parts_mut(ptr, len + 1) };
+    let src_bytes = concat_string.as_bytes();
+
+    for i in 0..len {
+        dst_bytes[i] = src_bytes[i] as libc::c_char;
+    }
+    dst_bytes[len] = 0;
+
+    let new_string_object = StringObject(ptr);
+    *result = new_string_object;
+
+    leave_runtime_api(ctx)
+}
+
+#[repr(C)]
 struct StackFrameFuncForPc {
     common: StackFrameCommon,
     result_ptr: *mut *const Func,
@@ -704,6 +744,7 @@ pub union StackFrame {
     pub words: [*mut (); 0],
     common: ManuallyDrop<StackFrameCommon>,
     append: ManuallyDrop<StackFrameAppend>,
+    concat: ManuallyDrop<StackFrameConcat>,
     func_for_pc: ManuallyDrop<StackFrameFuncForPc>,
     func_name: ManuallyDrop<StackFrameFuncName>,
     make_chan: ManuallyDrop<StackFrameMakeChan>,

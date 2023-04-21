@@ -105,6 +105,15 @@ func Test8() int {
 	return 8
 }
 
+func Test9() int {
+	s := "abc"
+	t := "def"
+	if s+t != "abcdef" {
+		return 0
+	}
+	return 9
+}
+
 func main() {
 	runTest := func(test func() int) {
 		funcFullName := runtime.FuncForPC(reflect.ValueOf(test).Pointer()).Name()
@@ -119,4 +128,5 @@ func main() {
 	runTest(Test6)
 	runTest(Test7)
 	runTest(Test8)
+	runTest(Test9)
 }

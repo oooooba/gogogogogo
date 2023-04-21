@@ -43,6 +43,11 @@ pub extern "C" fn gox5_append(ctx: &mut LightWeightThreadContext) -> FunctionObj
 }
 
 #[no_mangle]
+pub extern "C" fn gox5_concat(ctx: &mut LightWeightThreadContext) -> FunctionObject {
+    api::concat(ctx)
+}
+
+#[no_mangle]
 pub extern "C" fn gox5_func_for_pc(ctx: &mut LightWeightThreadContext) -> FunctionObject {
     api::func_for_pc(ctx)
 }
