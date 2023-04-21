@@ -430,6 +430,16 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 	case *ssa.ChangeType:
 		fmt.Fprintf(ctx.stream, "%s = %s;\n", createValueRelName(instr), createValueRelName(instr.X))
 
+	case *ssa.Convert:
+		if dstType, ok := instr.Type().(*types.Basic); ok && dstType.Kind() == types.String {
+		} else {
+			panic(fmt.Sprintf("not supported: %s, %s", instr, dstType))
+		}
+		result := createValueRelName(instr)
+		ctx.switchFunctionToCallRuntimeApi("gox5_make_string", "StackFrameMakeString", createInstructionName(instr), &result, nil,
+			paramArgPair{param: "code", arg: createValueRelName(instr.X)},
+		)
+
 	case *ssa.Extract:
 		fmt.Fprintf(ctx.stream, "%s = %s.e%d;\n", createValueRelName(instr), createValueRelName(instr.Tuple), instr.Index)
 
@@ -693,6 +703,9 @@ func (ctx *Context) emitValueDeclaration(value ssa.Value) {
 	case *ssa.Const:
 		canEmit = false
 
+	case *ssa.Convert:
+		ctx.emitValueDeclaration(val.X)
+
 	case *ssa.Extract:
 		ctx.emitValueDeclaration(val.Tuple)
 
@@ -780,6 +793,8 @@ func requireSwitchFunction(instruction ssa.Instruction) bool {
 		}
 		return false
 	case *ssa.Call, *ssa.Go, *ssa.MakeChan, *ssa.MakeClosure, *ssa.Send:
+		return true
+	case *ssa.Convert:
 		return true
 	case *ssa.UnOp:
 		if t.Op == token.ARROW {
@@ -1470,6 +1485,13 @@ typedef struct {
 	void* object_ptrs[0];
 } StackFrameMakeClosure;
 DECLARE_RUNTIME_API(make_closure, StackFrameMakeClosure);
+
+typedef struct {
+	StackFrameCommon common;
+	StringObject* result_ptr;
+	IntObject code;
+} StackFrameMakeString;
+DECLARE_RUNTIME_API(make_string, StackFrameMakeString);
 
 typedef struct {
 	StackFrameCommon common;
