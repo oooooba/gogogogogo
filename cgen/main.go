@@ -114,6 +114,10 @@ func wrapInPointerObject(s string, t types.Type) string {
 	return fmt.Sprintf("(%s){.raw=%s}", createTypeName(t), s)
 }
 
+func wrapInObject(s string, t types.Type) string {
+	return fmt.Sprintf("(%s){.raw=%s}", createTypeName(t), s)
+}
+
 func createValueName(value ssa.Value) string {
 	if val, ok := value.(*ssa.Const); ok {
 		if val.IsNil() {
@@ -126,23 +130,7 @@ func createValueName(value ssa.Value) string {
 				return wrapInPointerObject("NULL", val.Type())
 			}
 		} else {
-			cst := val.Value.String()
-			switch t := val.Type().(type) {
-			case *types.Basic:
-				if t.Kind() == types.String {
-					return fmt.Sprintf("(StringObject){.str_ptr=%s}", cst)
-				} else if t.Kind() == types.Bool {
-					return wrapInBoolObject(cst)
-				} else {
-					return wrapInIntObject(cst)
-				}
-
-			case *types.Named:
-				return fmt.Sprintf("(%s){%s}", createTypeName(val.Type()), cst)
-
-			default:
-				panic(fmt.Sprintf("val=%s, %T, %s, %T", val, val, val.Type(), val.Type()))
-			}
+			return wrapInObject(val.Value.String(), val.Type())
 		}
 	} else if val, ok := value.(*ssa.Function); ok {
 		return fmt.Sprintf("%s", wrapInFunctionObject(createFunctionName(val)))
@@ -186,7 +174,7 @@ func createTypeName(typ types.Type) string {
 			return fmt.Sprintf("Array<%s$%d>", f(t.Elem()), t.Len())
 		case *types.Basic:
 			switch t.Kind() {
-			case types.Bool:
+			case types.Bool, types.UntypedBool:
 				return fmt.Sprintf("BoolObject")
 			case types.Int, types.Int8, types.Int16, types.Int32, types.Int64, types.Uint, types.Uint8, types.Uint16, types.Uint32, types.Uint64, types.Uintptr:
 				return fmt.Sprintf("IntObject")
