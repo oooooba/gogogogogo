@@ -98,10 +98,6 @@ func encode(str string) string {
 	return buf
 }
 
-func wrapInBoolObject(s string) string {
-	return fmt.Sprintf("(BoolObject){.raw=%s}", s)
-}
-
 func wrapInFunctionObject(s string) string {
 	return fmt.Sprintf("(FunctionObject){.func_ptr=%s}", s)
 }
@@ -318,16 +314,16 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 		}
 
 	case *ssa.BinOp:
+		raw := ""
 		switch op := instr.Op; op {
 		case token.EQL, token.NEQ:
 			if instr.X.Type() != instr.Y.Type() {
 				panic(fmt.Sprintf("type mismatch: %s (%s) vs %s (%s)", instr.X, instr.X.Type(), instr.Y, instr.Y.Type()))
 			}
 			fmt.Fprintf(ctx.stream, "bool raw = equal_%s(&%s, &%s) %s true;", createTypeName(instr.X.Type()), createValueRelName(instr.X), createValueRelName(instr.Y), instr.Op)
-			fmt.Fprintf(ctx.stream, "%s = %s;\n", createValueRelName(instr), wrapInBoolObject("raw"))
+			raw = "raw"
 		case token.LSS, token.LEQ, token.GTR, token.GEQ:
-			raw := fmt.Sprintf("%s.raw %s %s.raw", createValueRelName(instr.X), instr.Op.String(), createValueRelName(instr.Y))
-			fmt.Fprintf(ctx.stream, "%s = %s;\n", createValueRelName(instr), wrapInBoolObject(raw))
+			raw = fmt.Sprintf("%s.raw %s %s.raw", createValueRelName(instr.X), instr.Op.String(), createValueRelName(instr.Y))
 		case token.ADD:
 			if t, ok := instr.Type().(*types.Basic); ok && t.Kind() == types.String {
 				result := createValueRelName(instr)
@@ -335,14 +331,14 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 					paramArgPair{param: "lhs", arg: createValueRelName(instr.X)},
 					paramArgPair{param: "rhs", arg: createValueRelName(instr.Y)},
 				)
+				return
 			} else {
-				raw := fmt.Sprintf("%s.raw %s %s.raw", createValueRelName(instr.X), instr.Op.String(), createValueRelName(instr.Y))
-				fmt.Fprintf(ctx.stream, "%s = %s;\n", createValueRelName(instr), wrapInIntObject(raw))
+				raw = fmt.Sprintf("%s.raw %s %s.raw", createValueRelName(instr.X), instr.Op.String(), createValueRelName(instr.Y))
 			}
 		default:
-			raw := fmt.Sprintf("%s.raw %s %s.raw", createValueRelName(instr.X), instr.Op.String(), createValueRelName(instr.Y))
-			fmt.Fprintf(ctx.stream, "%s = %s;\n", createValueRelName(instr), wrapInIntObject(raw))
+			raw = fmt.Sprintf("%s.raw %s %s.raw", createValueRelName(instr.X), instr.Op.String(), createValueRelName(instr.Y))
 		}
+		fmt.Fprintf(ctx.stream, "%s = %s;\n", createValueRelName(instr), wrapInObject(raw, instr.Type()))
 
 	case *ssa.Call:
 		callCommon := instr.Common()
