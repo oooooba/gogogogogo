@@ -396,7 +396,7 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 				case *types.Basic:
 					switch t.Kind() {
 					case types.String:
-						raw := fmt.Sprintf("strlen(%s.str_ptr)", createValueRelName(callCommon.Args[0]))
+						raw := fmt.Sprintf("strlen(%s.raw)", createValueRelName(callCommon.Args[0]))
 						fmt.Fprintf(ctx.stream, "%s = %s;\n", createValueRelName(instr), wrapInIntObject(raw))
 					default:
 						panic(fmt.Sprintf("unsuported argument for len: %s (%s)", callCommon.Args[0], t))
@@ -1049,7 +1049,7 @@ func (ctx *Context) emitEqualFunction() {
 		switch typ := typ.(type) {
 		case *types.Basic:
 			if typ.Kind() == types.String {
-				expr = "strcmp(lhs->str_ptr, rhs->str_ptr) == 0"
+				expr = "strcmp(lhs->raw, rhs->raw) == 0"
 			} else {
 				expr = "lhs->raw == rhs->raw"
 			}
@@ -1209,7 +1209,7 @@ func (ctx *Context) emitGlobalVariable(gv *ssa.Global) {
 func (ctx *Context) emitRuntimeInfo() {
 	fmt.Fprintln(ctx.stream, "Func runtime_info_funcs[] = {")
 	ctx.visitAllFunctions(ctx.program, func(function *ssa.Function) {
-		fmt.Fprintf(ctx.stream, "{ (StringObject){.str_ptr = \"main.%s\" }, (UserFunction){.func_ptr = %s} },\n", function.Name(), createFunctionName(function))
+		fmt.Fprintf(ctx.stream, "{ (StringObject){.raw = \"main.%s\" }, (UserFunction){.func_ptr = %s} },\n", function.Name(), createFunctionName(function))
 	})
 	fmt.Fprintln(ctx.stream, "};")
 
@@ -1421,7 +1421,7 @@ typedef struct {
 } IntObject;
 
 typedef struct {
-	const char* str_ptr;
+	const char* raw;
 } StringObject;
 
 typedef struct StackFrameCommon {
