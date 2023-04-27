@@ -99,7 +99,7 @@ func encode(str string) string {
 }
 
 func wrapInFunctionObject(s string) string {
-	return fmt.Sprintf("(FunctionObject){.func_ptr=%s}", s)
+	return fmt.Sprintf("(FunctionObject){.raw=%s}", s)
 }
 
 func wrapInPointerObject(s string, t types.Type) string {
@@ -341,7 +341,7 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 		if callCommon.Method != nil {
 			methodName := callCommon.Method.Name()
 			fmt.Fprintf(ctx.stream, `
-			FunctionObject next_function = {.func_ptr = NULL};
+			FunctionObject next_function = {.raw = NULL};
 			Interface* interface = &%s;
 			for (uintptr_t i = 0; i < interface->num_methods; ++i) {
 				InterfaceTableEntry* entry = &interface->interface_table[i];
@@ -350,7 +350,7 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 					break;
 				}
 			}
-			assert(next_function.func_ptr != NULL);
+			assert(next_function.raw != NULL);
 			`, createValueRelName(callCommon.Value), methodName)
 			nextFunction := "next_function"
 			ctx.switchFunction(nextFunction, callCommon, createValueRelName(instr), createInstructionName(instr))
@@ -1394,7 +1394,7 @@ typedef struct {
 } ChannelObject;
 
 typedef struct {
-	const void* func_ptr;
+	const void* raw;
 } FunctionObject;
 
 typedef struct {
