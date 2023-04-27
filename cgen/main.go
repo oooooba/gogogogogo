@@ -102,10 +102,6 @@ func wrapInFunctionObject(s string) string {
 	return fmt.Sprintf("(FunctionObject){.func_ptr=%s}", s)
 }
 
-func wrapInIntObject(s string) string {
-	return fmt.Sprintf("(IntObject){.raw=%s}", s)
-}
-
 func wrapInPointerObject(s string, t types.Type) string {
 	return fmt.Sprintf("(%s){.raw=%s}", createTypeName(t), s)
 }
@@ -363,6 +359,7 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 
 		switch callee := callCommon.Value.(type) {
 		case *ssa.Builtin:
+			raw := ""
 			switch callee.Name() {
 			case "append":
 				result := createValueRelName(instr)
@@ -373,30 +370,30 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 				)
 				return
 			case "cap":
-				fmt.Fprintf(ctx.stream, "intptr_t raw = %s.typed.capacity;", createValueRelName(callCommon.Args[0]))
-				fmt.Fprintf(ctx.stream, "%s = %s;\n", createValueRelName(instr), wrapInIntObject("raw"))
+				fmt.Fprintf(ctx.stream, "uintptr_t raw = %s.typed.capacity;", createValueRelName(callCommon.Args[0]))
+				raw = "raw"
 			case "len":
 				switch t := callCommon.Args[0].Type().(type) {
 				case *types.Basic:
 					switch t.Kind() {
 					case types.String:
-						raw := fmt.Sprintf("strlen(%s.raw)", createValueRelName(callCommon.Args[0]))
-						fmt.Fprintf(ctx.stream, "%s = %s;\n", createValueRelName(instr), wrapInIntObject(raw))
+						raw = fmt.Sprintf("strlen(%s.raw)", createValueRelName(callCommon.Args[0]))
 					default:
 						panic(fmt.Sprintf("unsuported argument for len: %s (%s)", callCommon.Args[0], t))
 					}
 				case *types.Slice:
-					fmt.Fprintf(ctx.stream, "intptr_t raw = %s.typed.size;", createValueRelName(callCommon.Args[0]))
-					fmt.Fprintf(ctx.stream, "%s = %s;\n", createValueRelName(instr), wrapInIntObject("raw"))
+					fmt.Fprintf(ctx.stream, "uintptr_t raw = %s.typed.size;", createValueRelName(callCommon.Args[0]))
+					raw = "raw"
 				default:
 					panic(fmt.Sprintf("unsuported argument for len: %s", callCommon.Args[0]))
 				}
 			case "ssa:wrapnilchk":
 				fmt.Fprintf(ctx.stream, "assert(%s.raw); // ssa:wrapnilchk\n", createValueRelName(callCommon.Args[0]))
-				fmt.Fprintf(ctx.stream, "%s = %s;\n", createValueRelName(instr), createValueRelName(callCommon.Args[0]))
+				raw = fmt.Sprintf("%s.raw", createValueRelName(callCommon.Args[0]))
 			default:
 				panic(fmt.Sprintf("unsuported builtin function: %s", callee.Name()))
 			}
+			fmt.Fprintf(ctx.stream, "%s = %s;\n", createValueRelName(instr), wrapInObject(raw, instr.Type()))
 			fmt.Fprintf(ctx.stream, "\treturn %s;\n", wrapInFunctionObject(createInstructionName(instr)))
 
 		case *ssa.Const, *ssa.Function:
@@ -592,9 +589,9 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 
 	case *ssa.Slice:
 		fmt.Fprintf(ctx.stream, "%s = (%s) {0};\n", createValueRelName(instr), createTypeName(instr.Type()))
-		startIndex := wrapInIntObject("0")
+		startIndex := "0"
 		if instr.Low != nil {
-			startIndex = createValueRelName(instr.Low)
+			startIndex = fmt.Sprintf("%s.raw", createValueRelName(instr.Low))
 		}
 
 		ptr := ""
@@ -603,22 +600,22 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 		case *types.Pointer:
 			ptr = "raw->raw"
 			elemType := t.Elem().(*types.Array)
-			length = wrapInIntObject(fmt.Sprintf("%d", elemType.Len()))
+			length = fmt.Sprintf("%d", elemType.Len())
 		case *types.Slice:
 			ptr = "typed.ptr"
-			length = wrapInIntObject(fmt.Sprintf("%s.typed.capacity", createValueRelName(instr.X)))
+			length = fmt.Sprintf("%s.typed.capacity", createValueRelName(instr.X))
 		default:
 			panic(fmt.Sprintf("not implemented: %s (%T)", t, t))
 		}
 
 		endIndex := length
 		if instr.High != nil {
-			endIndex = createValueRelName(instr.High)
+			endIndex = fmt.Sprintf("%s.raw", createValueRelName(instr.High))
 		}
 
-		fmt.Fprintf(ctx.stream, "%s.typed.ptr = %s.%s + %s.raw;\n", createValueRelName(instr), createValueRelName(instr.X), ptr, startIndex)
-		fmt.Fprintf(ctx.stream, "%s.typed.size = %s.raw - %s.raw;\n", createValueRelName(instr), endIndex, startIndex)
-		fmt.Fprintf(ctx.stream, "%s.typed.capacity = %s.raw - %s.raw;\n", createValueRelName(instr), length, startIndex)
+		fmt.Fprintf(ctx.stream, "%s.typed.ptr = %s.%s + %s;\n", createValueRelName(instr), createValueRelName(instr.X), ptr, startIndex)
+		fmt.Fprintf(ctx.stream, "%s.typed.size = %s - %s;\n", createValueRelName(instr), endIndex, startIndex)
+		fmt.Fprintf(ctx.stream, "%s.typed.capacity = %s - %s;\n", createValueRelName(instr), length, startIndex)
 
 	case *ssa.Store:
 		fmt.Fprintf(ctx.stream, "*(%s.raw) = %s;\n", createValueRelName(instr.Addr), createValueRelName(instr.Val))
