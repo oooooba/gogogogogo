@@ -102,28 +102,17 @@ func wrapInFunctionObject(s string) string {
 	return fmt.Sprintf("(FunctionObject){.raw=%s}", s)
 }
 
-func wrapInPointerObject(s string, t types.Type) string {
-	return fmt.Sprintf("(%s){.raw=%s}", createTypeName(t), s)
-}
-
 func wrapInObject(s string, t types.Type) string {
 	return fmt.Sprintf("(%s){.raw=%s}", createTypeName(t), s)
 }
 
 func createValueName(value ssa.Value) string {
 	if val, ok := value.(*ssa.Const); ok {
-		if val.IsNil() {
-			switch val.Type().(type) {
-			case *types.Signature:
-				return wrapInFunctionObject("NULL")
-			case *types.Slice:
-				return fmt.Sprintf("(%s){0}", createTypeName(val.Type()))
-			default:
-				return wrapInPointerObject("NULL", val.Type())
-			}
-		} else {
-			return wrapInObject(val.Value.String(), val.Type())
+		cst := "0"
+		if !val.IsNil() {
+			cst = val.Value.String()
 		}
+		return wrapInObject(cst, val.Type())
 	} else if val, ok := value.(*ssa.Function); ok {
 		return fmt.Sprintf("%s", wrapInFunctionObject(createFunctionName(val)))
 	} else if val, ok := value.(*ssa.Parameter); ok {
@@ -152,7 +141,7 @@ func createValueRelName(value ssa.Value) string {
 		return fmt.Sprintf("((FreeVars_%s*)frame->common.free_vars)->%s",
 			createFunctionName(value.Parent()), createValueName(value))
 	} else if _, ok := value.(*ssa.Global); ok {
-		return wrapInPointerObject(fmt.Sprintf("&%s", createValueName(value)), value.Type())
+		return wrapInObject(fmt.Sprintf("&%s", createValueName(value)), value.Type())
 	} else {
 		return fmt.Sprintf("frame->%s", createValueName(value))
 	}
@@ -305,7 +294,7 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 			elemType := instr.Type().(*types.Pointer).Elem()
 			fmt.Fprintf(ctx.stream, "%s_buf = (%s){0};\n", v, createTypeName(elemType))
 			fmt.Fprintf(ctx.stream, "%s* raw = &%s_buf;\n", createTypeName(elemType), v)
-			fmt.Fprintf(ctx.stream, "%s = %s;\n", v, wrapInPointerObject("raw", instr.Type()))
+			fmt.Fprintf(ctx.stream, "%s = %s;\n", v, wrapInObject("raw", instr.Type()))
 			fmt.Fprintf(ctx.stream, "}\n")
 		}
 
@@ -427,7 +416,7 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 	case *ssa.FieldAddr:
 		fmt.Fprintf(ctx.stream, "{\n")
 		fmt.Fprintf(ctx.stream, "%s* raw = &(%s.raw->%s);\n", createTypeName(instr.Type().(*types.Pointer).Elem()), createValueRelName(instr.X), instr.X.Type().(*types.Pointer).Elem().Underlying().(*types.Struct).Field(instr.Field).Name())
-		fmt.Fprintf(ctx.stream, "%s = %s;\n", createValueRelName(instr), wrapInPointerObject("raw", instr.Type()))
+		fmt.Fprintf(ctx.stream, "%s = %s;\n", createValueRelName(instr), wrapInObject("raw", instr.Type()))
 		fmt.Fprintf(ctx.stream, "}\n")
 
 	case *ssa.IndexAddr:
@@ -441,7 +430,7 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 		default:
 			panic(fmt.Sprintf("%s, %s, %s", instr, instr.X, t))
 		}
-		fmt.Fprintf(ctx.stream, "%s = %s;\n", createValueRelName(instr), wrapInPointerObject("raw", instr.Type()))
+		fmt.Fprintf(ctx.stream, "%s = %s;\n", createValueRelName(instr), wrapInObject("raw", instr.Type()))
 		fmt.Fprintf(ctx.stream, "}\n")
 
 	case *ssa.Go:
