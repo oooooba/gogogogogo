@@ -97,6 +97,26 @@ func Test9() int {
 	return 9
 }
 
+func Test10() int {
+	f := func() float32 {
+		return 42
+	}
+	if f() != f() {
+		return 0
+	}
+	return 10
+}
+
+func Test11() int {
+	f := func() float64 {
+		return 42
+	}
+	if f() != f() {
+		return 0
+	}
+	return 11
+}
+
 func main() {
 	runTest := func(test func() int) {
 		funcFullName := runtime.FuncForPC(reflect.ValueOf(test).Pointer()).Name()
@@ -112,4 +132,6 @@ func main() {
 	runTest(Test7)
 	runTest(Test8)
 	runTest(Test9)
+	runTest(Test10)
+	runTest(Test11)
 }

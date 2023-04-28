@@ -157,6 +157,10 @@ func createTypeName(typ types.Type) string {
 			switch t.Kind() {
 			case types.Bool, types.UntypedBool:
 				return fmt.Sprintf("BoolObject")
+			case types.Float32:
+				return fmt.Sprintf("Float32Object")
+			case types.Float64:
+				return fmt.Sprintf("Float64Object")
 			case types.Int, types.Uint, types.Uintptr:
 				return fmt.Sprintf("IntObject")
 			case types.Int8:
@@ -1396,6 +1400,8 @@ typedef struct {
 	typedef struct { raw_type raw; } name ## Object
 
 DEFINE_BUILTIN_OBJECT_TYPE(Bool, bool);
+DEFINE_BUILTIN_OBJECT_TYPE(Float32, float);
+DEFINE_BUILTIN_OBJECT_TYPE(Float64, double);
 DEFINE_BUILTIN_OBJECT_TYPE(Int, intptr_t);
 DEFINE_BUILTIN_OBJECT_TYPE(Int8, int8_t);
 DEFINE_BUILTIN_OBJECT_TYPE(Int16, int16_t);
