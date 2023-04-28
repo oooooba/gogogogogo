@@ -114,7 +114,7 @@ func createValueName(value ssa.Value) string {
 		}
 		return wrapInObject(cst, val.Type())
 	} else if val, ok := value.(*ssa.Function); ok {
-		return fmt.Sprintf("%s", wrapInFunctionObject(createFunctionName(val)))
+		return wrapInObject(createFunctionName(val), val.Type())
 	} else if val, ok := value.(*ssa.Parameter); ok {
 		for i, param := range val.Parent().Params {
 			if val.Name() == param.Name() {
@@ -577,7 +577,6 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 		)
 
 	case *ssa.Slice:
-		fmt.Fprintf(ctx.stream, "%s = (%s) {0};\n", createValueRelName(instr), createTypeName(instr.Type()))
 		startIndex := "0"
 		if instr.Low != nil {
 			startIndex = fmt.Sprintf("%s.raw", createValueRelName(instr.Low))
@@ -602,6 +601,7 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 			endIndex = fmt.Sprintf("%s.raw", createValueRelName(instr.High))
 		}
 
+		fmt.Fprintf(ctx.stream, "%s = %s;\n", createValueRelName(instr), wrapInObject("0", instr.Type()))
 		fmt.Fprintf(ctx.stream, "%s.typed.ptr = %s.%s + %s;\n", createValueRelName(instr), createValueRelName(instr.X), ptr, startIndex)
 		fmt.Fprintf(ctx.stream, "%s.typed.size = %s - %s;\n", createValueRelName(instr), endIndex, startIndex)
 		fmt.Fprintf(ctx.stream, "%s.typed.capacity = %s - %s;\n", createValueRelName(instr), length, startIndex)
@@ -615,11 +615,13 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 			ctx.switchFunctionToCallRuntimeApi("gox5_recv", "StackFrameRecv", createInstructionName(instr), &result, nil,
 				paramArgPair{param: "channel", arg: createValueRelName(instr.X)},
 			)
-		} else if instr.Op == token.MUL {
-			fmt.Fprintf(ctx.stream, "%s = *(%s.raw);\n", createValueRelName(instr), createValueRelName(instr.X))
-		} else {
-			fmt.Fprintf(ctx.stream, "%s = (%s){.raw=%s (%s.raw)};\n", createValueRelName(instr), createTypeName(instr.Type()), instr.Op.String(), createValueRelName(instr.X))
+			return
 		}
+		s := fmt.Sprintf("%s (%s.raw)", instr.Op.String(), createValueRelName(instr.X))
+		if instr.Op != token.MUL {
+			s = wrapInObject(s, instr.Type())
+		}
+		fmt.Fprintf(ctx.stream, "%s = %s;\n", createValueRelName(instr), s)
 
 	default:
 		panic(fmt.Sprintf("unknown instruction: %s", instruction.String()))
