@@ -422,13 +422,14 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 
 	case *ssa.Convert:
 		if dstType, ok := instr.Type().(*types.Basic); ok && dstType.Kind() == types.String {
+			result := createValueRelName(instr)
+			ctx.switchFunctionToCallRuntimeApi("gox5_make_string", "StackFrameMakeString", createInstructionName(instr), &result, nil,
+				paramArgPair{param: "code", arg: createValueRelName(instr.X)},
+			)
 		} else {
-			panic(fmt.Sprintf("not supported: %s, %s", instr, dstType))
+			raw := fmt.Sprintf("%s.raw", createValueRelName(instr.X))
+			fmt.Fprintf(ctx.stream, "%s = %s;\n", createValueRelName(instr), wrapInObject(raw, instr.Type()))
 		}
-		result := createValueRelName(instr)
-		ctx.switchFunctionToCallRuntimeApi("gox5_make_string", "StackFrameMakeString", createInstructionName(instr), &result, nil,
-			paramArgPair{param: "code", arg: createValueRelName(instr.X)},
-		)
 
 	case *ssa.Extract:
 		fmt.Fprintf(ctx.stream, "%s = %s.e%d;\n", createValueRelName(instr), createValueRelName(instr.Tuple), instr.Index)
@@ -787,7 +788,10 @@ func requireSwitchFunction(instruction ssa.Instruction) bool {
 	case *ssa.Call, *ssa.Go, *ssa.MakeChan, *ssa.MakeClosure, *ssa.Send:
 		return true
 	case *ssa.Convert:
-		return true
+		if dstType, ok := t.Type().(*types.Basic); ok && dstType.Kind() == types.String {
+			return true
+		}
+		return false
 	case *ssa.UnOp:
 		if t.Op == token.ARROW {
 			return true

@@ -70,6 +70,18 @@ func Test6() int {
 	return int(t1)
 }
 
+type I64 int64
+type I16 int16
+
+func Test7() int {
+	x := I16(7)
+	y := I64(x)
+	if y != 7 {
+		return 0
+	}
+	return 7
+}
+
 func main() {
 	runTest := func(test func() int) {
 		funcFullName := runtime.FuncForPC(reflect.ValueOf(test).Pointer()).Name()
@@ -82,4 +94,5 @@ func main() {
 	runTest(Test4)
 	runTest(Test5)
 	runTest(Test6)
+	runTest(Test7)
 }
