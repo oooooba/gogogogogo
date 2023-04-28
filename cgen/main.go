@@ -157,10 +157,26 @@ func createTypeName(typ types.Type) string {
 			switch t.Kind() {
 			case types.Bool, types.UntypedBool:
 				return fmt.Sprintf("BoolObject")
-			case types.Int, types.Int8, types.Int16, types.Int32, types.Int64, types.Uint, types.Uint8, types.Uint16, types.Uint32, types.Uint64, types.Uintptr:
+			case types.Int, types.Uint, types.Uintptr:
 				return fmt.Sprintf("IntObject")
+			case types.Int8:
+				return fmt.Sprintf("Int8Object")
+			case types.Int16:
+				return fmt.Sprintf("Int16Object")
+			case types.Int32:
+				return fmt.Sprintf("Int32Object")
+			case types.Int64:
+				return fmt.Sprintf("Uint64Object")
 			case types.String:
 				return fmt.Sprintf("StringObject")
+			case types.Uint8:
+				return fmt.Sprintf("Uint8Object")
+			case types.Uint16:
+				return fmt.Sprintf("Uint16Object")
+			case types.Uint32:
+				return fmt.Sprintf("Uint32Object")
+			case types.Uint64:
+				return fmt.Sprintf("Uint64Object")
 			}
 		case *types.Chan:
 			return fmt.Sprintf("ChannelObject")
@@ -1376,9 +1392,20 @@ typedef struct {
 	const void* func_ptr;
 } UserFunction;
 
-typedef struct {
-	bool raw;
-} BoolObject;
+#define DEFINE_BUILTIN_OBJECT_TYPE(name, raw_type) \
+	typedef struct { raw_type raw; } name ## Object
+
+DEFINE_BUILTIN_OBJECT_TYPE(Bool, bool);
+DEFINE_BUILTIN_OBJECT_TYPE(Int, intptr_t);
+DEFINE_BUILTIN_OBJECT_TYPE(Int8, int8_t);
+DEFINE_BUILTIN_OBJECT_TYPE(Int16, int16_t);
+DEFINE_BUILTIN_OBJECT_TYPE(Int32, int32_t);
+DEFINE_BUILTIN_OBJECT_TYPE(Int64, int64_t);
+DEFINE_BUILTIN_OBJECT_TYPE(String, const char*);
+DEFINE_BUILTIN_OBJECT_TYPE(Uint8, uint8_t);
+DEFINE_BUILTIN_OBJECT_TYPE(Uint16, uint16_t);
+DEFINE_BUILTIN_OBJECT_TYPE(Uint32, uint32_t);
+DEFINE_BUILTIN_OBJECT_TYPE(Uint64, uint64_t);
 
 typedef struct {
 	void* raw;
@@ -1387,14 +1414,6 @@ typedef struct {
 typedef struct {
 	const void* raw;
 } FunctionObject;
-
-typedef struct {
-	intptr_t raw;
-} IntObject;
-
-typedef struct {
-	const char* raw;
-} StringObject;
 
 typedef struct StackFrameCommon {
 	FunctionObject resume_func;
