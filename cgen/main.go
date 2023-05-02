@@ -411,7 +411,7 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 			nextFunction := createValueName(callee)
 			ctx.switchFunction(nextFunction, callCommon, createValueRelName(instr), createInstructionName(instr))
 
-		case *ssa.MakeClosure, *ssa.Parameter:
+		case *ssa.MakeClosure, *ssa.Parameter, *ssa.UnOp:
 			nextFunction := createValueRelName(callee)
 			ctx.switchFunction(nextFunction, callCommon, createValueRelName(instr), createInstructionName(instr))
 

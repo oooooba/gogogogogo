@@ -104,6 +104,26 @@ func Test11() int {
 	return 11
 }
 
+func Test12() int {
+	f := func() int {
+		return 12
+	}
+	var g *(func() int)
+	g = &f
+	return (*g)()
+}
+
+func Test13() int {
+	f := func() int {
+		return 13
+	}
+	var g *(func() int)
+	var h **(func() int)
+	g = &f
+	h = &g
+	return (**h)()
+}
+
 func main() {
 	runTest := func(test func() int) {
 		funcFullName := runtime.FuncForPC(reflect.ValueOf(test).Pointer()).Name()
@@ -121,4 +141,6 @@ func main() {
 	runTest(Test9)
 	runTest(Test10)
 	runTest(Test11)
+	runTest(Test12)
+	runTest(Test13)
 }
