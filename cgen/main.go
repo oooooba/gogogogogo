@@ -191,7 +191,7 @@ func createTypeName(typ types.Type) string {
 		case *types.Named:
 			// remove "command-line-arguments."
 			l := strings.Split(typ.String(), ".")
-			return l[len(l)-1]
+			return fmt.Sprintf("Named<%s>", l[len(l)-1])
 		case *types.Pointer:
 			return fmt.Sprintf("Pointer<%s>", f(t.Elem()))
 		case *types.Signature:
@@ -1574,7 +1574,7 @@ typedef struct {
 } StackFrameValuePointer;
 DECLARE_RUNTIME_API(value_pointer, StackFrameValuePointer);
 
-#define f_S_Pointer_S_Value gox5_value_pointer
+#define f_S_Pointer_S_Named___lt___Value___gt___ gox5_value_pointer
 
 // ToDo: WA to handle runtime.FuncForPC
 
@@ -1601,7 +1601,7 @@ typedef struct {
 } StackFrameFuncName;
 DECLARE_RUNTIME_API(func_name, StackFrameFuncName);
 
-#define f_S_Name_S_Pointer___lt___Func___gt___ gox5_func_name
+#define f_S_Name_S_Pointer___lt___Named___lt___Func___gt______gt___ gox5_func_name
 
 // ToDo: WA to handle strings.Split
 
