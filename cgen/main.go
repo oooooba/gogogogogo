@@ -407,16 +407,9 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 			fmt.Fprintf(ctx.stream, "%s = %s;\n", createValueRelName(instr), wrapInObject(raw, instr.Type()))
 			fmt.Fprintf(ctx.stream, "\treturn %s;\n", wrapInFunctionObject(createInstructionName(instr)))
 
-		case *ssa.Const, *ssa.Function:
-			nextFunction := createValueName(callee)
-			ctx.switchFunction(nextFunction, callCommon, createValueRelName(instr), createInstructionName(instr))
-
-		case *ssa.MakeClosure, *ssa.Parameter, *ssa.UnOp:
+		default:
 			nextFunction := createValueRelName(callee)
 			ctx.switchFunction(nextFunction, callCommon, createValueRelName(instr), createInstructionName(instr))
-
-		default:
-			panic(fmt.Sprintf("unknown callee: %s, %T", callee, callee))
 		}
 
 	case *ssa.ChangeType:
