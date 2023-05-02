@@ -173,6 +173,8 @@ func createTypeName(typ types.Type) string {
 				return fmt.Sprintf("Uint64Object")
 			case types.String:
 				return fmt.Sprintf("StringObject")
+			case types.UnsafePointer:
+				return fmt.Sprintf("UnsafePointerObject")
 			case types.Uint8:
 				return fmt.Sprintf("Uint8Object")
 			case types.Uint16:
@@ -1412,6 +1414,7 @@ DEFINE_BUILTIN_OBJECT_TYPE(Int16, int16_t);
 DEFINE_BUILTIN_OBJECT_TYPE(Int32, int32_t);
 DEFINE_BUILTIN_OBJECT_TYPE(Int64, int64_t);
 DEFINE_BUILTIN_OBJECT_TYPE(String, const char*);
+DEFINE_BUILTIN_OBJECT_TYPE(UnsafePointer, void*);
 DEFINE_BUILTIN_OBJECT_TYPE(Uint8, uint8_t);
 DEFINE_BUILTIN_OBJECT_TYPE(Uint16, uint16_t);
 DEFINE_BUILTIN_OBJECT_TYPE(Uint32, uint32_t);
