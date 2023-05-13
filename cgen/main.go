@@ -970,59 +970,67 @@ func (ctx *Context) emitType() {
 	for _, typ := range ctx.typeSlice {
 		name := createTypeName(typ)
 		switch typ := typ.(type) {
-		case *types.Array:
-			fmt.Fprintf(ctx.stream, "typedef struct { // %s\n", typ)
-			fmt.Fprintf(ctx.stream, "\t%s raw[%d];\n", createTypeName(typ.Elem()), typ.Len())
-			fmt.Fprintf(ctx.stream, "} %s;\n", name)
+		case *types.Array, *types.Pointer, *types.Struct, *types.Tuple:
+			fmt.Fprintf(ctx.stream, "typedef struct %s %s; // %s\n", name, name, typ)
 
-		case *types.Basic:
-			// do nothing
-
-		case *types.Chan:
-			// do nothing
-
-		case *types.Interface:
+		case *types.Basic, *types.Chan, *types.Interface, *types.Signature:
 			// do nothing
 
 		case *types.Named:
 			underlyingTypeName := createTypeName(typ.Underlying())
-			fmt.Fprintf(ctx.stream, "typedef %s %s;\n", underlyingTypeName, name)
+			fmt.Fprintf(ctx.stream, "typedef %s %s; // %s\n", underlyingTypeName, name, typ)
+
+		case *types.Slice:
+			fmt.Fprintf(ctx.stream, "typedef union %s %s; // %s\n", name, name, typ)
+
+		default:
+			panic(fmt.Sprintf("not implemented: %s %T", typ, typ))
+		}
+	}
+
+	for _, typ := range ctx.typeSlice {
+		name := createTypeName(typ)
+		switch typ := typ.(type) {
+		case *types.Array:
+			fmt.Fprintf(ctx.stream, "struct %s { // %s\n", name, typ)
+			fmt.Fprintf(ctx.stream, "\t%s raw[%d];\n", createTypeName(typ.Elem()), typ.Len())
+			fmt.Fprintf(ctx.stream, "};\n")
+
+		case *types.Basic, *types.Chan, *types.Interface, *types.Named, *types.Signature:
+			// do nothing
 
 		case *types.Pointer:
 			elemType := typ.Elem()
-			fmt.Fprintf(ctx.stream, "typedef struct { // %s\n", typ)
+			fmt.Fprintf(ctx.stream, "struct %s { // %s\n", name, typ)
 			fmt.Fprintf(ctx.stream, "\t%s* raw;\n", createTypeName(elemType))
-			fmt.Fprintf(ctx.stream, "} %s;\n", name)
-
-		case *types.Signature:
-			// do nothing
+			fmt.Fprintf(ctx.stream, "};\n")
 
 		case *types.Slice:
 			fmt.Fprintf(ctx.stream, `
-typedef union { // %s
+union %s { // %s
 	SliceObject raw;
 	struct {
 		%s* ptr;
 		uintptr_t size;
 		uintptr_t capacity;
 	} typed;
-} %s;
-`, typ, createTypeName(typ.Elem()), name)
+};
+`, name, typ, createTypeName(typ.Elem()))
 
 		case *types.Struct:
-			fmt.Fprintf(ctx.stream, "typedef struct { // %s\n", typ)
+			fmt.Fprintf(ctx.stream, "struct %s { // %s\n", name, typ)
 			for i := 0; i < typ.NumFields(); i++ {
 				field := typ.Field(i)
 				fmt.Fprintf(ctx.stream, "\t%s %s; // %s\n", createTypeName(field.Type()), field.Name(), field)
 			}
-			fmt.Fprintf(ctx.stream, "} %s;\n", name)
+			fmt.Fprintf(ctx.stream, "};\n")
 
 		case *types.Tuple:
-			fmt.Fprintf(ctx.stream, "typedef struct { // %s\n", typ)
+			fmt.Fprintf(ctx.stream, "struct %s { // %s\n", name, typ)
 			for i := 0; i < typ.Len(); i++ {
 				fmt.Fprintf(ctx.stream, "\t%s e%d; // %s\n", createTypeName(typ.At(i).Type()), i, typ.At(i))
 			}
-			fmt.Fprintf(ctx.stream, "} %s;\n", name)
+			fmt.Fprintf(ctx.stream, "};\n")
 
 		default:
 			panic(fmt.Sprintf("not implemented: %s %T", typ, typ))

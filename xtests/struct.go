@@ -127,6 +127,66 @@ func Test16() int {
 	return s.x
 }
 
+type S2 struct {
+	x int
+	y *S2
+}
+
+func Test17() int {
+	s := S2{x: 17}
+	if s.y != nil {
+		return 0
+	}
+	return s.x
+}
+
+func Test18() int {
+	v0 := S2{x: 0, y: nil}
+	v1 := S2{x: 1, y: &v0}
+	if v1.x != 1 {
+		return 0
+	}
+	if v1.y == nil {
+		return 1
+	}
+	if v1.y.x != 0 {
+		return 2
+	}
+	if v1.y.y != nil {
+		return 3
+	}
+	return 18
+}
+
+type S3 struct {
+	x int
+	y *S4
+}
+
+type S4 struct {
+	a int
+	b *S3
+}
+
+func Test19() int {
+	v0 := S3{x: 3, y: nil}
+	v1 := S4{a: 4, b: &v0}
+	v0.y = &v1
+	if v0.x != 3 {
+		return 0
+	}
+	if v0.y != &v1 {
+		return 1
+	}
+	if v1.a != 4 {
+		return 2
+	}
+	if v1.b != &v0 {
+		return 3
+	}
+	return 19
+}
+
 func main() {
 	runTest := func(test func() int) {
 		funcFullName := runtime.FuncForPC(reflect.ValueOf(test).Pointer()).Name()
@@ -149,4 +209,7 @@ func main() {
 	runTest(Test14)
 	runTest(Test15)
 	runTest(Test16)
+	runTest(Test17)
+	runTest(Test18)
+	runTest(Test19)
 }
