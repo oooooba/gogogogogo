@@ -246,22 +246,16 @@ func (ctx *Context) switchFunction(nextFunction string, callCommon *ssa.CallComm
 
 	paramBase := 0
 	argBase := 0
-	if callCommon.IsInvoke() {
-		arg := callCommon.Value
-		if arg.Type().Underlying().(*types.Interface).Empty() {
-			fmt.Fprintf(ctx.stream, "signature->param%d = %s.receiver; // receiver: %s\n",
-				paramBase, createValueRelName(arg), signature.Recv())
+	if signature.Recv() != nil {
+		var receiver string
+		if callCommon.IsInvoke() {
+			receiver = fmt.Sprintf("%s.receiver", createValueRelName(callCommon.Value))
 		} else {
-			fmt.Fprintf(ctx.stream, "signature->param%d = %s.receiver; // receiver: %s\n",
-				paramBase, createValueRelName(arg), signature.Recv())
+			receiver = fmt.Sprintf("%s", createValueRelName(callCommon.Args[argBase]))
+			argBase++
 		}
+		fmt.Fprintf(ctx.stream, "signature->param%d = %s; // receiver: %s\n", paramBase, receiver, signature.Recv())
 		paramBase++
-	} else if signature.Recv() != nil {
-		arg := callCommon.Args[argBase]
-		fmt.Fprintf(ctx.stream, "signature->param%d = %s; // receiver: %s\n",
-			paramBase, createValueRelName(arg), signature.Recv())
-		paramBase++
-		argBase++
 	}
 	for i := 0; i < signature.Params().Len(); i++ {
 		arg := callCommon.Args[argBase+i]
