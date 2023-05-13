@@ -230,7 +230,7 @@ func (ctx *Context) switchFunction(nextFunction string, callCommon *ssa.CallComm
 		signature = callCommon.Value.Type().(*types.Signature)
 	}
 
-	if callCommon.IsInvoke() || signature.Results().Len() > 0 || signature.Params().Len() > 0 {
+	if signature.Recv() != nil || signature.Results().Len() > 0 || signature.Params().Len() > 0 {
 		var signatureName string
 		if callCommon.IsInvoke() {
 			signatureName = createSignatureName(signature, true)
