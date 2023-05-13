@@ -324,9 +324,6 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 		raw := ""
 		switch op := instr.Op; op {
 		case token.EQL, token.NEQ:
-			if instr.X.Type() != instr.Y.Type() {
-				panic(fmt.Sprintf("type mismatch: %s (%s) vs %s (%s)", instr.X, instr.X.Type(), instr.Y, instr.Y.Type()))
-			}
 			fmt.Fprintf(ctx.stream, "bool raw = equal_%s(&%s, &%s) %s true;", createTypeName(instr.X.Type()), createValueRelName(instr.X), createValueRelName(instr.Y), instr.Op)
 			raw = "raw"
 		case token.LSS, token.LEQ, token.GTR, token.GEQ:
