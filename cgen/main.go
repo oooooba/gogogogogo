@@ -616,6 +616,16 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 	case *ssa.Store:
 		fmt.Fprintf(ctx.stream, "*(%s.raw) = %s;\n", createValueRelName(instr.Addr), createValueRelName(instr.Val))
 
+	case *ssa.TypeAssert:
+		var raw string
+		if instr.X.Type().Underlying().(*types.Interface).Empty() {
+			raw = fmt.Sprintf("*((void**)%s.receiver)", createValueRelName(instr.X))
+
+		} else {
+			raw = fmt.Sprintf("%s.receiver", createValueRelName(instr.X))
+		}
+		fmt.Fprintf(ctx.stream, "%s = %s;\n", createValueRelName(instr), wrapInObject(raw, instr.AssertedType))
+
 	case *ssa.UnOp:
 		if instr.Op == token.ARROW {
 			result := createValueRelName(instr)
@@ -739,6 +749,9 @@ func (ctx *Context) emitValueDeclaration(value ssa.Value) {
 		if val.High != nil {
 			ctx.emitValueDeclaration(val.High)
 		}
+
+	case *ssa.TypeAssert:
+		ctx.emitValueDeclaration(val.X)
 
 	case *ssa.UnOp:
 		ctx.emitValueDeclaration(val.X)

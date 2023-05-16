@@ -195,6 +195,41 @@ func Test12() int {
 	return f(1)
 }
 
+func Test13() int {
+	var i I
+	s := S0{n: 42}
+	i = &s
+	ss := i.(*S0)
+	if ss.n != 42 {
+		return 0
+	}
+	s.n = 43
+	if ss.n != 43 {
+		return 1
+	}
+	return 13
+}
+
+func Test14() int {
+	var i interface{}
+	s := S0{n: 42}
+	i = &s
+	ss := i.(*S0)
+	if ss.n != 42 {
+		return 0
+	}
+	s.n = 43
+	if ss.n != 43 {
+		return 1
+	}
+	return 14
+}
+
+		return 0
+	}
+	return 13
+}
+
 func main() {
 	runTest := func(test func() int) {
 		funcFullName := runtime.FuncForPC(reflect.ValueOf(test).Pointer()).Name()
@@ -213,4 +248,6 @@ func main() {
 	runTest(Test10)
 	runTest(Test11)
 	runTest(Test12)
+	runTest(Test13)
+	runTest(Test14)
 }
