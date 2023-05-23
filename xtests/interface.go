@@ -225,9 +225,19 @@ func Test14() int {
 	return 14
 }
 
+func Test15() int {
+	var i interface{}
+	n := 42
+	i = n
+	nn := i.(int)
+	if nn != 42 {
 		return 0
 	}
-	return 13
+	nn = 43
+	if n != 42 {
+		return 1
+	}
+	return 15
 }
 
 func main() {
@@ -250,4 +260,5 @@ func main() {
 	runTest(Test12)
 	runTest(Test13)
 	runTest(Test14)
+	runTest(Test15)
 }

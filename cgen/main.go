@@ -617,14 +617,14 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 		fmt.Fprintf(ctx.stream, "*(%s.raw) = %s;\n", createValueRelName(instr.Addr), createValueRelName(instr.Val))
 
 	case *ssa.TypeAssert:
-		var raw string
+		var s string
 		if instr.X.Type().Underlying().(*types.Interface).Empty() {
-			raw = fmt.Sprintf("*((void**)%s.receiver)", createValueRelName(instr.X))
-
+			s = fmt.Sprintf("*((%s*)%s.receiver)", createTypeName(instr.AssertedType), createValueRelName(instr.X))
 		} else {
-			raw = fmt.Sprintf("%s.receiver", createValueRelName(instr.X))
+			raw := fmt.Sprintf("%s.receiver", createValueRelName(instr.X))
+			s = wrapInObject(raw, instr.AssertedType)
 		}
-		fmt.Fprintf(ctx.stream, "%s = %s;\n", createValueRelName(instr), wrapInObject(raw, instr.AssertedType))
+		fmt.Fprintf(ctx.stream, "%s = %s;\n", createValueRelName(instr), s)
 
 	case *ssa.UnOp:
 		if instr.Op == token.ARROW {
