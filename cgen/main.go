@@ -618,11 +618,15 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 
 	case *ssa.TypeAssert:
 		var s string
-		if instr.X.Type().Underlying().(*types.Interface).Empty() {
-			s = fmt.Sprintf("*((%s*)%s.receiver)", createTypeName(instr.AssertedType), createValueRelName(instr.X))
+		if _, ok := instr.AssertedType.Underlying().(*types.Interface); ok {
+			s = fmt.Sprintf("%s", createValueRelName(instr.X))
 		} else {
-			raw := fmt.Sprintf("%s.receiver", createValueRelName(instr.X))
-			s = wrapInObject(raw, instr.AssertedType)
+			if instr.X.Type().Underlying().(*types.Interface).Empty() {
+				s = fmt.Sprintf("*((%s*)%s.receiver)", createTypeName(instr.AssertedType), createValueRelName(instr.X))
+			} else {
+				raw := fmt.Sprintf("%s.receiver", createValueRelName(instr.X))
+				s = wrapInObject(raw, instr.AssertedType)
+			}
 		}
 		fmt.Fprintf(ctx.stream, "%s = %s;\n", createValueRelName(instr), s)
 

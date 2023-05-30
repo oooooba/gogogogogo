@@ -240,6 +240,33 @@ func Test15() int {
 	return 15
 }
 
+type I2 interface {
+	f() int
+	f2() int
+}
+
+func (s *S0) f2() int {
+	return s.n + s.n
+}
+
+func Test16() int {
+	s := S0{n: 42}
+	var i I
+	i = &s
+	if i.f() != 42 {
+		return 0
+	}
+	var i2 I2
+	i2 = i.(I2)
+	if i2.f() != 42 {
+		return 1
+	}
+	if i2.f2() != 84 {
+		return 2
+	}
+	return 16
+}
+
 func main() {
 	runTest := func(test func() int) {
 		funcFullName := runtime.FuncForPC(reflect.ValueOf(test).Pointer()).Name()
@@ -261,4 +288,5 @@ func main() {
 	runTest(Test13)
 	runTest(Test14)
 	runTest(Test15)
+	runTest(Test16)
 }
