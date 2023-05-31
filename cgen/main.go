@@ -533,6 +533,7 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 			default:
 				fmt.Fprintf(ctx.stream, "%s.receiver = &%s;\n", valueName, createValueRelName(instr.X))
 			}
+			fmt.Fprintf(ctx.stream, "%s.type_id = (uintptr_t)\"%s\";\n", valueName, createTypeName(instr.X.Type()))
 			fmt.Fprintf(ctx.stream, "%s.num_methods = 0;\n", valueName)
 			typ := "NULL"
 			switch t := instr.X.Type().(type) {
@@ -547,6 +548,7 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 			fmt.Fprintf(ctx.stream, "%s.interface_table = (void*)%s;\n", valueName, typ)
 		} else {
 			fmt.Fprintf(ctx.stream, "%s.receiver = %s.raw;\n", valueName, createValueRelName(instr.X))
+			fmt.Fprintf(ctx.stream, "%s.type_id = (uintptr_t)\"%s\";\n", valueName, createTypeName(instr.X.Type()))
 			fmt.Fprintf(ctx.stream, "%s.num_methods = sizeof(%s.entries)/sizeof(%s.entries[0]);\n", valueName, interfaceTableName, interfaceTableName)
 			fmt.Fprintf(ctx.stream, "%s.interface_table = &%s.entries[0];\n", valueName, interfaceTableName)
 		}
@@ -617,18 +619,53 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 		fmt.Fprintf(ctx.stream, "*(%s.raw) = %s;\n", createValueRelName(instr.Addr), createValueRelName(instr.Val))
 
 	case *ssa.TypeAssert:
-		var s string
-		if _, ok := instr.AssertedType.Underlying().(*types.Interface); ok {
-			s = fmt.Sprintf("%s", createValueRelName(instr.X))
-		} else {
-			if instr.X.Type().Underlying().(*types.Interface).Empty() {
-				s = fmt.Sprintf("*((%s*)%s.receiver)", createTypeName(instr.AssertedType), createValueRelName(instr.X))
+		srcObj := func() string {
+			if _, ok := instr.AssertedType.Underlying().(*types.Interface); ok {
+				return fmt.Sprintf("%s", createValueRelName(instr.X))
 			} else {
-				raw := fmt.Sprintf("%s.receiver", createValueRelName(instr.X))
-				s = wrapInObject(raw, instr.AssertedType)
+				if instr.X.Type().Underlying().(*types.Interface).Empty() {
+					return fmt.Sprintf("*((%s*)%s.receiver)", createTypeName(instr.AssertedType), createValueRelName(instr.X))
+				} else {
+					raw := fmt.Sprintf("%s.receiver", createValueRelName(instr.X))
+					return wrapInObject(raw, instr.AssertedType)
+				}
 			}
+		}()
+		dstObj := createValueRelName(instr)
+		fmt.Fprintf(ctx.stream, "{\n")
+		if instr.CommaOk {
+			if t, ok := instr.AssertedType.Underlying().(*types.Interface); ok {
+				fmt.Fprintf(ctx.stream, "bool can_convert = true;\n")
+				fmt.Fprintf(ctx.stream, "Interface* interface = &%s;\n", srcObj)
+				for i := 0; i < t.NumExplicitMethods(); i++ {
+					methodName := t.ExplicitMethod(i).Name()
+					fmt.Fprintf(ctx.stream, `
+					{
+						bool found = false;
+						for (uintptr_t i = 0; i < interface->num_methods; ++i) {
+							InterfaceTableEntry* entry = &interface->interface_table[i];
+							if (strcmp(entry->method_name, "%s") == 0) {
+								found = true;
+								break;
+							}
+						}
+						can_convert = can_convert && found;
+					}
+					`, methodName)
+				}
+			} else {
+				fmt.Fprintf(ctx.stream, "uintptr_t type_id = (uintptr_t)\"%s\";\n", createTypeName(instr.AssertedType))
+				fmt.Fprintf(ctx.stream, "bool can_convert = %s.type_id == type_id;\n", createValueRelName(instr.X))
+			}
+			fmt.Fprintf(ctx.stream, "%s = (%s){0};\n", dstObj, createTypeName(instr.Type()))
+			fmt.Fprintf(ctx.stream, "if (can_convert) {\n")
+			fmt.Fprintf(ctx.stream, "%s.e0 = %s;\n", dstObj, srcObj)
+			fmt.Fprintf(ctx.stream, "}\n")
+			fmt.Fprintf(ctx.stream, "%s.e1 = (BoolObject){.raw=can_convert};\n", dstObj)
+		} else {
+			fmt.Fprintf(ctx.stream, "%s = %s;\n", dstObj, srcObj)
 		}
-		fmt.Fprintf(ctx.stream, "%s = %s;\n", createValueRelName(instr), s)
+		fmt.Fprintf(ctx.stream, "}\n")
 
 	case *ssa.UnOp:
 		if instr.Op == token.ARROW {
@@ -1457,6 +1494,7 @@ typedef struct {
 
 typedef struct {
 	void* receiver;
+	uintptr_t type_id;
 	uintptr_t num_methods;
 	InterfaceTableEntry* interface_table; // ToDo: use distinguish object type for empty interface (1: int, 2 string)
 } Interface;

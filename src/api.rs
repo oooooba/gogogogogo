@@ -79,6 +79,7 @@ unsafe impl Send for UserFunction {}
 #[repr(C)]
 pub struct Interface {
     receiver: ObjectPtr,
+    type_id: usize,
     num_methods: usize,
     interface_table: *const (),
 }

@@ -267,6 +267,97 @@ func Test16() int {
 	return 16
 }
 
+func Test17() int {
+	var i I
+	s := S0{n: 42}
+	i = &s
+	ss, ok := i.(*S0)
+	if !ok {
+		return 0
+	}
+	if ss.n != 42 {
+		return 1
+	}
+	sss, ok2 := i.(*S1)
+	if ok2 {
+		return 2
+	}
+	if sss != nil {
+		return 3
+	}
+	return 17
+}
+
+func Test18() int {
+	var i interface{}
+	s := S0{n: 42}
+	i = &s
+	ss, ok := i.(*S0)
+	if !ok {
+		return 0
+	}
+	if ss.n != 42 {
+		return 1
+	}
+	sss, ok2 := i.(*S1)
+	if ok2 {
+		return 2
+	}
+	if sss != nil {
+		return 3
+	}
+	return 18
+}
+
+func Test19() int {
+	var i interface{}
+	n := 42
+	i = n
+	nn, ok := i.(int)
+	if !ok {
+		return 0
+	}
+	if nn != 42 {
+		return 1
+	}
+	s, ok2 := i.(S0)
+	if ok2 {
+		return 2
+	}
+	if s.n != 0 {
+		return 3
+	}
+	return 19
+}
+
+func Test20() int {
+	s := S0{n: 42}
+	var i I
+	i = &s
+	if i.f() != 42 {
+		return 0
+	}
+	var i2 I2
+	i2, ok := i.(I2)
+	if !ok {
+		return 1
+	}
+	if i2.f() != 42 {
+		return 2
+	}
+	if i2.f2() != 84 {
+		return 3
+	}
+	sss, ok2 := i.(*S1)
+	if ok2 {
+		return 4
+	}
+	if sss != nil {
+		return 5
+	}
+	return 20
+}
+
 func main() {
 	runTest := func(test func() int) {
 		funcFullName := runtime.FuncForPC(reflect.ValueOf(test).Pointer()).Name()
@@ -289,4 +380,8 @@ func main() {
 	runTest(Test14)
 	runTest(Test15)
 	runTest(Test16)
+	runTest(Test17)
+	runTest(Test18)
+	runTest(Test19)
+	runTest(Test20)
 }
