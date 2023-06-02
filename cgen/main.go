@@ -418,7 +418,7 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 		}
 
 	case *ssa.Extract:
-		fmt.Fprintf(ctx.stream, "%s = %s.e%d;\n", createValueRelName(instr), createValueRelName(instr.Tuple), instr.Index)
+		fmt.Fprintf(ctx.stream, "%s = %s.raw.e%d;\n", createValueRelName(instr), createValueRelName(instr.Tuple), instr.Index)
 
 	case *ssa.FieldAddr:
 		fmt.Fprintf(ctx.stream, "{\n")
@@ -574,7 +574,7 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 			fmt.Fprintf(ctx.stream, "*frame->signature.result_ptr = %s;\n", createValueRelName(instr.Results[0]))
 		default:
 			for i, v := range instr.Results {
-				fmt.Fprintf(ctx.stream, "frame->signature.result_ptr->e%d = %s;\n", i, createValueRelName(v))
+				fmt.Fprintf(ctx.stream, "frame->signature.result_ptr->raw.e%d = %s;\n", i, createValueRelName(v))
 			}
 		}
 		fmt.Fprintf(ctx.stream, "return frame->common.resume_func;\n")
@@ -657,11 +657,11 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 				fmt.Fprintf(ctx.stream, "uintptr_t type_id = (uintptr_t)\"%s\";\n", createTypeName(instr.AssertedType))
 				fmt.Fprintf(ctx.stream, "bool can_convert = %s.type_id == type_id;\n", createValueRelName(instr.X))
 			}
-			fmt.Fprintf(ctx.stream, "%s = (%s){0};\n", dstObj, createTypeName(instr.Type()))
+			fmt.Fprintf(ctx.stream, "%s = %s;\n", dstObj, wrapInObject("0", instr.Type()))
 			fmt.Fprintf(ctx.stream, "if (can_convert) {\n")
-			fmt.Fprintf(ctx.stream, "%s.e0 = %s;\n", dstObj, srcObj)
+			fmt.Fprintf(ctx.stream, "%s.raw.e0 = %s;\n", dstObj, srcObj)
 			fmt.Fprintf(ctx.stream, "}\n")
-			fmt.Fprintf(ctx.stream, "%s.e1 = (BoolObject){.raw=can_convert};\n", dstObj)
+			fmt.Fprintf(ctx.stream, "%s.raw.e1 = (BoolObject){.raw=can_convert};\n", dstObj)
 		} else {
 			fmt.Fprintf(ctx.stream, "%s = %s;\n", dstObj, srcObj)
 		}
@@ -1080,9 +1080,11 @@ union %s { // %s
 
 		case *types.Tuple:
 			fmt.Fprintf(ctx.stream, "struct %s { // %s\n", name, typ)
+			fmt.Fprintf(ctx.stream, "struct {\n")
 			for i := 0; i < typ.Len(); i++ {
 				fmt.Fprintf(ctx.stream, "\t%s e%d; // %s\n", createTypeName(typ.At(i).Type()), i, typ.At(i))
 			}
+			fmt.Fprintf(ctx.stream, "} raw;\n")
 			fmt.Fprintf(ctx.stream, "};\n")
 
 		default:
