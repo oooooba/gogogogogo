@@ -1036,6 +1036,17 @@ func (ctx *Context) emitType() {
 		}
 	}
 
+	// emit Pointer types first to handle self referential structures
+	for _, typ := range ctx.typeSlice {
+		if t, ok := typ.(*types.Pointer); ok {
+			name := createTypeName(t)
+			elemType := t.Elem()
+			fmt.Fprintf(ctx.stream, "struct %s { // %s\n", name, typ)
+			fmt.Fprintf(ctx.stream, "\t%s* raw;\n", createTypeName(elemType))
+			fmt.Fprintf(ctx.stream, "};\n")
+		}
+	}
+
 	for _, typ := range ctx.typeSlice {
 		name := createTypeName(typ)
 		switch typ := typ.(type) {
@@ -1044,14 +1055,8 @@ func (ctx *Context) emitType() {
 			fmt.Fprintf(ctx.stream, "\t%s raw[%d];\n", createTypeName(typ.Elem()), typ.Len())
 			fmt.Fprintf(ctx.stream, "};\n")
 
-		case *types.Basic, *types.Chan, *types.Interface, *types.Named, *types.Signature:
+		case *types.Basic, *types.Chan, *types.Interface, *types.Named, *types.Pointer, *types.Signature:
 			// do nothing
-
-		case *types.Pointer:
-			elemType := typ.Elem()
-			fmt.Fprintf(ctx.stream, "struct %s { // %s\n", name, typ)
-			fmt.Fprintf(ctx.stream, "\t%s* raw;\n", createTypeName(elemType))
-			fmt.Fprintf(ctx.stream, "};\n")
 
 		case *types.Slice:
 			fmt.Fprintf(ctx.stream, `
