@@ -123,6 +123,30 @@ func Test10() int {
 	return 10
 }
 
+func Test11() int {
+	s := "abc"
+	t := "def"
+	if (s + t)[0] != 'a' {
+		return 0
+	}
+	if (s + t)[1] != 'b' {
+		return 1
+	}
+	if (s + t)[2] != 'c' {
+		return 2
+	}
+	if (s + t)[3] != 'd' {
+		return 3
+	}
+	if (s + t)[4] != 'e' {
+		return 4
+	}
+	if (s + t)[5] != 'f' {
+		return 5
+	}
+	return 11
+}
+
 func main() {
 	runTest := func(test func() int) {
 		funcFullName := runtime.FuncForPC(reflect.ValueOf(test).Pointer()).Name()
@@ -139,4 +163,5 @@ func main() {
 	runTest(Test8)
 	runTest(Test9)
 	runTest(Test10)
+	runTest(Test11)
 }

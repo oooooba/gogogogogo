@@ -494,6 +494,20 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 	case *ssa.Jump:
 		fmt.Fprintf(ctx.stream, "\treturn %s;\n", wrapInFunctionObject(createBasicBlockName(instr.Block().Succs[0])))
 
+	case *ssa.Lookup:
+		switch xt := instr.X.Type().(type) {
+		case *types.Basic:
+			if xt.Kind() == types.String {
+				raw := fmt.Sprintf("%s.raw[%s.raw]", createValueRelName(instr.X), createValueRelName(instr.Index))
+				fmt.Fprintf(ctx.stream, "%s = %s;\n", createValueRelName(instr), wrapInObject(raw, instr.Type()))
+
+			} else {
+				panic(fmt.Sprintf("%s", instr))
+			}
+		default:
+			panic(fmt.Sprintf("%s", instr))
+		}
+
 	case *ssa.MakeChan:
 		result := createValueRelName(instr)
 		ctx.switchFunctionToCallRuntimeApi("gox5_make_chan", "StackFrameMakeChan", createInstructionName(instr), &result, nil,
@@ -752,6 +766,10 @@ func (ctx *Context) emitValueDeclaration(value ssa.Value) {
 		canEmit = false
 
 	case *ssa.IndexAddr:
+		ctx.emitValueDeclaration(val.X)
+		ctx.emitValueDeclaration(val.Index)
+
+	case *ssa.Lookup:
 		ctx.emitValueDeclaration(val.X)
 		ctx.emitValueDeclaration(val.Index)
 
