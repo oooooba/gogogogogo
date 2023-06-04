@@ -1385,23 +1385,6 @@ func findMainPackage(program *ssa.Program) *ssa.Package {
 func findLibraryFunctions(program *ssa.Program) []*ssa.Function {
 	var functions []*ssa.Function
 	for _, pkg := range program.AllPackages() {
-		if pkg.Pkg.Name() != "fmt" {
-			continue
-		}
-		for symbol := range pkg.Members {
-			function, ok := pkg.Members[symbol].(*ssa.Function)
-			if !ok {
-				continue
-			}
-
-			if symbol != "Println" && symbol != "Printf" {
-				continue
-			}
-
-			functions = append(functions, function)
-		}
-	}
-	for _, pkg := range program.AllPackages() {
 		if pkg.Pkg.Name() != "reflect" {
 			continue
 		}
@@ -1697,29 +1680,6 @@ typedef struct {
 	intptr_t high;
 } StackFrameStrview;
 DECLARE_RUNTIME_API(strview, StackFrameStrview);
-
-// ToDo: WA to handle fmt.Println
-
-typedef struct {
-	StackFrameCommon common;
-	void* result_ptr;
-	SliceObject param0;
-} StackFramePrintln;
-DECLARE_RUNTIME_API(println, StackFramePrintln);
-
-#define f_S_Println gox5_println
-
-// ToDo: WA to handle fmt.Printf
-
-typedef struct {
-	StackFrameCommon common;
-	void* result_ptr;
-	StringObject param0;
-	SliceObject param1;
-} StackFramePrintf;
-DECLARE_RUNTIME_API(printf, StackFramePrintf);
-
-#define f_S_Printf gox5_printf
 
 // ToDo: WA to handle reflect.ValueOf
 

@@ -92,16 +92,6 @@ pub extern "C" fn gox5_new(ctx: &mut LightWeightThreadContext) -> FunctionObject
 }
 
 #[no_mangle]
-pub extern "C" fn gox5_printf(ctx: &mut LightWeightThreadContext) -> FunctionObject {
-    api::printf(ctx)
-}
-
-#[no_mangle]
-pub extern "C" fn gox5_println(ctx: &mut LightWeightThreadContext) -> FunctionObject {
-    api::println(ctx)
-}
-
-#[no_mangle]
 pub extern "C" fn gox5_recv(_ctx: &mut LightWeightThreadContext) -> FunctionObject {
     unreachable!()
 }
