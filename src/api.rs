@@ -394,6 +394,40 @@ pub fn make_closure(ctx: &mut LightWeightThreadContext) -> FunctionObject {
 }
 
 #[repr(C)]
+struct StackFrameMakeStringFromByteSlice {
+    common: StackFrameCommon,
+    result_ptr: *mut StringObject,
+    byte_slice: Slice,
+}
+
+pub fn make_string_from_byte_slice(ctx: &mut LightWeightThreadContext) -> FunctionObject {
+    let byte_slice = unsafe {
+        let stack_frame = &mut ctx.stack_pointer.make_string_from_byte_slice;
+        &stack_frame.byte_slice
+    };
+
+    let len = byte_slice.size;
+    let ptr = ctx.global_context.process(|mut global_context| {
+        global_context.allocator().allocate(len + 1, |_| {}) as *mut libc::c_char
+    });
+    let dst_bytes = unsafe { slice::from_raw_parts_mut(ptr, len + 1) };
+    if let Some(src_bytes) = byte_slice.as_raw_slice::<libc::c_char>() {
+        dst_bytes[..len].clone_from_slice(&src_bytes[..len]);
+    }
+    dst_bytes[len] = 0;
+
+    let result = unsafe {
+        let stack_frame = &mut ctx.stack_pointer.make_string_from_byte_slice;
+        &mut (*stack_frame.result_ptr)
+    };
+
+    let new_string_object = StringObject(ptr);
+    *result = new_string_object;
+
+    leave_runtime_api(ctx)
+}
+
+#[repr(C)]
 struct StackFrameMakeStringFromRune {
     common: StackFrameCommon,
     result_ptr: *mut StringObject,
@@ -413,6 +447,51 @@ pub fn make_string_from_rune(ctx: &mut LightWeightThreadContext) -> FunctionObje
     let bytes = unsafe { slice::from_raw_parts_mut(ptr, len + 1) };
     bytes[0] = rune as libc::c_char;
     bytes[len] = 0;
+
+    let new_string_object = StringObject(ptr);
+    *result = new_string_object;
+
+    leave_runtime_api(ctx)
+}
+
+#[repr(C)]
+struct StackFrameMakeStringFromRuneSlice {
+    common: StackFrameCommon,
+    result_ptr: *mut StringObject,
+    rune_slice: Slice,
+}
+
+pub fn make_string_from_rune_slice(ctx: &mut LightWeightThreadContext) -> FunctionObject {
+    let rune_slice = unsafe {
+        let stack_frame = &mut ctx.stack_pointer.make_string_from_rune_slice;
+        &stack_frame.rune_slice
+    };
+
+    let mut src_bytes = Vec::new();
+    if let Some(src_runes) = rune_slice.as_raw_slice::<i32>() {
+        for rune in &src_runes[..rune_slice.size] {
+            let bytes = rune.to_le_bytes();
+            for byte in bytes {
+                if byte == 0 {
+                    break;
+                }
+                src_bytes.push(byte as i8);
+            }
+        }
+    };
+
+    let len = src_bytes.len();
+    let ptr = ctx.global_context.process(|mut global_context| {
+        global_context.allocator().allocate(len + 1, |_| {}) as *mut libc::c_char
+    });
+    let dst_bytes = unsafe { slice::from_raw_parts_mut(ptr, len + 1) };
+    dst_bytes[..len].clone_from_slice(&src_bytes[..len]);
+    dst_bytes[len] = 0;
+
+    let result = unsafe {
+        let stack_frame = &mut ctx.stack_pointer.make_string_from_byte_slice;
+        &mut (*stack_frame.result_ptr)
+    };
 
     let new_string_object = StringObject(ptr);
     *result = new_string_object;
@@ -830,7 +909,9 @@ pub union StackFrame {
     func_name: ManuallyDrop<StackFrameFuncName>,
     make_chan: ManuallyDrop<StackFrameMakeChan>,
     make_closure: ManuallyDrop<StackFrameMakeClosure>,
+    make_string_from_byte_slice: ManuallyDrop<StackFrameMakeStringFromByteSlice>,
     make_string_from_rune: ManuallyDrop<StackFrameMakeStringFromRune>,
+    make_string_from_rune_slice: ManuallyDrop<StackFrameMakeStringFromRuneSlice>,
     new: ManuallyDrop<StackFrameNew>,
     printf: ManuallyDrop<StackFramePrintf>,
     println: ManuallyDrop<StackFramePrintln>,

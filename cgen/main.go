@@ -415,6 +415,25 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 				ctx.switchFunctionToCallRuntimeApi("gox5_make_string_from_rune", "StackFrameMakeStringFromRune", createInstructionName(instr), &result, nil,
 					paramArgPair{param: "rune", arg: arg},
 				)
+			case *types.Slice:
+				if elemType, ok := srcType.Elem().(*types.Basic); ok {
+					switch elemType.Kind() {
+					case types.Byte:
+						arg := fmt.Sprintf("%s.raw", createValueRelName(instr.X))
+						ctx.switchFunctionToCallRuntimeApi("gox5_make_string_from_byte_slice", "StackFrameMakeStringFromByteSlice", createInstructionName(instr), &result, nil,
+							paramArgPair{param: "byte_slice", arg: arg},
+						)
+					case types.Rune:
+						arg := fmt.Sprintf("%s.raw", createValueRelName(instr.X))
+						ctx.switchFunctionToCallRuntimeApi("gox5_make_string_from_rune_slice", "StackFrameMakeStringFromRuneSlice", createInstructionName(instr), &result, nil,
+							paramArgPair{param: "rune_slice", arg: arg},
+						)
+					default:
+						panic(fmt.Sprintf("%s, %s, %s (%T)", instr, srcType, elemType, elemType))
+					}
+				} else {
+					panic(fmt.Sprintf("%s, %s, %s (%T)", instr, srcType, elemType, elemType))
+				}
 			default:
 				panic(fmt.Sprintf("%s, %s (%T)", instr, srcType, srcType))
 			}
@@ -1597,9 +1616,23 @@ DECLARE_RUNTIME_API(make_closure, StackFrameMakeClosure);
 typedef struct {
 	StackFrameCommon common;
 	StringObject* result_ptr;
+	SliceObject byte_slice;
+} StackFrameMakeStringFromByteSlice;
+DECLARE_RUNTIME_API(make_string_from_byte_slice, StackFrameMakeStringFromByteSlice);
+
+typedef struct {
+	StackFrameCommon common;
+	StringObject* result_ptr;
 	IntObject rune;
 } StackFrameMakeStringFromRune;
 DECLARE_RUNTIME_API(make_string_from_rune, StackFrameMakeStringFromRune);
+
+typedef struct {
+	StackFrameCommon common;
+	StringObject* result_ptr;
+	SliceObject rune_slice;
+} StackFrameMakeStringFromRuneSlice;
+DECLARE_RUNTIME_API(make_string_from_rune_slice, StackFrameMakeStringFromRuneSlice);
 
 typedef struct {
 	StackFrameCommon common;

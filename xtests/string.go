@@ -173,6 +173,44 @@ func Test13() int {
 	return 13
 }
 
+func Test14() int {
+	var v [1]byte
+	v[0] = 'A'
+	s := string(v[:])
+	if s != "A" {
+		return 0
+	}
+	return 14
+}
+
+func Test15() int {
+	var v [0]byte
+	s := string(v[:])
+	if s != "" {
+		return 0
+	}
+	return 15
+}
+
+func Test16() int {
+	var v [1]rune
+	v[0] = 'A'
+	s := string(v[:])
+	if s != "A" {
+		return 0
+	}
+	return 16
+}
+
+func Test17() int {
+	var v [0]rune
+	s := string(v[:])
+	if s != "" {
+		return 0
+	}
+	return 17
+}
+
 func main() {
 	runTest := func(test func() int) {
 		funcFullName := runtime.FuncForPC(reflect.ValueOf(test).Pointer()).Name()
@@ -192,4 +230,8 @@ func main() {
 	runTest(Test11)
 	runTest(Test12)
 	runTest(Test13)
+	runTest(Test14)
+	runTest(Test15)
+	runTest(Test16)
+	runTest(Test17)
 }
