@@ -147,6 +147,23 @@ func Test11() int {
 	return 11
 }
 
+func Test12() int {
+	s := "abcdef"
+	if s[:3] != "abc" {
+		return 0
+	}
+	if s[3:] != "def" {
+		return 1
+	}
+	if s[1:5] != "bcde" {
+		return 2
+	}
+	if s[:] != "abcdef" {
+		return 3
+	}
+	return 12
+}
+
 func main() {
 	runTest := func(test func() int) {
 		funcFullName := runtime.FuncForPC(reflect.ValueOf(test).Pointer()).Name()
@@ -164,4 +181,5 @@ func main() {
 	runTest(Test9)
 	runTest(Test10)
 	runTest(Test11)
+	runTest(Test12)
 }

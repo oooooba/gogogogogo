@@ -703,6 +703,59 @@ pub fn split(ctx: &mut LightWeightThreadContext) -> FunctionObject {
 }
 
 #[repr(C)]
+struct StackFrameStrview {
+    common: StackFrameCommon,
+    result_ptr: *mut StringObject,
+    base: StringObject,
+    low: isize,
+    high: isize,
+}
+
+pub fn strview(ctx: &mut LightWeightThreadContext) -> FunctionObject {
+    let (base, low, high, result) = unsafe {
+        let stack_frame = &mut ctx.stack_pointer.strview;
+        let base = stack_frame.base.clone();
+        let low = stack_frame.low;
+        let high = stack_frame.high;
+        (base, low, high, &mut (*stack_frame.result_ptr))
+    };
+
+    let base_string = unsafe { ffi::CStr::from_ptr(base.0).to_str().unwrap() };
+
+    let low = if low < 0 {
+        assert_eq!(low, -1);
+        0
+    } else {
+        low as usize
+    };
+
+    let high = if high < 0 {
+        assert_eq!(high, -1);
+        base_string.len()
+    } else {
+        high as usize
+    };
+
+    assert!(low <= high);
+    let len = high - low;
+    let ptr = ctx.global_context.process(|mut global_context| {
+        global_context.allocator().allocate(len + 1, |_| {}) as *mut libc::c_char
+    });
+    let dst_bytes = unsafe { slice::from_raw_parts_mut(ptr, len + 1) };
+    let src_bytes = base_string.as_bytes();
+
+    for i in 0..len {
+        dst_bytes[i] = src_bytes[low + i] as libc::c_char;
+    }
+    dst_bytes[len] = 0;
+
+    let new_string_object = StringObject(ptr);
+    *result = new_string_object;
+
+    leave_runtime_api(ctx)
+}
+
+#[repr(C)]
 struct StackFrameValueOf {
     common: StackFrameCommon,
     result_ptr: *mut Value,
@@ -785,6 +838,7 @@ pub union StackFrame {
     send: ManuallyDrop<StackFrameSend>,
     split: ManuallyDrop<StackFrameSplit>,
     spawn: ManuallyDrop<StackFrameSpawn>,
+    strview: ManuallyDrop<StackFrameStrview>,
     value_of: ManuallyDrop<StackFrameValueOf>,
     value_pointer: ManuallyDrop<StackFrameValuePointer>,
 }

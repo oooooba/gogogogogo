@@ -600,6 +600,27 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 		)
 
 	case *ssa.Slice:
+		if t, ok := instr.Type().(*types.Basic); ok {
+			if t.Kind() != types.String {
+				panic(fmt.Sprintf("%s (%T)", t, t))
+			}
+			result := createValueRelName(instr)
+			low := "-1"
+			if instr.Low != nil {
+				low = fmt.Sprintf("%s.raw", createValueRelName(instr.Low))
+			}
+			high := "-1"
+			if instr.High != nil {
+				high = fmt.Sprintf("%s.raw", createValueRelName(instr.High))
+			}
+			ctx.switchFunctionToCallRuntimeApi("gox5_strview", "StackFrameStrview", createInstructionName(instr), &result, nil,
+				paramArgPair{param: "base", arg: createValueRelName(instr.X)},
+				paramArgPair{param: "low", arg: low},
+				paramArgPair{param: "high", arg: high},
+			)
+			return
+		}
+
 		startIndex := "0"
 		if instr.Low != nil {
 			startIndex = fmt.Sprintf("%s.raw", createValueRelName(instr.Low))
@@ -846,6 +867,11 @@ func requireSwitchFunction(instruction ssa.Instruction) bool {
 	case *ssa.Call, *ssa.Go, *ssa.MakeChan, *ssa.MakeClosure, *ssa.Send:
 		return true
 	case *ssa.Convert:
+		if dstType, ok := t.Type().(*types.Basic); ok && dstType.Kind() == types.String {
+			return true
+		}
+		return false
+	case *ssa.Slice:
 		if dstType, ok := t.Type().(*types.Basic); ok && dstType.Kind() == types.String {
 			return true
 		}
@@ -1598,6 +1624,15 @@ typedef struct {
 	void* arg_buffer[0];
 } StackFrameSpawn;
 DECLARE_RUNTIME_API(spawn, StackFrameSpawn);
+
+typedef struct {
+	StackFrameCommon common;
+	StringObject* result_ptr;
+	StringObject base;
+	intptr_t low;
+	intptr_t high;
+} StackFrameStrview;
+DECLARE_RUNTIME_API(strview, StackFrameStrview);
 
 // ToDo: WA to handle fmt.Println
 

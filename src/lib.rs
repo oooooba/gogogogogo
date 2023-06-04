@@ -108,6 +108,11 @@ pub extern "C" fn gox5_split(ctx: &mut LightWeightThreadContext) -> FunctionObje
 }
 
 #[no_mangle]
+pub extern "C" fn gox5_strview(ctx: &mut LightWeightThreadContext) -> FunctionObject {
+    api::strview(ctx)
+}
+
+#[no_mangle]
 pub extern "C" fn gox5_value_of(ctx: &mut LightWeightThreadContext) -> FunctionObject {
     api::value_of(ctx)
 }
