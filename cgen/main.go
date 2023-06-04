@@ -295,6 +295,24 @@ func (ctx *Context) switchFunctionToCallRuntimeApi(nextFunction string, nextFunc
 	fmt.Fprintf(ctx.stream, "return %s;\n", wrapInFunctionObject(nextFunction))
 }
 
+func (ctx *Context) emitPrint(value ssa.Value) {
+	switch t := value.Type().(type) {
+	case *types.Basic:
+		var specifier string
+		switch t.Kind() {
+		case types.Int:
+			specifier = "ld"
+		case types.String:
+			specifier = "s"
+		default:
+			panic(fmt.Sprintf("%s, %s (%T)", value, t, t))
+		}
+		fmt.Fprintf(ctx.stream, "fprintf(stderr, \"%%%s\", %s.raw);\n", specifier, createValueRelName(value))
+	default:
+		fmt.Fprintf(ctx.stream, "assert(false); // not supported\n")
+	}
+}
+
 func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 	fmt.Fprintf(ctx.stream, "\t// %T instruction\n", instruction)
 	switch instr := instruction.(type) {
@@ -392,26 +410,17 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 			case "ssa:wrapnilchk":
 				fmt.Fprintf(ctx.stream, "assert(%s.raw); // ssa:wrapnilchk\n", createValueRelName(callCommon.Args[0]))
 				raw = fmt.Sprintf("%s.raw", createValueRelName(callCommon.Args[0]))
+			case "print":
+				for _, arg := range callCommon.Args {
+					ctx.emitPrint(arg)
+				}
+
 			case "println":
 				for i, arg := range callCommon.Args {
 					if i != 0 {
 						fmt.Fprintf(ctx.stream, "fprintf(stderr, \" \");\n")
 					}
-					switch t := arg.Type().(type) {
-					case *types.Basic:
-						var specifier string
-						switch t.Kind() {
-						case types.Int:
-							specifier = "ld"
-						case types.String:
-							specifier = "s"
-						default:
-							panic(fmt.Sprintf("%s, %s %s (%T)", instr, arg, t, t))
-						}
-						fmt.Fprintf(ctx.stream, "fprintf(stderr, \"%%%s\", %s.raw);\n", specifier, createValueRelName(arg))
-					default:
-						fmt.Fprintf(ctx.stream, "assert(false); // not supported\n")
-					}
+					ctx.emitPrint(arg)
 				}
 				fmt.Fprintf(ctx.stream, "fprintf(stderr, \"\\n\");\n")
 
