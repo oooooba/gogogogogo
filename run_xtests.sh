@@ -11,9 +11,9 @@ for path in xtests/*; do
     base=`basename $path`
 
     expect_result=/tmp/raw_expect_$base.txt
-    go run $path >$expect_result
+    go run $path >$expect_result 2>&1
     actual_result=/tmp/raw_actual_$base.txt
-    bash ./run.sh $path >$actual_result
+    bash ./run.sh $path >$actual_result 2>&1
 
     compare_result=/tmp/compare_$base.txt
     if diff -y $expect_result $actual_result >$compare_result; then

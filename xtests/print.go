@@ -8,19 +8,19 @@ import (
 )
 
 func Test1() int {
-	fmt.Println(42)
+	println(42)
 	return 1
 }
 
 func Test2() int {
-	fmt.Println("abc")
+	println("abc")
 	return 2
 }
 
 func Test3() int {
 	n := 43
 	return func(n int) int {
-		fmt.Println(n)
+		println(n)
 		return 3
 	}(n)
 }
@@ -28,7 +28,7 @@ func Test3() int {
 func Test4() int {
 	s := "def"
 	return func(s string) int {
-		fmt.Println(s)
+		println(s)
 		return 4
 	}(s)
 }
@@ -37,7 +37,7 @@ func Test5() int {
 	n := 44
 	s := "ghi"
 	return func(n int, s string) int {
-		fmt.Printf("%s: %d\n", s, n)
+		println(s, n)
 		return 5
 	}(n, s)
 }
