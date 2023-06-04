@@ -68,8 +68,8 @@ pub extern "C" fn gox5_make_closure(ctx: &mut LightWeightThreadContext) -> Funct
 }
 
 #[no_mangle]
-pub extern "C" fn gox5_make_string(ctx: &mut LightWeightThreadContext) -> FunctionObject {
-    api::make_string(ctx)
+pub extern "C" fn gox5_make_string_from_rune(ctx: &mut LightWeightThreadContext) -> FunctionObject {
+    api::make_string_from_rune(ctx)
 }
 
 #[no_mangle]

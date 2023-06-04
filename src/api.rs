@@ -394,16 +394,16 @@ pub fn make_closure(ctx: &mut LightWeightThreadContext) -> FunctionObject {
 }
 
 #[repr(C)]
-struct StackFrameMakeString {
+struct StackFrameMakeStringFromRune {
     common: StackFrameCommon,
     result_ptr: *mut StringObject,
-    code: usize,
+    rune: usize,
 }
 
-pub fn make_string(ctx: &mut LightWeightThreadContext) -> FunctionObject {
-    let (code, result) = unsafe {
-        let stack_frame = &mut ctx.stack_pointer.make_string;
-        (stack_frame.code, &mut (*stack_frame.result_ptr))
+pub fn make_string_from_rune(ctx: &mut LightWeightThreadContext) -> FunctionObject {
+    let (rune, result) = unsafe {
+        let stack_frame = &mut ctx.stack_pointer.make_string_from_rune;
+        (stack_frame.rune, &mut (*stack_frame.result_ptr))
     };
 
     let len = 1;
@@ -411,7 +411,7 @@ pub fn make_string(ctx: &mut LightWeightThreadContext) -> FunctionObject {
         global_context.allocator().allocate(len + 1, |_| {}) as *mut libc::c_char
     });
     let bytes = unsafe { slice::from_raw_parts_mut(ptr, len + 1) };
-    bytes[0] = code as libc::c_char;
+    bytes[0] = rune as libc::c_char;
     bytes[len] = 0;
 
     let new_string_object = StringObject(ptr);
@@ -830,7 +830,7 @@ pub union StackFrame {
     func_name: ManuallyDrop<StackFrameFuncName>,
     make_chan: ManuallyDrop<StackFrameMakeChan>,
     make_closure: ManuallyDrop<StackFrameMakeClosure>,
-    make_string: ManuallyDrop<StackFrameMakeString>,
+    make_string_from_rune: ManuallyDrop<StackFrameMakeStringFromRune>,
     new: ManuallyDrop<StackFrameNew>,
     printf: ManuallyDrop<StackFramePrintf>,
     println: ManuallyDrop<StackFramePrintln>,

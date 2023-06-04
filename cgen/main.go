@@ -409,10 +409,15 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 	case *ssa.Convert:
 		if dstType, ok := instr.Type().(*types.Basic); ok && dstType.Kind() == types.String {
 			result := createValueRelName(instr)
-			code := fmt.Sprintf("(IntObject){%s.raw}", createValueRelName(instr.X))
-			ctx.switchFunctionToCallRuntimeApi("gox5_make_string", "StackFrameMakeString", createInstructionName(instr), &result, nil,
-				paramArgPair{param: "code", arg: code},
-			)
+			switch srcType := instr.X.Type().(type) {
+			case *types.Basic:
+				arg := fmt.Sprintf("(IntObject){%s.raw}", createValueRelName(instr.X))
+				ctx.switchFunctionToCallRuntimeApi("gox5_make_string_from_rune", "StackFrameMakeStringFromRune", createInstructionName(instr), &result, nil,
+					paramArgPair{param: "rune", arg: arg},
+				)
+			default:
+				panic(fmt.Sprintf("%s, %s (%T)", instr, srcType, srcType))
+			}
 		} else {
 			raw := fmt.Sprintf("%s.raw", createValueRelName(instr.X))
 			fmt.Fprintf(ctx.stream, "%s = %s;\n", createValueRelName(instr), wrapInObject(raw, instr.Type()))
@@ -1592,9 +1597,9 @@ DECLARE_RUNTIME_API(make_closure, StackFrameMakeClosure);
 typedef struct {
 	StackFrameCommon common;
 	StringObject* result_ptr;
-	IntObject code;
-} StackFrameMakeString;
-DECLARE_RUNTIME_API(make_string, StackFrameMakeString);
+	IntObject rune;
+} StackFrameMakeStringFromRune;
+DECLARE_RUNTIME_API(make_string_from_rune, StackFrameMakeStringFromRune);
 
 typedef struct {
 	StackFrameCommon common;
