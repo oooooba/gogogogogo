@@ -409,8 +409,9 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 	case *ssa.Convert:
 		if dstType, ok := instr.Type().(*types.Basic); ok && dstType.Kind() == types.String {
 			result := createValueRelName(instr)
+			code := fmt.Sprintf("(IntObject){%s.raw}", createValueRelName(instr.X))
 			ctx.switchFunctionToCallRuntimeApi("gox5_make_string", "StackFrameMakeString", createInstructionName(instr), &result, nil,
-				paramArgPair{param: "code", arg: createValueRelName(instr.X)},
+				paramArgPair{param: "code", arg: code},
 			)
 		} else {
 			raw := fmt.Sprintf("%s.raw", createValueRelName(instr.X))
