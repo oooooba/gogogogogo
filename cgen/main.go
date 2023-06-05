@@ -302,6 +302,16 @@ func (ctx *Context) emitPrint(value ssa.Value) {
 		switch t.Kind() {
 		case types.Int:
 			specifier = "ld"
+		case types.Int8, types.Int16, types.Int32:
+			specifier = "d"
+		case types.Int64:
+			specifier = "ld"
+		case types.Uint:
+			specifier = "lu"
+		case types.Uint8, types.Uint16, types.Uint32:
+			specifier = "u"
+		case types.Uint64:
+			specifier = "lu"
 		case types.String:
 			specifier = "s"
 		default:

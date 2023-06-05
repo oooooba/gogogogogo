@@ -53,6 +53,30 @@ func Test7() int {
 	return 7
 }
 
+func Test8() int {
+	var n_int int = 42
+	println(n_int)
+	var n_uint uint = 42
+	println(n_uint)
+	var n_int8 int8 = 42
+	println(n_int8)
+	var n_int16 int16 = 42
+	println(n_int16)
+	var n_int32 int32 = 42
+	println(n_int32)
+	var n_int64 int64 = 42
+	println(n_int64)
+	var n_uint8 uint8 = 42
+	println(n_uint8)
+	var n_uint16 uint16 = 42
+	println(n_uint16)
+	var n_uint32 uint32 = 42
+	println(n_uint32)
+	var n_uint64 uint64 = 42
+	println(n_uint64)
+	return 8
+}
+
 func main() {
 	runTest := func(test func() int) {
 		funcFullName := runtime.FuncForPC(reflect.ValueOf(test).Pointer()).Name()
@@ -66,4 +90,5 @@ func main() {
 	runTest(Test5)
 	runTest(Test6)
 	runTest(Test7)
+	runTest(Test8)
 }
