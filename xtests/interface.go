@@ -357,6 +357,14 @@ func Test20() int {
 	return 20
 }
 
+func Test21() int {
+	var ia, ib I
+	if ia != ib {
+		return 0
+	}
+	return 21
+}
+
 func main() {
 	runTest := func(test func() int) {
 		funcFullName := runtime.FuncForPC(reflect.ValueOf(test).Pointer()).Name()
@@ -383,4 +391,5 @@ func main() {
 	runTest(Test18)
 	runTest(Test19)
 	runTest(Test20)
+	runTest(Test21)
 }

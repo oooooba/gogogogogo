@@ -112,6 +112,9 @@ func createValueName(value ssa.Value) string {
 		if !val.IsNil() {
 			cst = val.Value.String()
 		}
+		if t, ok := val.Type().Underlying().(*types.Interface); ok {
+			return fmt.Sprintf("(%s){%s}", createTypeName(t), cst)
+		}
 		return wrapInObject(cst, val.Type())
 	} else if val, ok := value.(*ssa.Function); ok {
 		return wrapInObject(createFunctionName(val), val.Type())
