@@ -210,6 +210,34 @@ func Test17() int {
 	return 17
 }
 
+func Test18() int {
+	n := 0x1234
+	s := string(n)
+	if s != "\u1234" {
+		return 0
+	}
+	return 18
+}
+
+func Test19() int {
+	c := '\u1234'
+	s := string(c)
+	if s != "\u1234" {
+		return 0
+	}
+	return 19
+}
+
+func Test20() int {
+	var v [1]rune
+	v[0] = '\u1234'
+	s := string(v[:])
+	if s != "\u1234" {
+		return 0
+	}
+	return 20
+}
+
 func main() {
 	runTest := func(test func() int) {
 		funcFullName := runtime.FuncForPC(reflect.ValueOf(test).Pointer()).Name()
@@ -233,4 +261,7 @@ func main() {
 	runTest(Test15)
 	runTest(Test16)
 	runTest(Test17)
+	runTest(Test18)
+	runTest(Test19)
+	runTest(Test20)
 }

@@ -434,21 +434,37 @@ struct StackFrameMakeStringFromRune {
     rune: usize,
 }
 
+fn make_string(ctx: &mut LightWeightThreadContext, chars: &[char]) -> StringObject {
+    let len = chars.iter().fold(0, |acc, c| acc + c.len_utf8());
+    let ptr = ctx.global_context.process(|mut global_context| {
+        global_context.allocator().allocate(len + 1, |_| {}) as *mut libc::c_char
+    });
+    let dst_bytes = unsafe { slice::from_raw_parts_mut(ptr, len + 1) };
+
+    chars.iter().fold(0, |acc, c| {
+        let c_len = c.len_utf8();
+        let mut src_bytes = vec![0; c_len];
+        let _ = c.encode_utf8(&mut src_bytes);
+        for i in 0..c_len {
+            dst_bytes[acc + i] = src_bytes[i] as libc::c_char;
+        }
+        acc + c_len
+    });
+    dst_bytes[len] = 0;
+
+    StringObject(ptr)
+}
+
 pub fn make_string_from_rune(ctx: &mut LightWeightThreadContext) -> FunctionObject {
     let (rune, result) = unsafe {
         let stack_frame = &mut ctx.stack_pointer.make_string_from_rune;
         (stack_frame.rune, &mut (*stack_frame.result_ptr))
     };
 
-    let len = 1;
-    let ptr = ctx.global_context.process(|mut global_context| {
-        global_context.allocator().allocate(len + 1, |_| {}) as *mut libc::c_char
-    });
-    let bytes = unsafe { slice::from_raw_parts_mut(ptr, len + 1) };
-    bytes[0] = rune as libc::c_char;
-    bytes[len] = 0;
+    assert!(rune <= std::u32::MAX as usize);
+    let chars = vec![char::from_u32(rune as u32).unwrap()];
 
-    let new_string_object = StringObject(ptr);
+    let new_string_object = make_string(ctx, &chars);
     *result = new_string_object;
 
     leave_runtime_api(ctx)
@@ -467,33 +483,20 @@ pub fn make_string_from_rune_slice(ctx: &mut LightWeightThreadContext) -> Functi
         &stack_frame.rune_slice
     };
 
-    let mut src_bytes = Vec::new();
-    if let Some(src_runes) = rune_slice.as_raw_slice::<i32>() {
-        for rune in &src_runes[..rune_slice.size] {
-            let bytes = rune.to_le_bytes();
-            for byte in bytes {
-                if byte == 0 {
-                    break;
-                }
-                src_bytes.push(byte as i8);
-            }
-        }
+    let chars = if let Some(src_runes) = rune_slice.as_raw_slice::<u32>() {
+        src_runes[..rune_slice.size]
+            .iter()
+            .map(|rune| char::from_u32(*rune).unwrap())
+            .collect()
+    } else {
+        Vec::new()
     };
 
-    let len = src_bytes.len();
-    let ptr = ctx.global_context.process(|mut global_context| {
-        global_context.allocator().allocate(len + 1, |_| {}) as *mut libc::c_char
-    });
-    let dst_bytes = unsafe { slice::from_raw_parts_mut(ptr, len + 1) };
-    dst_bytes[..len].clone_from_slice(&src_bytes[..len]);
-    dst_bytes[len] = 0;
-
+    let new_string_object = make_string(ctx, &chars);
     let result = unsafe {
         let stack_frame = &mut ctx.stack_pointer.make_string_from_byte_slice;
         &mut (*stack_frame.result_ptr)
     };
-
-    let new_string_object = StringObject(ptr);
     *result = new_string_object;
 
     leave_runtime_api(ctx)
