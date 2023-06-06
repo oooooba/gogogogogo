@@ -300,6 +300,9 @@ func (ctx *Context) emitPrint(value ssa.Value) {
 	case *types.Basic:
 		var specifier string
 		switch t.Kind() {
+		case types.Bool:
+			fmt.Fprintf(ctx.stream, `fprintf(stderr, "%%s", %s.raw ? "true" : "false");`+"\n", createValueRelName(value))
+			return
 		case types.Int:
 			specifier = "ld"
 		case types.Int8, types.Int16, types.Int32:
