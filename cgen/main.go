@@ -625,7 +625,7 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 			fmt.Fprintf(ctx.stream, "%s.type_id = (uintptr_t)\"%s\";\n", valueName, createTypeName(instr.X.Type()))
 			fmt.Fprintf(ctx.stream, "%s.num_methods = 0;\n", valueName)
 			typ := "NULL"
-			switch t := instr.X.Type().(type) {
+			switch t := instr.X.Type().Underlying().(type) {
 			case *types.Basic:
 				switch t.Kind() {
 				case types.Int, types.Int8, types.Int16, types.Int32, types.Int64, types.Uint, types.Uint8, types.Uint16, types.Uint32, types.Uint64, types.Uintptr:
@@ -1213,28 +1213,79 @@ union %s { // %s
 }
 
 func (ctx *Context) emitEqualFunction() {
-	for _, typ := range ctx.typeSlice {
-		typeName := createTypeName(typ)
-		expr := ""
-		switch typ := typ.(type) {
-		case *types.Basic:
-			if typ.Kind() == types.String {
-				expr = "strcmp(lhs->raw, rhs->raw) == 0"
-			} else {
-				expr = "lhs->raw == rhs->raw"
-			}
-		default:
-			expr = "memcmp(lhs, rhs, sizeof(*lhs)) == 0"
+	builtinTypes := []string{
+		"Bool", "Float32", "Float64",
+		"Int", "Int8", "Int16", "Int32", "Int64",
+		"UnsafePointer",
+		"Uint", "Uint8", "Uint16", "Uint32", "Uint64",
+	}
+	for _, bt := range builtinTypes {
+		fmt.Fprintf(ctx.stream, `
+		bool equal_%sObject(%sObject* lhs, %sObject* rhs) {
+			return lhs->raw == rhs->raw;
 		}
-		fmt.Fprintf(ctx.stream, "bool equal_%s(%s* lhs, %s* rhs) {\n", typeName, typeName, typeName)
-		fmt.Fprintf(ctx.stream, "\treturn %s;\n", expr)
-		fmt.Fprintf(ctx.stream, "}\n")
+		`, bt, bt, bt)
 	}
 	fmt.Fprintf(ctx.stream, `
 bool equal_Value(Value* lhs, Value* rhs) {
 	return memcmp(lhs, rhs, sizeof(*lhs)) == 0;
 }
+
+bool equal_StringObject(StringObject* lhs, StringObject* rhs) {
+	return strcmp(lhs->raw, rhs->raw) == 0;
+}
+
+bool equal_Interface(Interface* lhs, Interface* rhs) {
+	if ((lhs->receiver == NULL) && (rhs->receiver == NULL)) {
+		return true;
+	}
+	if ((lhs->receiver == NULL) || (rhs->receiver == NULL)) {
+		return false;
+	}
+	Interface l, r;
+	bool is_empty = false;
+	if (lhs->interface_table == (void*)1) {
+		if (!equal_IntObject((IntObject*)lhs->receiver, (IntObject*)rhs->receiver)) {
+			return false;
+		}
+		is_empty = true;
+	}
+	if (lhs->interface_table == (void*)2) {
+		if (!equal_StringObject((StringObject*)lhs->receiver, (StringObject*)rhs->receiver)) {
+			return false;
+		}
+		is_empty = true;
+	}
+	if (is_empty) {
+		l = *lhs;
+		r = *rhs;
+		l.receiver = NULL;
+		r.receiver = NULL;
+		lhs = &l;
+		rhs = &r;
+	}
+	return memcmp(lhs, rhs, sizeof(*lhs)) == 0;
+}
 `)
+	for _, typ := range ctx.typeSlice {
+		typeName := createTypeName(typ)
+		expr := ""
+		switch typ := typ.(type) {
+		case *types.Basic, *types.Interface:
+			continue
+		case *types.Named:
+			if _, ok := typ.Underlying().(*types.Interface); ok {
+				expr = fmt.Sprintf("equal_Interface(lhs, rhs)")
+			} else {
+				expr = "memcmp(lhs, rhs, sizeof(*lhs)) == 0"
+			}
+		default:
+			expr = "memcmp(lhs, rhs, sizeof(*lhs)) == 0"
+		}
+		fmt.Fprintf(ctx.stream, "bool equal_%s(%s* lhs, %s* rhs) { // %s\n", typeName, typeName, typeName, typ)
+		fmt.Fprintf(ctx.stream, "\treturn %s;\n", expr)
+		fmt.Fprintf(ctx.stream, "}\n")
+	}
 }
 
 func (ctx *Context) collectTypes() {

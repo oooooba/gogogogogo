@@ -365,6 +365,130 @@ func Test21() int {
 	return 21
 }
 
+func Test22() int {
+	var ia, ib I
+
+	var nt T = 42
+	ia = &nt
+	ib = &nt
+	if ia != ib {
+		return 0
+	}
+	if ia == nil {
+		return 1
+	}
+
+	s := S0{n: 43}
+	ia = &s
+	ib = &s
+	if ia != ib {
+		return 2
+	}
+	if ia == nil {
+		return 3
+	}
+
+	sa := S0{n: 44}
+	sb := S0{n: 44}
+	ia = &sa
+	ib = &sb
+	if ia == ib {
+		return 4
+	}
+
+	return 22
+}
+
+func Test23() int {
+	var ia, ib interface{}
+
+	n := 42
+	ia = n
+	ib = n
+	if ia != ib {
+		return 0
+	}
+	if ia == nil {
+		return 1
+	}
+
+	var nt T = 43
+	ia = nt
+	ib = nt
+	if ia != ib {
+		return 2
+	}
+	if ia == nil {
+		return 3
+	}
+
+	s := S0{n: 44}
+	ia = &s
+	ib = &s
+	if ia != ib {
+		return 4
+	}
+	if ia == nil {
+		return 5
+	}
+
+	sa := S0{n: 45}
+	sb := S0{n: 45}
+	ia = &sa
+	ib = &sb
+	if ia == ib {
+		return 6
+	}
+
+	return 23
+}
+
+type I3 interface{}
+
+func Test24() int {
+	var ia, ib I3
+
+	n := 42
+	ia = n
+	ib = n
+	if ia != ib {
+		return 0
+	}
+	if ia == nil {
+		return 1
+	}
+
+	var nt T = 43
+	ia = nt
+	ib = nt
+	if ia != ib {
+		return 2
+	}
+	if ia == nil {
+		return 3
+	}
+
+	s := S0{n: 44}
+	ia = &s
+	ib = &s
+	if ia != ib {
+		return 4
+	}
+	if ia == nil {
+		return 5
+	}
+
+	sa := S0{n: 45}
+	sb := S0{n: 45}
+	ia = &sa
+	ib = &sb
+	if ia == ib {
+		return 6
+	}
+
+	return 24
+}
+
 func main() {
 	runTest := func(test func() int) {
 		funcFullName := runtime.FuncForPC(reflect.ValueOf(test).Pointer()).Name()
@@ -392,4 +516,7 @@ func main() {
 	runTest(Test19)
 	runTest(Test20)
 	runTest(Test21)
+	runTest(Test22)
+	runTest(Test23)
+	runTest(Test24)
 }
