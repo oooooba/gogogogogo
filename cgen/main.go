@@ -633,6 +633,8 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 				case types.String:
 					typ = "2"
 				}
+			case *types.Pointer:
+				typ = "3"
 			}
 			fmt.Fprintf(ctx.stream, "%s.interface_table = (void*)%s;\n", valueName, typ)
 		} else {
@@ -1252,6 +1254,12 @@ bool equal_Interface(Interface* lhs, Interface* rhs) {
 	}
 	if (lhs->interface_table == (void*)2) {
 		if (!equal_StringObject((StringObject*)lhs->receiver, (StringObject*)rhs->receiver)) {
+			return false;
+		}
+		is_empty = true;
+	}
+	if (lhs->interface_table == (void*)3) {
+		if (*((void**)lhs->receiver) != *((void**)rhs->receiver)) {
 			return false;
 		}
 		is_empty = true;

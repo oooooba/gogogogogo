@@ -489,6 +489,44 @@ func Test24() int {
 	return 24
 }
 
+func Test25() int {
+	var i interface{}
+	var s *S0
+	i = s
+	if i != s {
+		return 0
+	}
+	return 25
+}
+
+func Test26() int {
+	var x interface{}
+	var v *S0
+	x = 42
+	if x != 42 {
+		return 0
+	}
+	if tx, ok := x.(int); ok {
+		if tx != 42 {
+			return 1
+		}
+	} else {
+		return 2
+	}
+	x = v
+	if x != v {
+		return 3
+	}
+	if tv, ok := x.(*S0); ok {
+		if tv != nil {
+			return 4
+		}
+	} else {
+		return 5
+	}
+	return 26
+}
+
 func main() {
 	runTest := func(test func() int) {
 		funcFullName := runtime.FuncForPC(reflect.ValueOf(test).Pointer()).Name()
@@ -519,4 +557,6 @@ func main() {
 	runTest(Test22)
 	runTest(Test23)
 	runTest(Test24)
+	runTest(Test25)
+	runTest(Test26)
 }
