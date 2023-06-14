@@ -155,7 +155,7 @@ struct StackFrameAppend {
 pub fn append(ctx: &mut LightWeightThreadContext) -> FunctionObject {
     let (base, elements, result) = unsafe {
         let (base_ptr, elements_ptr, result_ptr) = {
-            let stack_frame = &mut ctx.stack_pointer.append;
+            let stack_frame = &mut ctx.stack_frame_mut().append;
             (
                 &mut stack_frame.base as *mut Slice,
                 &mut stack_frame.elements as *mut Slice,
@@ -215,7 +215,7 @@ struct StackFrameConcat {
 
 pub fn concat(ctx: &mut LightWeightThreadContext) -> FunctionObject {
     let (lhs, rhs, result) = unsafe {
-        let stack_frame = &mut ctx.stack_pointer.concat;
+        let stack_frame = &mut ctx.stack_frame_mut().concat;
         let lhs = stack_frame.lhs.clone();
         let rhs = stack_frame.rhs.clone();
         (lhs, rhs, &mut (*stack_frame.result_ptr))
@@ -255,7 +255,7 @@ struct StackFrameFuncForPc {
 pub fn func_for_pc(ctx: &mut LightWeightThreadContext) -> FunctionObject {
     let (param0, result) = unsafe {
         let (param0_ptr, result_ptr) = {
-            let stack_frame = &mut ctx.stack_pointer.func_for_pc;
+            let stack_frame = &mut ctx.stack_frame_mut().func_for_pc;
             (
                 &stack_frame.param0 as *const usize,
                 stack_frame.result_ptr as *mut *const Func,
@@ -292,7 +292,7 @@ struct StackFrameFuncName {
 
 pub fn func_name(ctx: &mut LightWeightThreadContext) -> FunctionObject {
     let (param0, result) = unsafe {
-        let stack_frame = &mut ctx.stack_pointer.func_name;
+        let stack_frame = &mut ctx.stack_frame_mut().func_name;
         (&*stack_frame.param0, &mut *stack_frame.result_ptr)
     };
 
@@ -336,13 +336,13 @@ pub fn allocate_channel(ctx: &mut LightWeightThreadContext, capacity: usize) -> 
 
 pub fn make_chan(ctx: &mut LightWeightThreadContext) -> FunctionObject {
     let size = unsafe {
-        let stack_frame = &mut ctx.stack_pointer.make_chan;
+        let stack_frame = &ctx.stack_frame().make_chan;
         stack_frame.size
     };
     let ptr = allocate_channel(ctx, size);
     let ptr = ObjectPtr(ptr as *mut ());
     unsafe {
-        let stack_frame = &mut ctx.stack_pointer.make_chan;
+        let stack_frame = &mut ctx.stack_frame_mut().make_chan;
         *stack_frame.result_ptr = ptr;
     };
     leave_runtime_api(ctx)
@@ -375,7 +375,7 @@ pub fn make_closure(ctx: &mut LightWeightThreadContext) -> FunctionObject {
         let ptr = ptr as *mut ClosureLayout;
         let closure_layout = &mut *ptr;
 
-        let stack_frame = &mut ctx.stack_pointer.make_closure;
+        let stack_frame = &mut ctx.stack_frame_mut().make_closure;
 
         closure_layout.func = stack_frame.user_function.clone();
 
@@ -387,7 +387,7 @@ pub fn make_closure(ctx: &mut LightWeightThreadContext) -> FunctionObject {
         mem::forget(prev_object_ptrs);
     };
     unsafe {
-        let stack_frame = &mut ctx.stack_pointer.make_closure;
+        let stack_frame = &mut ctx.stack_frame_mut().make_closure;
         *stack_frame.result_ptr = FunctionObject::from_closure_layout_ptr(ptr as *const ());
     };
     leave_runtime_api(ctx)
@@ -401,15 +401,20 @@ struct StackFrameMakeStringFromByteSlice {
 }
 
 pub fn make_string_from_byte_slice(ctx: &mut LightWeightThreadContext) -> FunctionObject {
-    let byte_slice = unsafe {
-        let stack_frame = &mut ctx.stack_pointer.make_string_from_byte_slice;
-        &stack_frame.byte_slice
+    let len = unsafe {
+        let stack_frame = &ctx.stack_frame().make_string_from_byte_slice;
+        stack_frame.byte_slice.size
     };
 
-    let len = byte_slice.size;
     let ptr = ctx.global_context.process(|mut global_context| {
         global_context.allocator().allocate(len + 1, |_| {}) as *mut libc::c_char
     });
+
+    let byte_slice = unsafe {
+        let stack_frame = &mut ctx.stack_frame_mut().make_string_from_byte_slice;
+        &stack_frame.byte_slice
+    };
+
     let dst_bytes = unsafe { slice::from_raw_parts_mut(ptr, len + 1) };
     if let Some(src_bytes) = byte_slice.as_raw_slice::<libc::c_char>() {
         dst_bytes[..len].clone_from_slice(&src_bytes[..len]);
@@ -417,7 +422,7 @@ pub fn make_string_from_byte_slice(ctx: &mut LightWeightThreadContext) -> Functi
     dst_bytes[len] = 0;
 
     let result = unsafe {
-        let stack_frame = &mut ctx.stack_pointer.make_string_from_byte_slice;
+        let stack_frame = &mut ctx.stack_frame_mut().make_string_from_byte_slice;
         &mut (*stack_frame.result_ptr)
     };
 
@@ -457,7 +462,7 @@ fn make_string(ctx: &mut LightWeightThreadContext, chars: &[char]) -> StringObje
 
 pub fn make_string_from_rune(ctx: &mut LightWeightThreadContext) -> FunctionObject {
     let (rune, result) = unsafe {
-        let stack_frame = &mut ctx.stack_pointer.make_string_from_rune;
+        let stack_frame = &mut ctx.stack_frame_mut().make_string_from_rune;
         (stack_frame.rune, &mut (*stack_frame.result_ptr))
     };
 
@@ -479,7 +484,7 @@ struct StackFrameMakeStringFromRuneSlice {
 
 pub fn make_string_from_rune_slice(ctx: &mut LightWeightThreadContext) -> FunctionObject {
     let rune_slice = unsafe {
-        let stack_frame = &mut ctx.stack_pointer.make_string_from_rune_slice;
+        let stack_frame = &ctx.stack_frame().make_string_from_rune_slice;
         &stack_frame.rune_slice
     };
 
@@ -494,7 +499,7 @@ pub fn make_string_from_rune_slice(ctx: &mut LightWeightThreadContext) -> Functi
 
     let new_string_object = make_string(ctx, &chars);
     let result = unsafe {
-        let stack_frame = &mut ctx.stack_pointer.make_string_from_byte_slice;
+        let stack_frame = &mut ctx.stack_frame_mut().make_string_from_byte_slice;
         &mut (*stack_frame.result_ptr)
     };
     *result = new_string_object;
@@ -511,7 +516,7 @@ struct StackFrameNew {
 
 pub fn new(ctx: &mut LightWeightThreadContext) -> FunctionObject {
     let size = unsafe {
-        let stack_frame = &mut ctx.stack_pointer.new;
+        let stack_frame = &ctx.stack_frame().new;
         stack_frame.size
     };
     let ptr = ctx
@@ -522,7 +527,7 @@ pub fn new(ctx: &mut LightWeightThreadContext) -> FunctionObject {
     }
     let ptr = ObjectPtr(ptr);
     unsafe {
-        let stack_frame = &mut ctx.stack_pointer.new;
+        let stack_frame = &mut ctx.stack_frame_mut().new;
         *stack_frame.result_ptr = ptr;
     };
     leave_runtime_api(ctx)
@@ -537,16 +542,16 @@ struct StackFrameRecv {
 
 unsafe impl Send for StackFrameRecv {}
 
-pub async fn recv(ctx: &mut LightWeightThreadContext<'_>) -> FunctionObject {
+pub async fn recv(ctx: &mut LightWeightThreadContext) -> FunctionObject {
     let channel = unsafe {
-        let stack_frame = &mut ctx.stack_pointer.recv;
+        let stack_frame = &ctx.stack_frame().recv;
         stack_frame.channel.clone()
     };
     let channel = channel.as_ref::<Channel>();
     let data = channel.recv().await;
     let data = data.unwrap();
     unsafe {
-        let stack_frame = &mut ctx.stack_pointer.recv;
+        let stack_frame = &mut ctx.stack_frame_mut().recv;
         *stack_frame.result_ptr = data;
     }
     leave_runtime_api(ctx)
@@ -561,9 +566,9 @@ struct StackFrameSend {
 
 unsafe impl Send for StackFrameSend {}
 
-pub async fn send(ctx: &mut LightWeightThreadContext<'_>) -> FunctionObject {
+pub async fn send(ctx: &mut LightWeightThreadContext) -> FunctionObject {
     let (channel, data) = unsafe {
-        let stack_frame = &mut ctx.stack_pointer.send;
+        let stack_frame = &ctx.stack_frame().send;
         (stack_frame.channel.clone(), stack_frame.data)
     };
     let channel = channel.as_ref::<Channel>();
@@ -582,9 +587,9 @@ struct StackFrameSpawn {
 
 unsafe impl Send for StackFrameSpawn {}
 
-pub async fn spawn(ctx: &mut LightWeightThreadContext<'_>) -> FunctionObject {
+pub async fn spawn(ctx: &mut LightWeightThreadContext) -> FunctionObject {
     unsafe {
-        let stack_frame = &mut ctx.stack_pointer.spawn;
+        let stack_frame = &mut ctx.stack_frame_mut().spawn;
 
         let entry_func = stack_frame.func.clone();
         let result_size = stack_frame.result_size;
@@ -618,7 +623,7 @@ struct StackFrameSplit {
 pub fn split(ctx: &mut LightWeightThreadContext) -> FunctionObject {
     let (param0, param1) = unsafe {
         let (param0_ptr, param1_ptr) = {
-            let stack_frame = &mut ctx.stack_pointer.split;
+            let stack_frame = &ctx.stack_frame().split;
             (
                 &stack_frame.param0 as *const StringObject,
                 &stack_frame.param1 as *const StringObject,
@@ -664,7 +669,7 @@ pub fn split(ctx: &mut LightWeightThreadContext) -> FunctionObject {
     }
 
     unsafe {
-        let stack_frame = &mut ctx.stack_pointer.split;
+        let stack_frame = &mut ctx.stack_frame_mut().split;
         ptr::copy_nonoverlapping(&slice, stack_frame.result_ptr, 1);
     }
     mem::forget(slice);
@@ -683,7 +688,7 @@ struct StackFrameStrview {
 
 pub fn strview(ctx: &mut LightWeightThreadContext) -> FunctionObject {
     let (base, low, high, result) = unsafe {
-        let stack_frame = &mut ctx.stack_pointer.strview;
+        let stack_frame = &mut ctx.stack_frame_mut().strview;
         let base = stack_frame.base.clone();
         let low = stack_frame.low;
         let high = stack_frame.high;
@@ -735,7 +740,7 @@ struct StackFrameValueOf {
 pub fn value_of(ctx: &mut LightWeightThreadContext) -> FunctionObject {
     let (param0, result) = unsafe {
         let (param0_ptr, result_ptr) = {
-            let stack_frame = &mut ctx.stack_pointer.value_of;
+            let stack_frame = &mut ctx.stack_frame_mut().value_of;
             (
                 &mut stack_frame.param0 as *mut Interface,
                 stack_frame.result_ptr as *mut Value,
@@ -768,7 +773,7 @@ struct StackFrameValuePointer {
 pub fn value_pointer(ctx: &mut LightWeightThreadContext) -> FunctionObject {
     let (param0, result) = unsafe {
         let (param0_ptr, result_ptr) = {
-            let stack_frame = &mut ctx.stack_pointer.value_pointer;
+            let stack_frame = &mut ctx.stack_frame_mut().value_pointer;
             (
                 &mut stack_frame.param0 as *const Value,
                 stack_frame.result_ptr as *mut isize,
@@ -783,11 +788,15 @@ pub fn value_pointer(ctx: &mut LightWeightThreadContext) -> FunctionObject {
 }
 
 fn leave_runtime_api(ctx: &mut LightWeightThreadContext) -> FunctionObject {
-    unsafe {
-        let stack_frame = &mut ctx.stack_pointer.common;
-        ctx.stack_pointer = &mut *stack_frame.prev_stack_pointer;
-        stack_frame.resume_func.clone()
-    }
+    let (prev_stack_pointer, resumt_func) = unsafe {
+        let stack_frame = &mut ctx.stack_frame_mut().common;
+        (
+            stack_frame.prev_stack_pointer,
+            stack_frame.resume_func.clone(),
+        )
+    };
+    ctx.update_stack_pointer(prev_stack_pointer);
+    resumt_func
 }
 
 #[repr(C)]

@@ -13,14 +13,45 @@ use api::{FunctionObject, StackFrame, UserFunction};
 use global_context::GlobalContextPtr;
 
 #[repr(C)]
-pub struct LightWeightThreadContext<'a> {
+pub struct LightWeightThreadContext {
     global_context: GlobalContextPtr,
-    stack_pointer: &'a mut StackFrame,
+    stack_pointer: *mut StackFrame,
     prev_func: UserFunction,
     marker: isize,
 }
 
-unsafe impl<'a> Send for LightWeightThreadContext<'a> {}
+impl LightWeightThreadContext {
+    fn new(
+        global_context: GlobalContextPtr,
+        stack_pointer: *mut StackFrame,
+        prev_func: UserFunction,
+    ) -> Self {
+        LightWeightThreadContext {
+            global_context,
+            stack_pointer,
+            prev_func,
+            marker: 0xdeadbeef,
+        }
+    }
+
+    fn stack_pointer(&self) -> *mut () {
+        self.stack_pointer as *mut ()
+    }
+
+    fn update_stack_pointer(&mut self, new_stack_pointer: *mut StackFrame) {
+        self.stack_pointer = new_stack_pointer
+    }
+
+    fn stack_frame(&self) -> &StackFrame {
+        unsafe { &*self.stack_pointer }
+    }
+
+    fn stack_frame_mut(&mut self) -> &mut StackFrame {
+        unsafe { &mut *self.stack_pointer }
+    }
+}
+
+unsafe impl Send for LightWeightThreadContext {}
 
 #[derive(Clone, Debug)]
 #[repr(C)]
@@ -131,23 +162,23 @@ extern "C" fn terminate(_ctx: &mut LightWeightThreadContext) -> FunctionObject {
 }
 
 #[async_recursion]
-pub async fn spawn_wrapper(ctx: &mut LightWeightThreadContext<'_>) -> FunctionObject {
+pub async fn spawn_wrapper(ctx: &mut LightWeightThreadContext) -> FunctionObject {
     api::spawn(ctx).await
 }
 
-async fn start_light_weight_thread<'a>(
+async fn start_light_weight_thread(
     entry_func: FunctionObject,
-    ctx: &mut LightWeightThreadContext<'a>,
+    ctx: &mut LightWeightThreadContext,
     result_size: usize,
     arg_buffer_ptr: ObjectPtr,
     num_arg_buffer_words: usize,
 ) {
     unsafe {
-        let result_pointer = ctx.stack_pointer as *mut StackFrame as *mut ();
-        let stack_pointer = (result_pointer as *mut u8).add(result_size);
-        ctx.stack_pointer = &mut *(stack_pointer as *mut StackFrame);
+        let result_pointer = ctx.stack_pointer();
+        let next_stack_pointer = (result_pointer as *mut u8).add(result_size) as *mut StackFrame;
+        ctx.update_stack_pointer(next_stack_pointer);
         let (_, object_ptrs) = entry_func.extrace_user_function();
-        let words = slice::from_raw_parts_mut(ctx.stack_pointer.words.as_mut_ptr(), 5);
+        let words = slice::from_raw_parts_mut(ctx.stack_frame_mut().words.as_mut_ptr(), 5);
         words[0] = terminate as *mut ();
         words[1] = ptr::null_mut();
         words[2] = object_ptrs.unwrap_or(ptr::null_mut());
@@ -178,7 +209,7 @@ async fn start_light_weight_thread<'a>(
         let (next_func, object_ptrs) = next_func.extrace_user_function();
         if let Some(object_ptrs) = object_ptrs {
             unsafe {
-                let words = slice::from_raw_parts_mut(ctx.stack_pointer.words.as_mut_ptr(), 3);
+                let words = slice::from_raw_parts_mut(ctx.stack_frame_mut().words.as_mut_ptr(), 3);
                 words[2] = object_ptrs; // free_vars
             }
         }
@@ -239,18 +270,17 @@ impl ObjectAllocator for RuntimeObjectAllocator {
     }
 }
 
-fn create_light_weight_thread_context<'a>(
+fn create_light_weight_thread_context(
     global_context: GlobalContextPtr,
-) -> LightWeightThreadContext<'a> {
+) -> LightWeightThreadContext {
     let stack_start_addr = global_context
         .process(|mut global_context| global_context.allocator().allocate_guarded_pages(1));
     let prev_func = UserFunction::new(terminate);
-    LightWeightThreadContext {
+    LightWeightThreadContext::new(
         global_context,
-        stack_pointer: unsafe { &mut *(stack_start_addr as *mut StackFrame) },
+        stack_start_addr as *mut StackFrame,
         prev_func,
-        marker: 0xdeadbeef,
-    }
+    )
 }
 
 #[cfg_attr(not(test), no_mangle)]
