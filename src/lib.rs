@@ -34,6 +34,10 @@ impl LightWeightThreadContext {
         }
     }
 
+    fn global_context(&self) -> &GlobalContextPtr {
+        &self.global_context
+    }
+
     fn stack_pointer(&self) -> *mut () {
         self.stack_pointer as *mut ()
     }

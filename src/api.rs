@@ -174,7 +174,7 @@ pub fn append(ctx: &mut LightWeightThreadContext) -> FunctionObject {
     } else {
         let new_capacity = new_size * 2;
         let buffer_size = new_capacity * mem::size_of::<isize>();
-        let ptr = ctx.global_context.process(|mut global_context| {
+        let ptr = ctx.global_context().process(|mut global_context| {
             global_context
                 .allocator()
                 .allocate(buffer_size * mem::size_of::<isize>(), |_ptr| {})
@@ -228,7 +228,7 @@ pub fn concat(ctx: &mut LightWeightThreadContext) -> FunctionObject {
     };
 
     let len = concat_string.len();
-    let ptr = ctx.global_context.process(|mut global_context| {
+    let ptr = ctx.global_context().process(|mut global_context| {
         global_context.allocator().allocate(len + 1, |_| {}) as *mut libc::c_char
     });
     let dst_bytes = unsafe { slice::from_raw_parts_mut(ptr, len + 1) };
@@ -317,7 +317,7 @@ unsafe impl Send for StackFrameMakeChan {}
 /// temporarily, exported for unit test
 pub fn allocate_channel(ctx: &mut LightWeightThreadContext, capacity: usize) -> *mut Channel {
     let object_size = mem::size_of::<Channel>();
-    let ptr = ctx.global_context.process(|mut global_context| {
+    let ptr = ctx.global_context().process(|mut global_context| {
         global_context
             .allocator()
             .allocate(object_size, |ptr| unsafe {
@@ -366,7 +366,7 @@ struct ClosureLayout {
 }
 
 pub fn make_closure(ctx: &mut LightWeightThreadContext) -> FunctionObject {
-    let ptr = ctx.global_context.process(|mut global_context| {
+    let ptr = ctx.global_context().process(|mut global_context| {
         global_context
             .allocator()
             .allocate(mem::size_of::<ClosureLayout>(), |_ptr| {})
@@ -406,7 +406,7 @@ pub fn make_string_from_byte_slice(ctx: &mut LightWeightThreadContext) -> Functi
         stack_frame.byte_slice.size
     };
 
-    let ptr = ctx.global_context.process(|mut global_context| {
+    let ptr = ctx.global_context().process(|mut global_context| {
         global_context.allocator().allocate(len + 1, |_| {}) as *mut libc::c_char
     });
 
@@ -441,7 +441,7 @@ struct StackFrameMakeStringFromRune {
 
 fn make_string(ctx: &mut LightWeightThreadContext, chars: &[char]) -> StringObject {
     let len = chars.iter().fold(0, |acc, c| acc + c.len_utf8());
-    let ptr = ctx.global_context.process(|mut global_context| {
+    let ptr = ctx.global_context().process(|mut global_context| {
         global_context.allocator().allocate(len + 1, |_| {}) as *mut libc::c_char
     });
     let dst_bytes = unsafe { slice::from_raw_parts_mut(ptr, len + 1) };
@@ -520,7 +520,7 @@ pub fn new(ctx: &mut LightWeightThreadContext) -> FunctionObject {
         stack_frame.size
     };
     let ptr = ctx
-        .global_context
+        .global_context()
         .process(|mut global_context| global_context.allocator().allocate(size, |_ptr| {}));
     unsafe {
         ptr::write_bytes(ptr as *mut u8, 0, size);
@@ -595,7 +595,7 @@ pub async fn spawn(ctx: &mut LightWeightThreadContext) -> FunctionObject {
         let result_size = stack_frame.result_size;
         let arg_buffer_ptr = ObjectPtr(stack_frame.arg_buffer.as_mut_ptr());
         let num_arg_buffer_words = stack_frame.num_arg_buffer_words;
-        let global_context = ctx.global_context.dupulicate();
+        let global_context = ctx.global_context().dupulicate();
 
         tokio::spawn(async move {
             let mut new_ctx = Box::new(create_light_weight_thread_context(global_context));
@@ -643,7 +643,7 @@ pub fn split(ctx: &mut LightWeightThreadContext) -> FunctionObject {
         let size = words.len();
         let capacity = size;
         let buffer_size = capacity * mem::size_of::<StringObject>();
-        let addr = ctx.global_context.process(|mut global_context| {
+        let addr = ctx.global_context().process(|mut global_context| {
             global_context.allocator().allocate(buffer_size, |_ptr| {})
         });
         Slice::new(addr, size, capacity)
@@ -654,7 +654,7 @@ pub fn split(ctx: &mut LightWeightThreadContext) -> FunctionObject {
             let src_bytes = words[i].as_bytes();
             let len = src_bytes.len();
 
-            let ptr = ctx.global_context.process(|mut global_context| {
+            let ptr = ctx.global_context().process(|mut global_context| {
                 global_context.allocator().allocate(len + 1, |_| {}) as *mut libc::c_char
             });
             let dst_bytes = unsafe { slice::from_raw_parts_mut(ptr, len + 1) };
@@ -713,7 +713,7 @@ pub fn strview(ctx: &mut LightWeightThreadContext) -> FunctionObject {
 
     assert!(low <= high);
     let len = high - low;
-    let ptr = ctx.global_context.process(|mut global_context| {
+    let ptr = ctx.global_context().process(|mut global_context| {
         global_context.allocator().allocate(len + 1, |_| {}) as *mut libc::c_char
     });
     let dst_bytes = unsafe { slice::from_raw_parts_mut(ptr, len + 1) };
