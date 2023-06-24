@@ -15,6 +15,7 @@ use global_context::GlobalContextPtr;
 #[repr(C)]
 pub struct LightWeightThreadContext {
     global_context: GlobalContextPtr,
+    current_func: FunctionObject,
     stack_pointer: *mut StackFrame,
     prev_func: UserFunction,
     marker: isize,
@@ -28,14 +29,48 @@ impl LightWeightThreadContext {
     ) -> Self {
         LightWeightThreadContext {
             global_context,
+            current_func: FunctionObject::new_null(),
             stack_pointer,
             prev_func,
             marker: 0xdeadbeef,
         }
     }
 
+    fn set_up(
+        &mut self,
+        entry_func: FunctionObject,
+        result_size: usize,
+        arg_buffer_ptr: ObjectPtr,
+        num_arg_buffer_words: usize,
+    ) {
+        self.current_func = entry_func;
+        unsafe {
+            let result_pointer = self.stack_pointer();
+            let next_stack_pointer =
+                (result_pointer as *mut u8).add(result_size) as *mut StackFrame;
+            self.update_stack_pointer(next_stack_pointer);
+            let (_, object_ptrs) = self.current_func().extrace_user_function();
+            let words = slice::from_raw_parts_mut(self.stack_frame_mut().words.as_mut_ptr(), 5);
+            words[0] = terminate as *mut ();
+            words[1] = ptr::null_mut();
+            words[2] = object_ptrs.unwrap_or(ptr::null_mut());
+            let mut arg_base = 3;
+            if result_size > 0 {
+                words[arg_base] = result_pointer;
+                arg_base += 1;
+            }
+            let src_arg_buffer_ptr = arg_buffer_ptr.as_ref::<usize>();
+            let dst_arg_buffer_ptr = &mut words[arg_base] as *mut *mut () as *mut usize;
+            ptr::copy_nonoverlapping(src_arg_buffer_ptr, dst_arg_buffer_ptr, num_arg_buffer_words);
+        }
+    }
+
     fn global_context(&self) -> &GlobalContextPtr {
         &self.global_context
+    }
+
+    fn current_func(&self) -> &FunctionObject {
+        &self.current_func
     }
 
     fn stack_pointer(&self) -> *mut () {
@@ -170,33 +205,8 @@ pub async fn spawn_wrapper(ctx: &mut LightWeightThreadContext) -> FunctionObject
     api::spawn(ctx).await
 }
 
-async fn start_light_weight_thread(
-    entry_func: FunctionObject,
-    ctx: &mut LightWeightThreadContext,
-    result_size: usize,
-    arg_buffer_ptr: ObjectPtr,
-    num_arg_buffer_words: usize,
-) {
-    unsafe {
-        let result_pointer = ctx.stack_pointer();
-        let next_stack_pointer = (result_pointer as *mut u8).add(result_size) as *mut StackFrame;
-        ctx.update_stack_pointer(next_stack_pointer);
-        let (_, object_ptrs) = entry_func.extrace_user_function();
-        let words = slice::from_raw_parts_mut(ctx.stack_frame_mut().words.as_mut_ptr(), 5);
-        words[0] = terminate as *mut ();
-        words[1] = ptr::null_mut();
-        words[2] = object_ptrs.unwrap_or(ptr::null_mut());
-        let mut arg_base = 3;
-        if result_size > 0 {
-            words[arg_base] = result_pointer;
-            arg_base += 1;
-        }
-        let src_arg_buffer_ptr = arg_buffer_ptr.as_ref::<usize>();
-        let dst_arg_buffer_ptr = &mut words[arg_base] as *mut *mut () as *mut usize;
-        ptr::copy_nonoverlapping(src_arg_buffer_ptr, dst_arg_buffer_ptr, num_arg_buffer_words);
-    }
-
-    let (mut func, _) = entry_func.extrace_user_function();
+async fn start_light_weight_thread(ctx: &mut LightWeightThreadContext) {
+    let (mut func, _) = ctx.current_func().extrace_user_function();
     loop {
         let next_func = if func == gox5_send {
             api::send(ctx).await
@@ -294,14 +304,14 @@ async fn main() {
     let global_context = global_context::create_global_context(allocator);
     let mut ctx = create_light_weight_thread_context(global_context);
     let entry_func = unsafe { runtime_info_get_entry_point() };
-    start_light_weight_thread(
-        FunctionObject::from_user_function(entry_func),
-        &mut ctx,
+    let entry_func = FunctionObject::from_user_function(entry_func);
+    ctx.set_up(
+        entry_func,
         mem::size_of::<isize>(),
         ObjectPtr(ptr::NonNull::dangling().as_ptr()),
         0,
-    )
-    .await;
+    );
+    start_light_weight_thread(&mut ctx).await;
 }
 
 #[cfg(test)]

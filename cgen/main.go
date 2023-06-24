@@ -1651,6 +1651,7 @@ typedef struct StackFrameCommon {
 
 typedef struct {
 	GlobalContext* global_context;
+	FunctionObject current_func;
 	StackFrameCommon* stack_pointer;
 	UserFunction prev_func;
 	intptr_t marker;

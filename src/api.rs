@@ -598,15 +598,14 @@ pub async fn spawn(ctx: &mut LightWeightThreadContext) -> FunctionObject {
         let global_context = ctx.global_context().dupulicate();
 
         tokio::spawn(async move {
-            let mut new_ctx = Box::new(create_light_weight_thread_context(global_context));
-            start_light_weight_thread(
+            let mut new_ctx = create_light_weight_thread_context(global_context);
+            new_ctx.set_up(
                 entry_func,
-                &mut new_ctx,
                 result_size,
                 arg_buffer_ptr,
                 num_arg_buffer_words,
-            )
-            .await;
+            );
+            start_light_weight_thread(&mut new_ctx).await;
         });
     }
     leave_runtime_api(ctx)
