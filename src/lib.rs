@@ -92,6 +92,52 @@ impl LightWeightThreadContext {
     fn stack_frame_mut(&mut self) -> &mut StackFrame {
         unsafe { &mut *self.stack_pointer }
     }
+
+    fn update_prev_func(&mut self, func: UserFunction) {
+        self.prev_func = func
+    }
+}
+
+struct LightWeightThread {
+    context: LightWeightThreadContext,
+    is_main: bool,
+}
+
+impl LightWeightThread {
+    fn new(context: LightWeightThreadContext) -> Self {
+        LightWeightThread {
+            context,
+            is_main: false,
+        }
+    }
+
+    fn is_main(&self) -> bool {
+        self.is_main
+    }
+
+    fn set_main(&mut self) {
+        self.is_main = true;
+    }
+
+    fn context_mut(&mut self) -> &mut LightWeightThreadContext {
+        &mut self.context
+    }
+
+    fn current_func(&self) -> &FunctionObject {
+        self.context.current_func()
+    }
+
+    fn update_current_func(&mut self, func: FunctionObject) {
+        self.context.update_current_func(func);
+    }
+
+    fn stack_frame_mut(&mut self) -> &mut StackFrame {
+        self.context.stack_frame_mut()
+    }
+
+    fn update_prev_func(&mut self, func: UserFunction) {
+        self.context.update_prev_func(func);
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -210,42 +256,45 @@ extern "C" fn terminate(_ctx: &mut LightWeightThreadContext) -> FunctionObject {
 }
 
 fn run_light_weight_thread(
-    ctx: &mut LightWeightThreadContext,
+    light_weight_thread: &mut LightWeightThread,
 ) -> (bool, Option<LightWeightThreadContext>) {
-    let (mut func, _) = ctx.current_func().extrace_user_function();
+    let (mut func, _) = light_weight_thread.current_func().extrace_user_function();
     loop {
         let next_func = if func == gox5_schedule {
-            let next_func = api::schedule(ctx);
-            ctx.update_current_func(next_func);
+            let next_func = api::schedule(light_weight_thread.context_mut());
+            light_weight_thread.update_current_func(next_func);
             return (true, None);
         } else if func == gox5_send {
-            if let Some(next_func) = api::send(ctx) {
+            if let Some(next_func) = api::send(light_weight_thread.context_mut()) {
                 next_func
             } else {
-                ctx.update_current_func(FunctionObject::from_user_function(func));
+                light_weight_thread.update_current_func(FunctionObject::from_user_function(func));
                 return (true, None);
             }
         } else if func == gox5_recv {
-            if let Some(next_func) = api::recv(ctx) {
+            if let Some(next_func) = api::recv(light_weight_thread.context_mut()) {
                 next_func
             } else {
-                ctx.update_current_func(FunctionObject::from_user_function(func));
+                light_weight_thread.update_current_func(FunctionObject::from_user_function(func));
                 return (true, None);
             }
         } else if func == gox5_spawn {
-            let (next_func, new_ctx) = api::spawn(ctx);
-            ctx.update_current_func(next_func);
+            let (next_func, new_ctx) = api::spawn(light_weight_thread.context_mut());
+            light_weight_thread.update_current_func(next_func);
             return (true, Some(new_ctx));
         } else if func == terminate {
             return (false, None);
         } else {
-            func.invoke(ctx)
+            func.invoke(light_weight_thread.context_mut())
         };
-        ctx.prev_func = func;
+        light_weight_thread.update_prev_func(func);
         let (next_func, object_ptrs) = next_func.extrace_user_function();
         if let Some(object_ptrs) = object_ptrs {
             unsafe {
-                let words = slice::from_raw_parts_mut(ctx.stack_frame_mut().words.as_mut_ptr(), 3);
+                let words = slice::from_raw_parts_mut(
+                    light_weight_thread.stack_frame_mut().words.as_mut_ptr(),
+                    3,
+                );
                 words[2] = object_ptrs; // free_vars
             }
         }
@@ -334,14 +383,18 @@ fn main() {
     );
 
     let mut run_queue = VecDeque::new();
-    run_queue.push_back(ctx);
-    while let Some(mut ctx) = run_queue.pop_front() {
-        let (is_running, new_ctx) = run_light_weight_thread(&mut ctx);
+    let mut main_light_weight_thread = LightWeightThread::new(ctx);
+    main_light_weight_thread.set_main();
+    run_queue.push_back(main_light_weight_thread);
+    while let Some(mut light_weight_thread) = run_queue.pop_front() {
+        let (is_running, new_ctx) = run_light_weight_thread(&mut light_weight_thread);
         if let Some(new_ctx) = new_ctx {
-            run_queue.push_back(new_ctx);
+            run_queue.push_back(LightWeightThread::new(new_ctx));
         }
         if is_running {
-            run_queue.push_back(ctx);
+            run_queue.push_back(light_weight_thread);
+        } else if light_weight_thread.is_main() {
+            break;
         }
     }
 
