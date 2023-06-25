@@ -126,6 +126,16 @@ func Test9() int {
 	return v
 }
 
+func Test10() int {
+	ch := make(chan int)
+	go func(ch chan int) {
+		ch <- 10
+	}(ch)
+	runtime.Gosched()
+	v := <-ch
+	return v
+}
+
 func main() {
 	runTest := func(test func() int) {
 		funcFullName := runtime.FuncForPC(reflect.ValueOf(test).Pointer()).Name()
@@ -141,4 +151,5 @@ func main() {
 	runTest(Test7)
 	runTest(Test8)
 	runTest(Test9)
+	runTest(Test10)
 }

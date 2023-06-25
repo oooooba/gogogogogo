@@ -1744,6 +1744,13 @@ DECLARE_RUNTIME_API(recv, StackFrameRecv);
 
 typedef struct {
 	StackFrameCommon common;
+} StackFrameSchedule;
+DECLARE_RUNTIME_API(schedule, StackFrameSchedule);
+
+#define f_S_Gosched gox5_schedule
+
+typedef struct {
+	StackFrameCommon common;
 	ChannelObject channel;
 	IntObject data;
 } StackFrameSend;

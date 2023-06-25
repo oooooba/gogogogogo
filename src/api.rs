@@ -543,6 +543,10 @@ pub fn recv(ctx: &mut LightWeightThreadContext) -> Option<FunctionObject> {
     Some(leave_runtime_api(ctx))
 }
 
+pub fn schedule(ctx: &mut LightWeightThreadContext) -> FunctionObject {
+    leave_runtime_api(ctx)
+}
+
 #[repr(C)]
 struct StackFrameSend {
     common: StackFrameCommon,

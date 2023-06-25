@@ -171,6 +171,11 @@ pub extern "C" fn gox5_recv(_ctx: &mut LightWeightThreadContext) -> FunctionObje
 }
 
 #[no_mangle]
+pub extern "C" fn gox5_schedule(_ctx: &mut LightWeightThreadContext) -> FunctionObject {
+    unreachable!()
+}
+
+#[no_mangle]
 pub extern "C" fn gox5_send(_ctx: &mut LightWeightThreadContext) -> FunctionObject {
     unreachable!()
 }
@@ -209,7 +214,11 @@ fn run_light_weight_thread(
 ) -> (bool, Option<LightWeightThreadContext>) {
     let (mut func, _) = ctx.current_func().extrace_user_function();
     loop {
-        let next_func = if func == gox5_send {
+        let next_func = if func == gox5_schedule {
+            let next_func = api::schedule(ctx);
+            ctx.update_current_func(next_func);
+            return (true, None);
+        } else if func == gox5_send {
             if let Some(next_func) = api::send(ctx) {
                 next_func
             } else {
