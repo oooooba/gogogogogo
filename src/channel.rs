@@ -1,17 +1,13 @@
-use std::cmp;
-
-use tokio::sync::mpsc::{self, Receiver, Sender};
-use tokio::sync::{Mutex, Notify};
+use std::collections::VecDeque;
 
 enum ChannelType {
     Buffered {
-        send_port: Sender<isize>,
-        recv_port: Mutex<Receiver<isize>>,
+        buffer: VecDeque<isize>,
+        capacity: usize,
     },
     Rendezvous {
-        send_port: Mutex<Sender<isize>>,
-        recv_port: Mutex<Receiver<isize>>,
-        completion_port: Notify,
+        buffer: Option<isize>,
+        has_received: bool,
     },
 }
 
@@ -21,52 +17,70 @@ pub struct Channel {
 
 impl Channel {
     pub fn new(capacity: usize) -> Self {
-        let (tx, rx) = mpsc::channel(cmp::max(capacity, 1));
         let channel_type = if capacity == 0 {
             ChannelType::Rendezvous {
-                send_port: Mutex::new(tx),
-                recv_port: Mutex::new(rx),
-                completion_port: Notify::new(),
+                buffer: None,
+                has_received: false,
             }
         } else {
             ChannelType::Buffered {
-                send_port: tx,
-                recv_port: Mutex::new(rx),
+                buffer: VecDeque::with_capacity(capacity),
+                capacity,
             }
         };
         Channel { channel_type }
     }
 
-    pub async fn send(&self, data: isize) {
+    pub fn send(&mut self, data: &isize) -> Option<()> {
         match self.channel_type {
-            ChannelType::Buffered { ref send_port, .. } => send_port.send(data).await.unwrap(),
-            ChannelType::Rendezvous {
-                ref send_port,
-                ref completion_port,
-                ..
+            ChannelType::Buffered {
+                ref mut buffer,
+                capacity,
             } => {
-                let send_port = send_port.lock().await;
-                send_port.send(data).await.unwrap();
-                completion_port.notified().await
+                let len = buffer.len();
+                assert!(len <= capacity);
+                if len < capacity {
+                    buffer.push_back(*data);
+                    Some(())
+                } else {
+                    None
+                }
+            }
+            ChannelType::Rendezvous {
+                ref mut buffer,
+                ref mut has_received,
+            } => {
+                match (buffer.is_some(), *has_received) {
+                    (false, false) => {
+                        *buffer = Some(*data);
+                        None
+                    }
+                    (false, true) => {
+                        // ToDo: The following sequence causes inconsistencies.
+                        // sender0 : send data X
+                        // receiver : receive data X
+                        // sender1 : send data Y (reaches here. sender1 does not send data Y. sender1 must be blocked until send0 reaches here)
+                        *has_received = false;
+                        Some(())
+                    }
+                    (true, false) => None,
+                    (true, true) => unreachable!(),
+                }
             }
         }
     }
 
-    pub async fn recv(&self) -> Option<isize> {
+    pub fn recv(&mut self) -> Option<isize> {
         match self.channel_type {
-            ChannelType::Buffered { ref recv_port, .. } => {
-                let mut recv_port = recv_port.lock().await;
-                recv_port.recv().await
-            }
+            ChannelType::Buffered { ref mut buffer, .. } => buffer.pop_front(),
             ChannelType::Rendezvous {
-                ref recv_port,
-                ref completion_port,
-                ..
+                ref mut buffer,
+                ref mut has_received,
             } => {
-                let mut recv_port = recv_port.lock().await;
-                let data = recv_port.recv().await;
-                completion_port.notify_one();
-                data
+                let data = buffer.take()?;
+                assert!(!*has_received);
+                *has_received = true;
+                Some(data)
             }
         }
     }
@@ -77,95 +91,94 @@ impl Channel {
 mod tests {
     use super::*;
 
-    use std::sync::Arc;
-
-    use tokio::runtime::Runtime;
+    use std::cell::RefCell;
+    use std::rc::Rc;
 
     #[test]
     fn test_buffered_channel_send_recv() {
-        let runtime = Runtime::new().unwrap();
-        runtime.block_on(async {
-            let channel = Channel::new(1);
-            channel.send(42).await;
-            let data = channel.recv().await;
-            assert_eq!(data, Some(42));
-        });
+        let mut channel = Channel::new(1);
+        let success = channel.send(&42);
+        assert_eq!(success, Some(()));
+        let data = channel.recv();
+        assert_eq!(data, Some(42));
     }
 
     #[test]
     fn test_buffered_channel_order() {
-        let runtime = Runtime::new().unwrap();
-        runtime.block_on(async {
-            let capacity = 10;
-            let channel = Channel::new(capacity);
-            for i in 0..capacity {
-                let data = i as isize;
-                channel.send(data).await;
-            }
-            for i in 0..capacity {
-                let data = channel.recv().await;
-                assert_eq!(data, Some(i as isize));
-            }
-        });
+        let capacity = 10;
+        let mut channel = Channel::new(capacity);
+        for i in 0..capacity {
+            let data = i as isize;
+            channel.send(&data).unwrap();
+        }
+        for i in 0..capacity {
+            let data = channel.recv();
+            assert_eq!(data, Some(i as isize));
+        }
     }
 
     #[test]
     fn test_buffered_channel_primary_send_secondary_recv() {
-        let runtime = Runtime::new().unwrap();
-        runtime.block_on(async {
-            let channel = Arc::new(Channel::new(1));
-            let primary = channel.clone();
-            let secondary = channel;
-            runtime.spawn(async move {
-                let data = secondary.recv().await;
-                assert_eq!(data, Some(42));
-            });
-            primary.send(42).await;
-        });
+        let channel = Rc::new(RefCell::new(Channel::new(1)));
+        let primary = channel.clone();
+        let secondary = channel;
+        {
+            let success = primary.borrow_mut().send(&42);
+            assert_eq!(success, Some(()));
+        }
+        {
+            let data = secondary.borrow_mut().recv();
+            assert_eq!(data, Some(42));
+        }
     }
 
     #[test]
     fn test_buffered_channel_primary_recv_secondary_send() {
-        let runtime = Runtime::new().unwrap();
-        runtime.block_on(async {
-            let channel = Arc::new(Channel::new(1));
-            let primary = channel.clone();
-            let secondary = channel;
-            runtime.spawn(async move {
-                secondary.send(42).await;
-            });
-            let data = primary.recv().await;
-            assert_eq!(data, Some(42));
-        });
+        let channel = Rc::new(RefCell::new(Channel::new(1)));
+        let primary = channel.clone();
+        let secondary = channel;
+        {
+            let data = primary.borrow_mut().recv();
+            assert_eq!(data, None);
+        }
+        {
+            let success = secondary.borrow_mut().send(&42);
+            assert_eq!(success, Some(()));
+        }
     }
 
     #[test]
-    fn test_rendezvous_channel_primary_send_secondary_recv() {
-        let runtime = Runtime::new().unwrap();
-        runtime.block_on(async {
-            let channel = Arc::new(Channel::new(0));
-            let primary = channel.clone();
-            let secondary = channel;
-            runtime.spawn(async move {
-                let data = secondary.recv().await;
-                assert_eq!(data, Some(42));
-            });
-            primary.send(42).await;
-        });
+    fn test_rendezvous_channel_primary_send_begin_secondary_recv_primary_send_end() {
+        let channel = Rc::new(RefCell::new(Channel::new(0)));
+        let primary = channel.clone();
+        let secondary = channel;
+        let data = 42;
+        {
+            let success = primary.borrow_mut().send(&data);
+            assert_eq!(success, None);
+        }
+        {
+            let data = secondary.borrow_mut().recv();
+            assert_eq!(data, Some(42));
+        }
+        {
+            let success = primary.borrow_mut().send(&data);
+            assert_eq!(success, Some(()));
+        }
     }
 
     #[test]
     fn test_rendezvous_channel_primary_recv_secondary_send() {
-        let runtime = Runtime::new().unwrap();
-        runtime.block_on(async {
-            let channel = Arc::new(Channel::new(0));
-            let primary = channel.clone();
-            let secondary = channel;
-            runtime.spawn(async move {
-                secondary.send(42).await;
-            });
-            let data = primary.recv().await;
-            assert_eq!(data, Some(42));
-        });
+        let channel = Rc::new(RefCell::new(Channel::new(0)));
+        let primary = channel.clone();
+        let secondary = channel;
+        {
+            let data = primary.borrow_mut().recv();
+            assert_eq!(data, None);
+        }
+        {
+            let success = secondary.borrow_mut().send(&42);
+            assert_eq!(success, None);
+        }
     }
 }

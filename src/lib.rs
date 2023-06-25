@@ -2,12 +2,12 @@ mod api;
 mod channel;
 mod global_context;
 
+use std::collections::VecDeque;
 use std::ffi;
 use std::mem;
+use std::process;
 use std::ptr;
 use std::slice;
-
-use async_recursion::async_recursion;
 
 use api::{FunctionObject, StackFrame, UserFunction};
 use global_context::GlobalContextPtr;
@@ -73,6 +73,10 @@ impl LightWeightThreadContext {
         &self.current_func
     }
 
+    fn update_current_func(&mut self, func: FunctionObject) {
+        self.current_func = func
+    }
+
     fn stack_pointer(&self) -> *mut () {
         self.stack_pointer as *mut ()
     }
@@ -90,8 +94,6 @@ impl LightWeightThreadContext {
     }
 }
 
-unsafe impl Send for LightWeightThreadContext {}
-
 #[derive(Clone, Debug)]
 #[repr(C)]
 struct ObjectPtr(*mut ());
@@ -100,9 +102,11 @@ impl ObjectPtr {
     fn as_ref<T>(&self) -> &T {
         unsafe { &*(self.0 as *const T) }
     }
-}
-unsafe impl Send for ObjectPtr {}
 
+    fn as_mut<T>(&mut self) -> &mut T {
+        unsafe { &mut *(self.0 as *mut T) }
+    }
+}
 extern "C" {
     fn runtime_info_get_entry_point() -> UserFunction;
 }
@@ -200,22 +204,31 @@ extern "C" fn terminate(_ctx: &mut LightWeightThreadContext) -> FunctionObject {
     unreachable!()
 }
 
-#[async_recursion]
-pub async fn spawn_wrapper(ctx: &mut LightWeightThreadContext) -> FunctionObject {
-    api::spawn(ctx).await
-}
-
-async fn start_light_weight_thread(ctx: &mut LightWeightThreadContext) {
+fn run_light_weight_thread(
+    ctx: &mut LightWeightThreadContext,
+) -> (bool, Option<LightWeightThreadContext>) {
     let (mut func, _) = ctx.current_func().extrace_user_function();
     loop {
         let next_func = if func == gox5_send {
-            api::send(ctx).await
+            if let Some(next_func) = api::send(ctx) {
+                next_func
+            } else {
+                ctx.update_current_func(FunctionObject::from_user_function(func));
+                return (true, None);
+            }
         } else if func == gox5_recv {
-            api::recv(ctx).await
+            if let Some(next_func) = api::recv(ctx) {
+                next_func
+            } else {
+                ctx.update_current_func(FunctionObject::from_user_function(func));
+                return (true, None);
+            }
         } else if func == gox5_spawn {
-            spawn_wrapper(ctx).await
+            let (next_func, new_ctx) = api::spawn(ctx);
+            ctx.update_current_func(next_func);
+            return (true, Some(new_ctx));
         } else if func == terminate {
-            break;
+            return (false, None);
         } else {
             func.invoke(ctx)
         };
@@ -298,8 +311,7 @@ fn create_light_weight_thread_context(
 }
 
 #[cfg_attr(not(test), no_mangle)]
-#[tokio::main]
-async fn main() {
+fn main() {
     let allocator = Box::new(RuntimeObjectAllocator::new());
     let global_context = global_context::create_global_context(allocator);
     let mut ctx = create_light_weight_thread_context(global_context);
@@ -311,7 +323,20 @@ async fn main() {
         ObjectPtr(ptr::NonNull::dangling().as_ptr()),
         0,
     );
-    start_light_weight_thread(&mut ctx).await;
+
+    let mut run_queue = VecDeque::new();
+    run_queue.push_back(ctx);
+    while let Some(mut ctx) = run_queue.pop_front() {
+        let (is_running, new_ctx) = run_light_weight_thread(&mut ctx);
+        if let Some(new_ctx) = new_ctx {
+            run_queue.push_back(new_ctx);
+        }
+        if is_running {
+            run_queue.push_back(ctx);
+        }
+    }
+
+    process::exit(0);
 }
 
 #[cfg(test)]

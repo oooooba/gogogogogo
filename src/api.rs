@@ -6,7 +6,6 @@ use std::slice;
 
 use super::channel::Channel;
 use super::create_light_weight_thread_context;
-use super::start_light_weight_thread;
 use super::LightWeightThreadContext;
 use super::ObjectPtr;
 
@@ -47,8 +46,6 @@ impl FunctionObject {
     }
 }
 
-unsafe impl Send for FunctionObject {}
-
 type UserFunctionInner = unsafe extern "C" fn(&mut LightWeightThreadContext) -> FunctionObject;
 
 #[derive(Clone)]
@@ -72,8 +69,6 @@ impl PartialEq<UserFunctionInner> for UserFunction {
         lhs == rhs
     }
 }
-
-unsafe impl Send for UserFunction {}
 
 #[derive(Debug)]
 #[repr(C)]
@@ -111,8 +106,6 @@ struct StackFrameCommon {
     prev_stack_pointer: *mut StackFrame,
     free_vars: *mut (),
 }
-
-unsafe impl Send for StackFrameCommon {}
 
 #[repr(C)]
 struct Slice {
@@ -312,8 +305,6 @@ struct StackFrameMakeChan {
     size: usize,
 }
 
-unsafe impl Send for StackFrameMakeChan {}
-
 /// temporarily, exported for unit test
 pub fn allocate_channel(ctx: &mut LightWeightThreadContext, capacity: usize) -> *mut Channel {
     let object_size = mem::size_of::<Channel>();
@@ -356,8 +347,6 @@ struct StackFrameMakeClosure {
     num_object_ptrs: usize,
     object_ptrs: [ObjectPtr; 0],
 }
-
-unsafe impl Send for StackFrameMakeClosure {}
 
 #[repr(C)]
 struct ClosureLayout {
@@ -540,21 +529,18 @@ struct StackFrameRecv {
     channel: ObjectPtr,
 }
 
-unsafe impl Send for StackFrameRecv {}
-
-pub async fn recv(ctx: &mut LightWeightThreadContext) -> FunctionObject {
-    let channel = unsafe {
+pub fn recv(ctx: &mut LightWeightThreadContext) -> Option<FunctionObject> {
+    let mut channel = unsafe {
         let stack_frame = &ctx.stack_frame().recv;
         stack_frame.channel.clone()
     };
-    let channel = channel.as_ref::<Channel>();
-    let data = channel.recv().await;
-    let data = data.unwrap();
+    let channel = channel.as_mut::<Channel>();
+    let data = channel.recv()?;
     unsafe {
         let stack_frame = &mut ctx.stack_frame_mut().recv;
         *stack_frame.result_ptr = data;
     }
-    leave_runtime_api(ctx)
+    Some(leave_runtime_api(ctx))
 }
 
 #[repr(C)]
@@ -564,16 +550,14 @@ struct StackFrameSend {
     data: isize,
 }
 
-unsafe impl Send for StackFrameSend {}
-
-pub async fn send(ctx: &mut LightWeightThreadContext) -> FunctionObject {
-    let (channel, data) = unsafe {
+pub fn send(ctx: &mut LightWeightThreadContext) -> Option<FunctionObject> {
+    let (mut channel, data) = unsafe {
         let stack_frame = &ctx.stack_frame().send;
         (stack_frame.channel.clone(), stack_frame.data)
     };
-    let channel = channel.as_ref::<Channel>();
-    channel.send(data).await;
-    leave_runtime_api(ctx)
+    let channel = channel.as_mut::<Channel>();
+    channel.send(&data)?;
+    Some(leave_runtime_api(ctx))
 }
 
 #[repr(C)]
@@ -585,10 +569,8 @@ struct StackFrameSpawn {
     arg_buffer: [(); 0],
 }
 
-unsafe impl Send for StackFrameSpawn {}
-
-pub async fn spawn(ctx: &mut LightWeightThreadContext) -> FunctionObject {
-    unsafe {
+pub fn spawn(ctx: &mut LightWeightThreadContext) -> (FunctionObject, LightWeightThreadContext) {
+    let new_ctx = unsafe {
         let stack_frame = &mut ctx.stack_frame_mut().spawn;
 
         let entry_func = stack_frame.func.clone();
@@ -597,18 +579,16 @@ pub async fn spawn(ctx: &mut LightWeightThreadContext) -> FunctionObject {
         let num_arg_buffer_words = stack_frame.num_arg_buffer_words;
         let global_context = ctx.global_context().dupulicate();
 
-        tokio::spawn(async move {
-            let mut new_ctx = create_light_weight_thread_context(global_context);
-            new_ctx.set_up(
-                entry_func,
-                result_size,
-                arg_buffer_ptr,
-                num_arg_buffer_words,
-            );
-            start_light_weight_thread(&mut new_ctx).await;
-        });
-    }
-    leave_runtime_api(ctx)
+        let mut new_ctx = create_light_weight_thread_context(global_context);
+        new_ctx.set_up(
+            entry_func,
+            result_size,
+            arg_buffer_ptr,
+            num_arg_buffer_words,
+        );
+        new_ctx
+    };
+    (leave_runtime_api(ctx), new_ctx)
 }
 
 #[repr(C)]
@@ -820,5 +800,3 @@ pub union StackFrame {
     value_of: ManuallyDrop<StackFrameValueOf>,
     value_pointer: ManuallyDrop<StackFrameValuePointer>,
 }
-
-unsafe impl Send for StackFrame {}

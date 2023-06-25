@@ -6,8 +6,6 @@ pub struct GlobalContext {
     allocator: Box<dyn ObjectAllocator>,
 }
 
-unsafe impl Send for GlobalContext {}
-
 impl GlobalContext {
     fn new(allocator: Box<dyn ObjectAllocator>) -> Self {
         GlobalContext { allocator }
@@ -55,8 +53,6 @@ impl Drop for GlobalContextPtr {
         unsafe { Arc::from_raw(raw_ptr) };
     }
 }
-
-unsafe impl Send for GlobalContextPtr {}
 
 pub fn create_global_context(allocator: Box<dyn ObjectAllocator>) -> GlobalContextPtr {
     let global_context = Arc::new(Mutex::new(GlobalContext::new(allocator)));
