@@ -49,11 +49,10 @@ impl LightWeightThreadContext {
             let next_stack_pointer =
                 (result_pointer as *mut u8).add(result_size) as *mut StackFrame;
             self.update_stack_pointer(next_stack_pointer);
-            let (_, object_ptrs) = self.current_func().extrace_user_function();
             let words = slice::from_raw_parts_mut(self.stack_frame_mut().words.as_mut_ptr(), 5);
             words[0] = terminate as *mut ();
             words[1] = ptr::null_mut();
-            words[2] = object_ptrs.unwrap_or(ptr::null_mut());
+            words[2] = ptr::null_mut();
             let mut arg_base = 3;
             if result_size > 0 {
                 words[arg_base] = result_pointer;
@@ -65,15 +64,23 @@ impl LightWeightThreadContext {
         }
     }
 
+    fn prepare_user_function(&mut self) -> UserFunction {
+        let (func, object_ptrs) = self.current_func.extrace_user_function();
+        if let Some(object_ptrs) = object_ptrs {
+            unsafe {
+                let words = slice::from_raw_parts_mut(self.stack_frame_mut().words.as_mut_ptr(), 3);
+                words[2] = object_ptrs; // free_vars
+            }
+        }
+        func
+    }
+
     fn global_context(&self) -> &GlobalContextPtr {
         &self.global_context
     }
 
-    fn current_func(&self) -> &FunctionObject {
-        &self.current_func
-    }
-
     fn update_current_func(&mut self, func: FunctionObject) {
+        self.prev_func = self.current_func.extrace_user_function().0;
         self.current_func = func
     }
 
@@ -92,15 +99,12 @@ impl LightWeightThreadContext {
     fn stack_frame_mut(&mut self) -> &mut StackFrame {
         unsafe { &mut *self.stack_pointer }
     }
-
-    fn update_prev_func(&mut self, func: UserFunction) {
-        self.prev_func = func
-    }
 }
 
 struct LightWeightThread {
     context: LightWeightThreadContext,
     is_main: bool,
+    is_running: bool,
 }
 
 impl LightWeightThread {
@@ -108,6 +112,7 @@ impl LightWeightThread {
         LightWeightThread {
             context,
             is_main: false,
+            is_running: false,
         }
     }
 
@@ -119,24 +124,41 @@ impl LightWeightThread {
         self.is_main = true;
     }
 
-    fn context_mut(&mut self) -> &mut LightWeightThreadContext {
-        &mut self.context
+    fn is_running(&self) -> bool {
+        self.is_running
     }
 
-    fn current_func(&self) -> &FunctionObject {
-        self.context.current_func()
+    fn start(&mut self) {
+        self.is_running = true;
     }
 
-    fn update_current_func(&mut self, func: FunctionObject) {
-        self.context.update_current_func(func);
-    }
-
-    fn stack_frame_mut(&mut self) -> &mut StackFrame {
-        self.context.stack_frame_mut()
-    }
-
-    fn update_prev_func(&mut self, func: UserFunction) {
-        self.context.update_prev_func(func);
+    fn execute(&mut self) -> Option<LightWeightThreadContext> {
+        assert!(self.is_running);
+        let mut new_ctx: Option<LightWeightThreadContext> = None;
+        loop {
+            let func = self.context.prepare_user_function();
+            let (next_func, suspends) = if func == gox5_schedule {
+                (api::schedule(&mut self.context), true)
+            } else if func == gox5_send {
+                (api::send(&mut self.context)?, false)
+            } else if func == gox5_recv {
+                (api::recv(&mut self.context)?, false)
+            } else if func == gox5_spawn {
+                let (next_func, ctx) = api::spawn(&mut self.context);
+                new_ctx = Some(ctx);
+                (next_func, true)
+            } else if func == terminate {
+                self.is_running = false;
+                (FunctionObject::new_null(), true)
+            } else {
+                (func.invoke(&mut self.context), false)
+            };
+            self.context.update_current_func(next_func);
+            if suspends {
+                break;
+            }
+        }
+        new_ctx
     }
 }
 
@@ -255,53 +277,6 @@ extern "C" fn terminate(_ctx: &mut LightWeightThreadContext) -> FunctionObject {
     unreachable!()
 }
 
-fn run_light_weight_thread(
-    light_weight_thread: &mut LightWeightThread,
-) -> (bool, Option<LightWeightThreadContext>) {
-    let (mut func, _) = light_weight_thread.current_func().extrace_user_function();
-    loop {
-        let next_func = if func == gox5_schedule {
-            let next_func = api::schedule(light_weight_thread.context_mut());
-            light_weight_thread.update_current_func(next_func);
-            return (true, None);
-        } else if func == gox5_send {
-            if let Some(next_func) = api::send(light_weight_thread.context_mut()) {
-                next_func
-            } else {
-                light_weight_thread.update_current_func(FunctionObject::from_user_function(func));
-                return (true, None);
-            }
-        } else if func == gox5_recv {
-            if let Some(next_func) = api::recv(light_weight_thread.context_mut()) {
-                next_func
-            } else {
-                light_weight_thread.update_current_func(FunctionObject::from_user_function(func));
-                return (true, None);
-            }
-        } else if func == gox5_spawn {
-            let (next_func, new_ctx) = api::spawn(light_weight_thread.context_mut());
-            light_weight_thread.update_current_func(next_func);
-            return (true, Some(new_ctx));
-        } else if func == terminate {
-            return (false, None);
-        } else {
-            func.invoke(light_weight_thread.context_mut())
-        };
-        light_weight_thread.update_prev_func(func);
-        let (next_func, object_ptrs) = next_func.extrace_user_function();
-        if let Some(object_ptrs) = object_ptrs {
-            unsafe {
-                let words = slice::from_raw_parts_mut(
-                    light_weight_thread.stack_frame_mut().words.as_mut_ptr(),
-                    3,
-                );
-                words[2] = object_ptrs; // free_vars
-            }
-        }
-        func = next_func;
-    }
-}
-
 pub trait ObjectAllocator {
     fn allocate(&mut self, size: usize, destructor: fn(*mut ())) -> *mut ();
     fn allocate_guarded_pages(&mut self, num_pages: usize) -> *mut ();
@@ -385,13 +360,16 @@ fn main() {
     let mut run_queue = VecDeque::new();
     let mut main_light_weight_thread = LightWeightThread::new(ctx);
     main_light_weight_thread.set_main();
+    main_light_weight_thread.start();
     run_queue.push_back(main_light_weight_thread);
     while let Some(mut light_weight_thread) = run_queue.pop_front() {
-        let (is_running, new_ctx) = run_light_weight_thread(&mut light_weight_thread);
+        let new_ctx = light_weight_thread.execute();
         if let Some(new_ctx) = new_ctx {
-            run_queue.push_back(LightWeightThread::new(new_ctx));
+            let mut new_light_weight_thread = LightWeightThread::new(new_ctx);
+            new_light_weight_thread.start();
+            run_queue.push_back(new_light_weight_thread);
         }
-        if is_running {
+        if light_weight_thread.is_running() {
             run_queue.push_back(light_weight_thread);
         } else if light_weight_thread.is_main() {
             break;
