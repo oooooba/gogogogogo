@@ -29,7 +29,7 @@ impl FunctionObject {
         FunctionObject(ptr::null_mut())
     }
 
-    pub fn extrace_user_function(&self) -> (UserFunction, Option<*mut ()>) {
+    pub fn extract_user_function(&self) -> (UserFunction, Option<*mut ()>) {
         let addr = self.0 as usize;
         let flag = 1 << 63;
         if (addr & flag) == 0 {

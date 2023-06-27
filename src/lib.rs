@@ -65,7 +65,7 @@ impl LightWeightThreadContext {
     }
 
     fn prepare_user_function(&mut self) -> UserFunction {
-        let (func, object_ptrs) = self.current_func.extrace_user_function();
+        let (func, object_ptrs) = self.current_func.extract_user_function();
         if let Some(object_ptrs) = object_ptrs {
             unsafe {
                 let words = slice::from_raw_parts_mut(self.stack_frame_mut().words.as_mut_ptr(), 3);
@@ -80,7 +80,7 @@ impl LightWeightThreadContext {
     }
 
     fn update_current_func(&mut self, func: FunctionObject) {
-        self.prev_func = self.current_func.extrace_user_function().0;
+        self.prev_func = self.current_func.extract_user_function().0;
         self.current_func = func
     }
 
