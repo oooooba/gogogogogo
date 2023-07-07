@@ -90,6 +90,8 @@ func encode(str string) string {
 			s = "_lt_"
 		case '>':
 			s = "_gt_"
+		case '#':
+			s = "_H_"
 		default:
 			s = string(c)
 		}
@@ -1442,7 +1444,14 @@ func (ctx *Context) emitRuntimeInfo() {
 	})
 	fmt.Fprintln(ctx.stream, "};")
 
-	fmt.Fprint(ctx.stream, `
+	init_func_name := "dummy_init"
+	ctx.visitAllFunctions(ctx.program, func(function *ssa.Function) {
+		if function.Name() == "init#1" {
+			init_func_name = "f_S_init_H_1"
+		}
+	})
+
+	fmt.Fprintf(ctx.stream, `
 size_t runtime_info_get_funcs_count(void) {
 	return sizeof(runtime_info_funcs)/sizeof(runtime_info_funcs[0]);
 }
@@ -1454,7 +1463,19 @@ const Func* runtime_info_refer_func(size_t i) {
 UserFunction runtime_info_get_entry_point(void) {
 	return (UserFunction) { .func_ptr = f_S_main };
 }
-`)
+
+FunctionObject dummy_init (LightWeightThreadContext* ctx){
+	assert(ctx->marker == 0xdeadbeef);
+	StackFrame_f_S_init* frame = (void*)ctx->stack_pointer;
+	assert(frame->common.free_vars == NULL);
+	ctx->stack_pointer = frame->common.prev_stack_pointer;
+	return frame->common.resume_func;
+}
+
+UserFunction runtime_info_get_init_point(void) {
+	return (UserFunction) { .func_ptr = %s };
+}
+`, init_func_name)
 }
 
 func findMainPackage(program *ssa.Program) *ssa.Package {

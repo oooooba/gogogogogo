@@ -177,6 +177,7 @@ impl ObjectPtr {
 }
 extern "C" {
     fn runtime_info_get_entry_point() -> UserFunction;
+    fn runtime_info_get_init_point() -> UserFunction;
 }
 
 #[no_mangle]
@@ -347,6 +348,22 @@ fn create_light_weight_thread_context(
 fn main() {
     let allocator = Box::new(RuntimeObjectAllocator::new());
     let global_context = global_context::create_global_context(allocator);
+
+    let init_func = unsafe { runtime_info_get_init_point() };
+    let init_func = FunctionObject::from_user_function(init_func);
+    let mut ctx = create_light_weight_thread_context(global_context.dupulicate());
+    ctx.set_up(
+        init_func,
+        mem::size_of::<()>(),
+        ObjectPtr(ptr::NonNull::dangling().as_ptr()),
+        0,
+    );
+    let mut init_light_weight_thread = LightWeightThread::new(ctx);
+    init_light_weight_thread.start();
+    while init_light_weight_thread.is_running() {
+        let _ = init_light_weight_thread.execute();
+    }
+
     let mut ctx = create_light_weight_thread_context(global_context);
     let entry_func = unsafe { runtime_info_get_entry_point() };
     let entry_func = FunctionObject::from_user_function(entry_func);
