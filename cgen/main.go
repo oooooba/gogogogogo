@@ -166,7 +166,7 @@ func createTypeName(typ types.Type) string {
 				return fmt.Sprintf("Float32Object")
 			case types.Float64:
 				return fmt.Sprintf("Float64Object")
-			case types.Int, types.Uint, types.Uintptr:
+			case types.Int:
 				return fmt.Sprintf("IntObject")
 			case types.Int8:
 				return fmt.Sprintf("Int8Object")
@@ -175,11 +175,13 @@ func createTypeName(typ types.Type) string {
 			case types.Int32:
 				return fmt.Sprintf("Int32Object")
 			case types.Int64:
-				return fmt.Sprintf("Uint64Object")
+				return fmt.Sprintf("Int64Object")
 			case types.String:
 				return fmt.Sprintf("StringObject")
 			case types.UnsafePointer:
 				return fmt.Sprintf("UnsafePointerObject")
+			case types.Uint, types.Uintptr:
+				return fmt.Sprintf("UintObject")
 			case types.Uint8:
 				return fmt.Sprintf("Uint8Object")
 			case types.Uint16:
