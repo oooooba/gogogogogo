@@ -371,6 +371,27 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 			} else {
 				raw = fmt.Sprintf("%s.raw %s %s.raw", createValueRelName(instr.X), instr.Op.String(), createValueRelName(instr.Y))
 			}
+		case token.SHL:
+			var bitLen int
+			switch instr.Type().(*types.Basic).Kind() {
+			case types.Uint:
+				bitLen = 64
+			case types.Uint8:
+				bitLen = 8
+			case types.Uint16:
+				bitLen = 16
+			case types.Uint32:
+				bitLen = 32
+			case types.Uint64:
+				bitLen = 64
+			default:
+				panic(fmt.Sprintf("%s", instr))
+			}
+			fmt.Fprintf(ctx.stream, "%s shiftLen = %s;\n", createTypeName(instr.Y.Type()), createValueRelName(instr.Y))
+			cond := fmt.Sprintf("shiftLen.raw < %d", bitLen)
+			calcValue := fmt.Sprintf("%s.raw %s shiftLen.raw", createValueRelName(instr.X), instr.Op.String())
+			zeroValue := fmt.Sprintf("%s.raw", wrapInObject("0", instr.Type()))
+			raw = fmt.Sprintf("(%s) ? (%s) : (%s)", cond, calcValue, zeroValue)
 		default:
 			raw = fmt.Sprintf("%s.raw %s %s.raw", createValueRelName(instr.X), instr.Op.String(), createValueRelName(instr.Y))
 		}
