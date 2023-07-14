@@ -371,7 +371,7 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 			} else {
 				raw = fmt.Sprintf("%s.raw %s %s.raw", createValueRelName(instr.X), instr.Op.String(), createValueRelName(instr.Y))
 			}
-		case token.SHL:
+		case token.SHL, token.SHR:
 			var bitLen int
 			switch instr.Type().(*types.Basic).Kind() {
 			case types.Int, types.Uint:

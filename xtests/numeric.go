@@ -194,6 +194,74 @@ func Test14() int {
 	return 14
 }
 
+func Test15() int {
+	var x uint = 1
+	var y uint = 64
+	if x>>y != 0 {
+		return 0
+	}
+
+	var x8 uint8 = 1
+	var y8 uint = 8
+	if x8>>y8 != 0 {
+		return 1
+	}
+
+	var x16 uint16 = 1
+	var y16 uint = 16
+	if x16>>y16 != 0 {
+		return 2
+	}
+
+	var x32 uint32 = 1
+	var y32 uint = 32
+	if x32>>y32 != 0 {
+		return 3
+	}
+
+	var x64 uint64 = 1
+	var y64 uint = 64
+	if x64>>y64 != 0 {
+		return 4
+	}
+
+	return 15
+}
+
+func Test16() int {
+	var x int = 1
+	var y uint = 64
+	if x>>y != 0 {
+		return 0
+	}
+
+	var x8 int8 = 1
+	var y8 uint = 8
+	if x8>>y8 != 0 {
+		return 1
+	}
+
+	var x16 int16 = 1
+	var y16 uint = 16
+	if x16>>y16 != 0 {
+		return 2
+	}
+
+	var x32 int32 = 1
+	var y32 uint = 32
+	if x32>>y32 != 0 {
+		return 3
+	}
+
+	var x64 int64 = 1
+	var y64 uint = 64
+	if x64>>y64 != 0 {
+		return 4
+	}
+
+	return 16
+}
+
 func main() {
 	runTest := func(test func() int) {
 		funcFullName := runtime.FuncForPC(reflect.ValueOf(test).Pointer()).Name()
@@ -214,4 +282,6 @@ func main() {
 	runTest(Test12)
 	runTest(Test13)
 	runTest(Test14)
+	runTest(Test15)
+	runTest(Test16)
 }
