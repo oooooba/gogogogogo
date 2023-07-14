@@ -374,15 +374,15 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 		case token.SHL:
 			var bitLen int
 			switch instr.Type().(*types.Basic).Kind() {
-			case types.Uint:
+			case types.Int, types.Uint:
 				bitLen = 64
-			case types.Uint8:
+			case types.Int8, types.Uint8:
 				bitLen = 8
-			case types.Uint16:
+			case types.Int16, types.Uint16:
 				bitLen = 16
-			case types.Uint32:
+			case types.Int32, types.Uint32:
 				bitLen = 32
-			case types.Uint64:
+			case types.Int64, types.Uint64:
 				bitLen = 64
 			default:
 				panic(fmt.Sprintf("%s", instr))
