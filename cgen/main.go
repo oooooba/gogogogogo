@@ -335,6 +335,7 @@ func (ctx *Context) emitPrint(value ssa.Value) {
 
 func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 	fmt.Fprintf(ctx.stream, "\t// %T instruction\n", instruction)
+	fmt.Fprintf(ctx.stream, "\t{\n")
 	switch instr := instruction.(type) {
 	case *ssa.Alloc:
 		if instr.Heap {
@@ -343,16 +344,15 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 				paramArgPair{param: "size", arg: fmt.Sprintf("sizeof(%s)", createTypeName(instr.Type().(*types.Pointer).Elem()))},
 			)
 		} else {
-			fmt.Fprintf(ctx.stream, "{\n")
 			v := createValueRelName(instr)
 			elemType := instr.Type().(*types.Pointer).Elem()
 			fmt.Fprintf(ctx.stream, "%s_buf = (%s){0};\n", v, createTypeName(elemType))
 			fmt.Fprintf(ctx.stream, "%s* raw = &%s_buf;\n", createTypeName(elemType), v)
 			fmt.Fprintf(ctx.stream, "%s = %s;\n", v, wrapInObject("raw", instr.Type()))
-			fmt.Fprintf(ctx.stream, "}\n")
 		}
 
 	case *ssa.BinOp:
+		needToCallRuntimeApi := false
 		raw := ""
 		switch op := instr.Op; op {
 		case token.EQL, token.NEQ:
@@ -367,7 +367,7 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 					paramArgPair{param: "lhs", arg: createValueRelName(instr.X)},
 					paramArgPair{param: "rhs", arg: createValueRelName(instr.Y)},
 				)
-				return
+				needToCallRuntimeApi = true
 			} else {
 				raw = fmt.Sprintf("%s.raw %s %s.raw", createValueRelName(instr.X), instr.Op.String(), createValueRelName(instr.Y))
 			}
@@ -395,7 +395,9 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 		default:
 			raw = fmt.Sprintf("%s.raw %s %s.raw", createValueRelName(instr.X), instr.Op.String(), createValueRelName(instr.Y))
 		}
-		fmt.Fprintf(ctx.stream, "%s = %s;\n", createValueRelName(instr), wrapInObject(raw, instr.Type()))
+		if !needToCallRuntimeApi {
+			fmt.Fprintf(ctx.stream, "%s = %s;\n", createValueRelName(instr), wrapInObject(raw, instr.Type()))
+		}
 
 	case *ssa.Call:
 		callCommon := instr.Common()
@@ -415,67 +417,69 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 			`, createValueRelName(callCommon.Value), methodName)
 			nextFunction := "next_function"
 			ctx.switchFunction(nextFunction, callCommon, createValueRelName(instr), createInstructionName(instr))
-			return
-		}
-
-		switch callee := callCommon.Value.(type) {
-		case *ssa.Builtin:
-			raw := ""
-			switch callee.Name() {
-			case "append":
-				result := createValueRelName(instr)
-				result += ".raw"
-				ctx.switchFunctionToCallRuntimeApi("gox5_append", "StackFrameAppend", createInstructionName(instr), &result, nil,
-					paramArgPair{param: "base", arg: fmt.Sprintf("%s.raw", createValueRelName(callCommon.Args[0]))},
-					paramArgPair{param: "elements", arg: fmt.Sprintf("%s.raw", createValueRelName(callCommon.Args[1]))},
-				)
-				return
-			case "cap":
-				fmt.Fprintf(ctx.stream, "uintptr_t raw = %s.typed.capacity;", createValueRelName(callCommon.Args[0]))
-				raw = "raw"
-			case "len":
-				switch t := callCommon.Args[0].Type().(type) {
-				case *types.Basic:
-					switch t.Kind() {
-					case types.String:
-						raw = fmt.Sprintf("strlen(%s.raw)", createValueRelName(callCommon.Args[0]))
-					default:
-						panic(fmt.Sprintf("unsuported argument for len: %s (%s)", callCommon.Args[0], t))
-					}
-				case *types.Slice:
-					fmt.Fprintf(ctx.stream, "uintptr_t raw = %s.typed.size;", createValueRelName(callCommon.Args[0]))
+		} else {
+			switch callee := callCommon.Value.(type) {
+			case *ssa.Builtin:
+				needToCallRuntimeApi := false
+				raw := ""
+				switch callee.Name() {
+				case "append":
+					result := createValueRelName(instr)
+					result += ".raw"
+					ctx.switchFunctionToCallRuntimeApi("gox5_append", "StackFrameAppend", createInstructionName(instr), &result, nil,
+						paramArgPair{param: "base", arg: fmt.Sprintf("%s.raw", createValueRelName(callCommon.Args[0]))},
+						paramArgPair{param: "elements", arg: fmt.Sprintf("%s.raw", createValueRelName(callCommon.Args[1]))},
+					)
+					needToCallRuntimeApi = true
+				case "cap":
+					fmt.Fprintf(ctx.stream, "uintptr_t raw = %s.typed.capacity;", createValueRelName(callCommon.Args[0]))
 					raw = "raw"
-				default:
-					panic(fmt.Sprintf("unsuported argument for len: %s", callCommon.Args[0]))
-				}
-			case "ssa:wrapnilchk":
-				fmt.Fprintf(ctx.stream, "assert(%s.raw); // ssa:wrapnilchk\n", createValueRelName(callCommon.Args[0]))
-				raw = fmt.Sprintf("%s.raw", createValueRelName(callCommon.Args[0]))
-			case "print":
-				for _, arg := range callCommon.Args {
-					ctx.emitPrint(arg)
-				}
-
-			case "println":
-				for i, arg := range callCommon.Args {
-					if i != 0 {
-						fmt.Fprintf(ctx.stream, "fprintf(stderr, \" \");\n")
+				case "len":
+					switch t := callCommon.Args[0].Type().(type) {
+					case *types.Basic:
+						switch t.Kind() {
+						case types.String:
+							raw = fmt.Sprintf("strlen(%s.raw)", createValueRelName(callCommon.Args[0]))
+						default:
+							panic(fmt.Sprintf("unsuported argument for len: %s (%s)", callCommon.Args[0], t))
+						}
+					case *types.Slice:
+						fmt.Fprintf(ctx.stream, "uintptr_t raw = %s.typed.size;", createValueRelName(callCommon.Args[0]))
+						raw = "raw"
+					default:
+						panic(fmt.Sprintf("unsuported argument for len: %s", callCommon.Args[0]))
 					}
-					ctx.emitPrint(arg)
+				case "ssa:wrapnilchk":
+					fmt.Fprintf(ctx.stream, "assert(%s.raw); // ssa:wrapnilchk\n", createValueRelName(callCommon.Args[0]))
+					raw = fmt.Sprintf("%s.raw", createValueRelName(callCommon.Args[0]))
+				case "print":
+					for _, arg := range callCommon.Args {
+						ctx.emitPrint(arg)
+					}
+
+				case "println":
+					for i, arg := range callCommon.Args {
+						if i != 0 {
+							fmt.Fprintf(ctx.stream, "fprintf(stderr, \" \");\n")
+						}
+						ctx.emitPrint(arg)
+					}
+					fmt.Fprintf(ctx.stream, "fprintf(stderr, \"\\n\");\n")
+
+				default:
+					panic(fmt.Sprintf("unsuported builtin function: %s", callee.Name()))
 				}
-				fmt.Fprintf(ctx.stream, "fprintf(stderr, \"\\n\");\n")
+				if !needToCallRuntimeApi {
+					if t, ok := instr.Type().(*types.Tuple); !ok || t.Len() > 0 {
+						fmt.Fprintf(ctx.stream, "%s = %s;\n", createValueRelName(instr), wrapInObject(raw, instr.Type()))
+					}
+					fmt.Fprintf(ctx.stream, "\treturn %s;\n", wrapInFunctionObject(createInstructionName(instr)))
+				}
 
 			default:
-				panic(fmt.Sprintf("unsuported builtin function: %s", callee.Name()))
+				nextFunction := createValueRelName(callee)
+				ctx.switchFunction(nextFunction, callCommon, createValueRelName(instr), createInstructionName(instr))
 			}
-			if t, ok := instr.Type().(*types.Tuple); !ok || t.Len() > 0 {
-				fmt.Fprintf(ctx.stream, "%s = %s;\n", createValueRelName(instr), wrapInObject(raw, instr.Type()))
-			}
-			fmt.Fprintf(ctx.stream, "\treturn %s;\n", wrapInFunctionObject(createInstructionName(instr)))
-
-		default:
-			nextFunction := createValueRelName(callee)
-			ctx.switchFunction(nextFunction, callCommon, createValueRelName(instr), createInstructionName(instr))
 		}
 
 	case *ssa.ChangeType:
@@ -521,13 +525,10 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 		fmt.Fprintf(ctx.stream, "%s = %s.raw.e%d;\n", createValueRelName(instr), createValueRelName(instr.Tuple), instr.Index)
 
 	case *ssa.FieldAddr:
-		fmt.Fprintf(ctx.stream, "{\n")
 		fmt.Fprintf(ctx.stream, "%s* raw = &(%s.raw->%s);\n", createTypeName(instr.Type().(*types.Pointer).Elem()), createValueRelName(instr.X), instr.X.Type().(*types.Pointer).Elem().Underlying().(*types.Struct).Field(instr.Field).Name())
 		fmt.Fprintf(ctx.stream, "%s = %s;\n", createValueRelName(instr), wrapInObject("raw", instr.Type()))
-		fmt.Fprintf(ctx.stream, "}\n")
 
 	case *ssa.IndexAddr:
-		fmt.Fprintf(ctx.stream, "{\n")
 		fmt.Fprintf(ctx.stream, "uintptr_t index = %s.raw;\n", createValueRelName(instr.Index))
 		switch t := instr.X.Type().(type) {
 		case *types.Slice:
@@ -538,7 +539,6 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 			panic(fmt.Sprintf("%s, %s, %s", instr, instr.X, t))
 		}
 		fmt.Fprintf(ctx.stream, "%s = %s;\n", createValueRelName(instr), wrapInObject("raw", instr.Type()))
-		fmt.Fprintf(ctx.stream, "}\n")
 
 	case *ssa.Go:
 		callCommon := instr.Common()
@@ -720,37 +720,36 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 				paramArgPair{param: "low", arg: low},
 				paramArgPair{param: "high", arg: high},
 			)
-			return
-		}
+		} else {
+			startIndex := "0"
+			if instr.Low != nil {
+				startIndex = fmt.Sprintf("%s.raw", createValueRelName(instr.Low))
+			}
 
-		startIndex := "0"
-		if instr.Low != nil {
-			startIndex = fmt.Sprintf("%s.raw", createValueRelName(instr.Low))
-		}
+			ptr := ""
+			length := ""
+			switch t := instr.X.Type().(type) {
+			case *types.Pointer:
+				ptr = "raw->raw"
+				elemType := t.Elem().(*types.Array)
+				length = fmt.Sprintf("%d", elemType.Len())
+			case *types.Slice:
+				ptr = "typed.ptr"
+				length = fmt.Sprintf("%s.typed.capacity", createValueRelName(instr.X))
+			default:
+				panic(fmt.Sprintf("not implemented: %s (%T)", t, t))
+			}
 
-		ptr := ""
-		length := ""
-		switch t := instr.X.Type().(type) {
-		case *types.Pointer:
-			ptr = "raw->raw"
-			elemType := t.Elem().(*types.Array)
-			length = fmt.Sprintf("%d", elemType.Len())
-		case *types.Slice:
-			ptr = "typed.ptr"
-			length = fmt.Sprintf("%s.typed.capacity", createValueRelName(instr.X))
-		default:
-			panic(fmt.Sprintf("not implemented: %s (%T)", t, t))
-		}
+			endIndex := length
+			if instr.High != nil {
+				endIndex = fmt.Sprintf("%s.raw", createValueRelName(instr.High))
+			}
 
-		endIndex := length
-		if instr.High != nil {
-			endIndex = fmt.Sprintf("%s.raw", createValueRelName(instr.High))
+			fmt.Fprintf(ctx.stream, "%s = %s;\n", createValueRelName(instr), wrapInObject("0", instr.Type()))
+			fmt.Fprintf(ctx.stream, "%s.typed.ptr = %s.%s + %s;\n", createValueRelName(instr), createValueRelName(instr.X), ptr, startIndex)
+			fmt.Fprintf(ctx.stream, "%s.typed.size = %s - %s;\n", createValueRelName(instr), endIndex, startIndex)
+			fmt.Fprintf(ctx.stream, "%s.typed.capacity = %s - %s;\n", createValueRelName(instr), length, startIndex)
 		}
-
-		fmt.Fprintf(ctx.stream, "%s = %s;\n", createValueRelName(instr), wrapInObject("0", instr.Type()))
-		fmt.Fprintf(ctx.stream, "%s.typed.ptr = %s.%s + %s;\n", createValueRelName(instr), createValueRelName(instr.X), ptr, startIndex)
-		fmt.Fprintf(ctx.stream, "%s.typed.size = %s - %s;\n", createValueRelName(instr), endIndex, startIndex)
-		fmt.Fprintf(ctx.stream, "%s.typed.capacity = %s - %s;\n", createValueRelName(instr), length, startIndex)
 
 	case *ssa.Store:
 		fmt.Fprintf(ctx.stream, "*(%s.raw) = %s;\n", createValueRelName(instr.Addr), createValueRelName(instr.Val))
@@ -769,7 +768,6 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 			}
 		}()
 		dstObj := createValueRelName(instr)
-		fmt.Fprintf(ctx.stream, "{\n")
 		if instr.CommaOk {
 			if t, ok := instr.AssertedType.Underlying().(*types.Interface); ok {
 				fmt.Fprintf(ctx.stream, "bool can_convert = true;\n")
@@ -802,7 +800,6 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 		} else {
 			fmt.Fprintf(ctx.stream, "%s = %s;\n", dstObj, srcObj)
 		}
-		fmt.Fprintf(ctx.stream, "}\n")
 
 	case *ssa.UnOp:
 		if instr.Op == token.ARROW {
@@ -810,17 +807,18 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 			ctx.switchFunctionToCallRuntimeApi("gox5_recv", "StackFrameRecv", createInstructionName(instr), &result, nil,
 				paramArgPair{param: "channel", arg: createValueRelName(instr.X)},
 			)
-			return
+		} else {
+			s := fmt.Sprintf("%s (%s.raw)", instr.Op.String(), createValueRelName(instr.X))
+			if instr.Op != token.MUL {
+				s = wrapInObject(s, instr.Type())
+			}
+			fmt.Fprintf(ctx.stream, "%s = %s;\n", createValueRelName(instr), s)
 		}
-		s := fmt.Sprintf("%s (%s.raw)", instr.Op.String(), createValueRelName(instr.X))
-		if instr.Op != token.MUL {
-			s = wrapInObject(s, instr.Type())
-		}
-		fmt.Fprintf(ctx.stream, "%s = %s;\n", createValueRelName(instr), s)
 
 	default:
 		panic(fmt.Sprintf("unknown instruction: %s", instruction.String()))
 	}
+	fmt.Fprintf(ctx.stream, "\t}\n")
 }
 
 func createInstructionName(instruction ssa.Instruction) string {
