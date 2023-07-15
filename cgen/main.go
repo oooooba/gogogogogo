@@ -224,6 +224,38 @@ func createTypeName(typ types.Type) string {
 	return encode(f(typ))
 }
 
+func createRawTypeName(typ types.Type) string {
+	switch typ.(*types.Basic).Kind() {
+	case types.Bool, types.UntypedBool:
+		return "bool"
+	case types.Float32:
+		return "float"
+	case types.Float64:
+		return "double"
+	case types.Int:
+		return "intptr_t"
+	case types.Int8:
+		return "int8_t"
+	case types.Int16:
+		return "int16_t"
+	case types.Int32:
+		return "int32_t"
+	case types.Int64:
+		return "int64_t"
+	case types.Uint:
+		return "uintptr_t"
+	case types.Uint8:
+		return "uint8_t"
+	case types.Uint16:
+		return "uint16_t"
+	case types.Uint32:
+		return "uint32_t"
+	case types.Uint64:
+		return "uint64_t"
+	}
+	panic(typ)
+}
+
 func (ctx *Context) switchFunction(nextFunction string, callCommon *ssa.CallCommon, result string, resumeFunction string) {
 	fmt.Fprintf(ctx.stream, "StackFrameCommon* next_frame = (StackFrameCommon*)(frame + 1);\n")
 	fmt.Fprintf(ctx.stream, "assert(((uintptr_t)next_frame) %% sizeof(uintptr_t) == 0);\n")
@@ -371,27 +403,38 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 			} else {
 				raw = fmt.Sprintf("%s.raw %s %s.raw", createValueRelName(instr.X), instr.Op.String(), createValueRelName(instr.Y))
 			}
-		case token.SHL, token.SHR:
-			var bitLen int
+		case token.SHL:
+			var unsignedRawType string
 			switch instr.Type().(*types.Basic).Kind() {
-			case types.Int, types.Uint:
-				bitLen = 64
-			case types.Int8, types.Uint8:
-				bitLen = 8
-			case types.Int16, types.Uint16:
-				bitLen = 16
-			case types.Int32, types.Uint32:
-				bitLen = 32
-			case types.Int64, types.Uint64:
-				bitLen = 64
+			case types.Int, types.Int8, types.Int16, types.Int32, types.Int64:
+				unsignedRawType = fmt.Sprintf("u%s", createRawTypeName(instr.X.Type()))
+			case types.Uint, types.Uint8, types.Uint16, types.Uint32, types.Uint64:
+				unsignedRawType = createRawTypeName(instr.X.Type())
 			default:
 				panic(fmt.Sprintf("%s", instr))
 			}
-			fmt.Fprintf(ctx.stream, "%s shiftLen = %s;\n", createTypeName(instr.Y.Type()), createValueRelName(instr.Y))
-			cond := fmt.Sprintf("shiftLen.raw < %d", bitLen)
-			calcValue := fmt.Sprintf("%s.raw %s shiftLen.raw", createValueRelName(instr.X), instr.Op.String())
-			zeroValue := fmt.Sprintf("%s.raw", wrapInObject("0", instr.Type()))
-			raw = fmt.Sprintf("(%s) ? (%s) : (%s)", cond, calcValue, zeroValue)
+			fmt.Fprintf(ctx.stream, "%s unsignedLhs = (%s)(%s.raw);\n", unsignedRawType, unsignedRawType, createValueRelName(instr.X))
+			fmt.Fprintf(ctx.stream, "%s rhs = %s.raw;\n", createRawTypeName(instr.Y.Type()), createValueRelName(instr.Y))
+			raw = "(rhs < sizeof(unsignedLhs) * 8) ? (unsignedLhs << rhs) : 0"
+		case token.SHR:
+			var unsignedRawType string
+			var overflowExpr string
+			var calcExpr string
+			switch instr.Type().(*types.Basic).Kind() {
+			case types.Int, types.Int8, types.Int16, types.Int32, types.Int64:
+				unsignedRawType = fmt.Sprintf("u%s", createRawTypeName(instr.X.Type()))
+				overflowExpr = fmt.Sprintf("%s.raw < 0 ? ((%s)(-1)) : 0", createValueRelName(instr.X), unsignedRawType)
+				calcExpr = fmt.Sprintf("(((%s) >> rhs) << rhs) | (unsignedLhs >> rhs)", overflowExpr)
+			case types.Uint, types.Uint8, types.Uint16, types.Uint32, types.Uint64:
+				unsignedRawType = createRawTypeName(instr.X.Type())
+				overflowExpr = "0"
+				calcExpr = "unsignedLhs >> rhs"
+			default:
+				panic(fmt.Sprintf("%s", instr))
+			}
+			fmt.Fprintf(ctx.stream, "%s unsignedLhs = (%s)(%s.raw);\n", unsignedRawType, unsignedRawType, createValueRelName(instr.X))
+			fmt.Fprintf(ctx.stream, "%s rhs = %s.raw;\n", createRawTypeName(instr.Y.Type()), createValueRelName(instr.Y))
+			raw = fmt.Sprintf("rhs < (sizeof(unsignedLhs) * 8) ? (%s) : (%s)", calcExpr, overflowExpr)
 		default:
 			raw = fmt.Sprintf("%s.raw %s %s.raw", createValueRelName(instr.X), instr.Op.String(), createValueRelName(instr.Y))
 		}

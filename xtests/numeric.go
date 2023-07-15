@@ -262,6 +262,34 @@ func Test16() int {
 	return 16
 }
 
+func Test17() int {
+	var x0 int = -1
+	var y0 uint = 64
+	if x0<<y0 != 0 {
+		return 0
+	}
+
+	var x1 int = -1
+	var y1 uint = 1
+	if x1<<y1 != -2 {
+		return 1
+	}
+
+	var x2 int = -1
+	var y2 uint = 64
+	if x2>>y2 != -1 {
+		return 2
+	}
+
+	var x3 int = -1
+	var y3 uint = 1
+	if x3>>y3 != -1 {
+		return 3
+	}
+
+	return 17
+}
+
 func main() {
 	runTest := func(test func() int) {
 		funcFullName := runtime.FuncForPC(reflect.ValueOf(test).Pointer()).Name()
@@ -284,4 +312,5 @@ func main() {
 	runTest(Test14)
 	runTest(Test15)
 	runTest(Test16)
+	runTest(Test17)
 }
