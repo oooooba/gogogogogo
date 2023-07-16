@@ -287,6 +287,12 @@ func Test17() int {
 		return 3
 	}
 
+	var x4 int = -2
+	var y4 uint = 0
+	if x4>>y4 != -2 {
+		return 4
+	}
+
 	return 17
 }
 
