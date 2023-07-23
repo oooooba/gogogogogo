@@ -195,6 +195,8 @@ func createTypeName(typ types.Type) string {
 			return fmt.Sprintf("ChannelObject")
 		case *types.Interface:
 			return fmt.Sprintf("Interface")
+		case *types.Map:
+			return fmt.Sprintf("MapObject")
 		case *types.Named:
 			// remove "command-line-arguments."
 			l := strings.Split(typ.String(), ".")
@@ -487,6 +489,12 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 						default:
 							panic(fmt.Sprintf("unsuported argument for len: %s (%s)", callCommon.Args[0], t))
 						}
+					case *types.Map:
+						result := createValueRelName(instr)
+						ctx.switchFunctionToCallRuntimeApi("gox5_map_len", "StackFrameMapLen", createInstructionName(instr), &result, nil,
+							paramArgPair{param: "map", arg: createValueRelName(callCommon.Args[0])},
+						)
+						needToCallRuntimeApi = true
 					case *types.Slice:
 						fmt.Fprintf(ctx.stream, "uintptr_t raw = %s.typed.size;", createValueRelName(callCommon.Args[0]))
 						raw = "raw"
@@ -712,6 +720,13 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 			fmt.Fprintf(ctx.stream, "%s.num_methods = sizeof(%s.entries)/sizeof(%s.entries[0]);\n", valueName, interfaceTableName, interfaceTableName)
 			fmt.Fprintf(ctx.stream, "%s.interface_table = &%s.entries[0];\n", valueName, interfaceTableName)
 		}
+
+	case *ssa.MakeMap:
+		result := createValueRelName(instr)
+		ctx.switchFunctionToCallRuntimeApi("gox5_make_map", "StackFrameMakeMap", createInstructionName(instr), &result, nil,
+			paramArgPair{param: "key_type_size", arg: fmt.Sprintf("sizeof(%s)", createTypeName(instr.Type().(*types.Map).Key()))},
+			paramArgPair{param: "value_type_size", arg: fmt.Sprintf("sizeof(%s)", createTypeName(instr.Type().(*types.Map).Elem()))},
+		)
 
 	case *ssa.Panic:
 		fmt.Fprintf(ctx.stream, "fprintf(stderr, \"panic\\n\");\n")
@@ -957,6 +972,11 @@ func (ctx *Context) emitValueDeclaration(value ssa.Value) {
 			}
 		}
 
+	case *ssa.MakeMap:
+		if val.Reserve != nil {
+			ctx.emitValueDeclaration(val.Reserve)
+		}
+
 	case *ssa.Parameter:
 		canEmit = false
 
@@ -1008,7 +1028,7 @@ func requireSwitchFunction(instruction ssa.Instruction) bool {
 			}
 		}
 		return false
-	case *ssa.Call, *ssa.Go, *ssa.MakeChan, *ssa.MakeClosure, *ssa.Send:
+	case *ssa.Call, *ssa.Go, *ssa.MakeChan, *ssa.MakeClosure, *ssa.MakeMap, *ssa.Send:
 		return true
 	case *ssa.Convert:
 		if dstType, ok := t.Type().(*types.Basic); ok && dstType.Kind() == types.String {
@@ -1209,7 +1229,7 @@ func (ctx *Context) emitType() {
 		case *types.Array, *types.Pointer, *types.Struct, *types.Tuple:
 			fmt.Fprintf(ctx.stream, "typedef struct %s %s; // %s\n", name, name, typ)
 
-		case *types.Basic, *types.Chan, *types.Interface, *types.Signature:
+		case *types.Basic, *types.Chan, *types.Interface, *types.Map, *types.Signature:
 			// do nothing
 
 		case *types.Named:
@@ -1243,7 +1263,7 @@ func (ctx *Context) emitType() {
 			fmt.Fprintf(ctx.stream, "\t%s raw[%d];\n", createTypeName(typ.Elem()), typ.Len())
 			fmt.Fprintf(ctx.stream, "};\n")
 
-		case *types.Basic, *types.Chan, *types.Interface, *types.Named, *types.Pointer, *types.Signature:
+		case *types.Basic, *types.Chan, *types.Interface, *types.Map, *types.Named, *types.Pointer, *types.Signature:
 			// do nothing
 
 		case *types.Slice:
@@ -1304,6 +1324,17 @@ bool equal_StringObject(StringObject* lhs, StringObject* rhs) {
 	return strcmp(lhs->raw, rhs->raw) == 0;
 }
 
+bool equal_MapObject(MapObject* lhs, MapObject* rhs) {
+	if(lhs->raw == rhs->raw) {
+		return true;
+	}
+	if((lhs->raw == NULL) || (rhs->raw == NULL)) {
+		return false;
+	}
+	assert(false); // ToDo: unimplemented
+	return false;
+}
+
 bool equal_Interface(Interface* lhs, Interface* rhs) {
 	if ((lhs->receiver == NULL) && (rhs->receiver == NULL)) {
 		return true;
@@ -1346,7 +1377,7 @@ bool equal_Interface(Interface* lhs, Interface* rhs) {
 		typeName := createTypeName(typ)
 		expr := ""
 		switch typ := typ.(type) {
-		case *types.Basic, *types.Interface:
+		case *types.Basic, *types.Interface, *types.Map:
 			continue
 		case *types.Named:
 			if _, ok := typ.Underlying().(*types.Interface); ok {
@@ -1390,6 +1421,10 @@ func (ctx *Context) collectTypes() {
 
 		case *types.Interface:
 			// do nothing
+
+		case *types.Map:
+			f(typ.Key())
+			f(typ.Elem())
 
 		case *types.Named:
 			typeName := createTypeName(typ)
@@ -1729,6 +1764,10 @@ typedef struct {
 	const void* raw;
 } FunctionObject;
 
+typedef struct {
+	void* raw;
+} MapObject;
+
 typedef struct StackFrameCommon {
 	FunctionObject resume_func;
 	struct StackFrameCommon* prev_stack_pointer;
@@ -1795,6 +1834,14 @@ DECLARE_RUNTIME_API(make_closure, StackFrameMakeClosure);
 
 typedef struct {
 	StackFrameCommon common;
+	MapObject* result_ptr;
+	uintptr_t key_type_size;
+	uintptr_t value_type_size;
+} StackFrameMakeMap;
+DECLARE_RUNTIME_API(make_map, StackFrameMakeMap);
+
+typedef struct {
+	StackFrameCommon common;
 	StringObject* result_ptr;
 	SliceObject byte_slice;
 } StackFrameMakeStringFromByteSlice;
@@ -1813,6 +1860,13 @@ typedef struct {
 	SliceObject rune_slice;
 } StackFrameMakeStringFromRuneSlice;
 DECLARE_RUNTIME_API(make_string_from_rune_slice, StackFrameMakeStringFromRuneSlice);
+
+typedef struct {
+	StackFrameCommon common;
+	IntObject* result_ptr;
+	MapObject map;
+} StackFrameMapLen;
+DECLARE_RUNTIME_API(map_len, StackFrameMapLen);
 
 typedef struct {
 	StackFrameCommon common;

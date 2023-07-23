@@ -1,6 +1,7 @@
 mod api;
 mod channel;
 mod global_context;
+mod map;
 
 use std::collections::VecDeque;
 use std::ffi;
@@ -174,6 +175,10 @@ impl ObjectPtr {
     fn as_mut<T>(&mut self) -> &mut T {
         unsafe { &mut *(self.0 as *mut T) }
     }
+
+    fn is_null(&self) -> bool {
+        self.0.is_null()
+    }
 }
 extern "C" {
     fn runtime_info_get_entry_point() -> UserFunction;
@@ -211,6 +216,11 @@ pub extern "C" fn gox5_make_closure(ctx: &mut LightWeightThreadContext) -> Funct
 }
 
 #[no_mangle]
+pub extern "C" fn gox5_make_map(ctx: &mut LightWeightThreadContext) -> FunctionObject {
+    api::make_map(ctx)
+}
+
+#[no_mangle]
 pub extern "C" fn gox5_make_string_from_byte_slice(
     ctx: &mut LightWeightThreadContext,
 ) -> FunctionObject {
@@ -227,6 +237,11 @@ pub extern "C" fn gox5_make_string_from_rune_slice(
     ctx: &mut LightWeightThreadContext,
 ) -> FunctionObject {
     api::make_string_from_rune_slice(ctx)
+}
+
+#[no_mangle]
+pub extern "C" fn gox5_map_len(ctx: &mut LightWeightThreadContext) -> FunctionObject {
+    api::map_len(ctx)
 }
 
 #[no_mangle]

@@ -6,6 +6,7 @@ use std::slice;
 
 use super::channel::Channel;
 use super::create_light_weight_thread_context;
+use super::map::Map;
 use super::LightWeightThreadContext;
 use super::ObjectPtr;
 
@@ -383,6 +384,50 @@ pub fn make_closure(ctx: &mut LightWeightThreadContext) -> FunctionObject {
 }
 
 #[repr(C)]
+struct StackFrameMakeMap {
+    common: StackFrameCommon,
+    result_ptr: *mut ObjectPtr,
+    key_type_size: usize,
+    value_type_size: usize,
+}
+
+pub fn allocate_map(
+    ctx: &mut LightWeightThreadContext,
+    key_type_size: usize,
+    value_type_size: usize,
+) -> *mut Map {
+    let object_size = mem::size_of::<Map>();
+    let ptr = ctx.global_context().process(|mut global_context| {
+        global_context
+            .allocator()
+            .allocate(object_size, |ptr| unsafe {
+                ptr::drop_in_place(ptr as *mut Map)
+            }) as *mut Map
+    });
+
+    let map = Map::new(key_type_size, value_type_size);
+    unsafe {
+        ptr::copy_nonoverlapping(&map, ptr, 1);
+    }
+    mem::forget(map);
+    ptr
+}
+
+pub fn make_map(ctx: &mut LightWeightThreadContext) -> FunctionObject {
+    let (key_type_size, value_type_size) = unsafe {
+        let stack_frame = &ctx.stack_frame().make_map;
+        (stack_frame.key_type_size, stack_frame.value_type_size)
+    };
+    let ptr = allocate_map(ctx, key_type_size, value_type_size);
+    let ptr = ObjectPtr(ptr as *mut ());
+    unsafe {
+        let stack_frame = &mut ctx.stack_frame_mut().make_map;
+        *stack_frame.result_ptr = ptr;
+    };
+    leave_runtime_api(ctx)
+}
+
+#[repr(C)]
 struct StackFrameMakeStringFromByteSlice {
     common: StackFrameCommon,
     result_ptr: *mut StringObject,
@@ -493,6 +538,31 @@ pub fn make_string_from_rune_slice(ctx: &mut LightWeightThreadContext) -> Functi
     };
     *result = new_string_object;
 
+    leave_runtime_api(ctx)
+}
+
+#[repr(C)]
+struct StackFrameMapLen {
+    common: StackFrameCommon,
+    result_ptr: *mut usize,
+    map: ObjectPtr,
+}
+
+pub fn map_len(ctx: &mut LightWeightThreadContext) -> FunctionObject {
+    let map_ptr = unsafe {
+        let stack_frame = &ctx.stack_frame().map_len;
+        &stack_frame.map
+    };
+    let len = if map_ptr.is_null() {
+        0
+    } else {
+        let map = map_ptr.as_ref::<Map>();
+        map.len()
+    };
+    unsafe {
+        let stack_frame = &mut ctx.stack_frame_mut().map_len;
+        *stack_frame.result_ptr = len;
+    };
     leave_runtime_api(ctx)
 }
 
@@ -792,9 +862,11 @@ pub union StackFrame {
     func_name: ManuallyDrop<StackFrameFuncName>,
     make_chan: ManuallyDrop<StackFrameMakeChan>,
     make_closure: ManuallyDrop<StackFrameMakeClosure>,
+    make_map: ManuallyDrop<StackFrameMakeMap>,
     make_string_from_byte_slice: ManuallyDrop<StackFrameMakeStringFromByteSlice>,
     make_string_from_rune: ManuallyDrop<StackFrameMakeStringFromRune>,
     make_string_from_rune_slice: ManuallyDrop<StackFrameMakeStringFromRuneSlice>,
+    map_len: ManuallyDrop<StackFrameMapLen>,
     new: ManuallyDrop<StackFrameNew>,
     recv: ManuallyDrop<StackFrameRecv>,
     send: ManuallyDrop<StackFrameSend>,
