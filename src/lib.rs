@@ -240,8 +240,23 @@ pub extern "C" fn gox5_make_string_from_rune_slice(
 }
 
 #[no_mangle]
+pub extern "C" fn gox5_map_get(ctx: &mut LightWeightThreadContext) -> FunctionObject {
+    api::map_get(ctx)
+}
+
+#[no_mangle]
+pub extern "C" fn gox5_map_get_checked(ctx: &mut LightWeightThreadContext) -> FunctionObject {
+    api::map_get_checked(ctx)
+}
+
+#[no_mangle]
 pub extern "C" fn gox5_map_len(ctx: &mut LightWeightThreadContext) -> FunctionObject {
     api::map_len(ctx)
+}
+
+#[no_mangle]
+pub extern "C" fn gox5_map_set(ctx: &mut LightWeightThreadContext) -> FunctionObject {
+    api::map_set(ctx)
 }
 
 #[no_mangle]

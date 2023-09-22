@@ -14,4 +14,12 @@ impl Map {
     pub fn len(&self) -> usize {
         self.map.len()
     }
+
+    pub fn get(&self, key: &usize) -> Option<usize> {
+        self.map.get(key).copied()
+    }
+
+    pub fn set(&mut self, key: &usize, value: usize) {
+        self.map.insert(*key, value);
+    }
 }

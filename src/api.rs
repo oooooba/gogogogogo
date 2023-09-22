@@ -542,6 +542,64 @@ pub fn make_string_from_rune_slice(ctx: &mut LightWeightThreadContext) -> Functi
 }
 
 #[repr(C)]
+struct StackFrameMapGet {
+    common: StackFrameCommon,
+    result_ptr: *mut usize,
+    map: ObjectPtr,
+    key: usize,
+}
+
+pub fn map_get(ctx: &mut LightWeightThreadContext) -> FunctionObject {
+    let (map_ptr, key) = unsafe {
+        let stack_frame = &ctx.stack_frame().map_get;
+        (&stack_frame.map, &stack_frame.key)
+    };
+    let value = if map_ptr.is_null() {
+        unimplemented!()
+    } else {
+        let map = map_ptr.as_ref::<Map>();
+        map.get(key).unwrap()
+    };
+    unsafe {
+        let stack_frame = &mut ctx.stack_frame_mut().map_get;
+        *stack_frame.result_ptr = value;
+    };
+    leave_runtime_api(ctx)
+}
+
+#[repr(C)]
+struct MapGetCheckedResult {
+    value: usize,
+    found: bool,
+}
+
+#[repr(C)]
+struct StackFrameMapGetChecked {
+    common: StackFrameCommon,
+    result_ptr: *mut MapGetCheckedResult,
+    map: ObjectPtr,
+    key: usize,
+}
+
+pub fn map_get_checked(ctx: &mut LightWeightThreadContext) -> FunctionObject {
+    let (map_ptr, key) = unsafe {
+        let stack_frame = &ctx.stack_frame().map_get_checked;
+        (&stack_frame.map, &stack_frame.key)
+    };
+    let (value, found) = if map_ptr.is_null() {
+        unimplemented!()
+    } else {
+        let map = map_ptr.as_ref::<Map>();
+        map.get(key).map_or((0, false), |v| (v, true))
+    };
+    unsafe {
+        let stack_frame = &mut ctx.stack_frame_mut().map_get_checked;
+        *stack_frame.result_ptr = MapGetCheckedResult { value, found };
+    };
+    leave_runtime_api(ctx)
+}
+
+#[repr(C)]
 struct StackFrameMapLen {
     common: StackFrameCommon,
     result_ptr: *mut usize,
@@ -562,6 +620,32 @@ pub fn map_len(ctx: &mut LightWeightThreadContext) -> FunctionObject {
     unsafe {
         let stack_frame = &mut ctx.stack_frame_mut().map_len;
         *stack_frame.result_ptr = len;
+    };
+    leave_runtime_api(ctx)
+}
+
+#[repr(C)]
+struct StackFrameMapSet {
+    common: StackFrameCommon,
+    map: ObjectPtr,
+    key: usize,
+    value: usize,
+}
+
+pub fn map_set(ctx: &mut LightWeightThreadContext) -> FunctionObject {
+    let (mut map_ptr, key, value) = unsafe {
+        let stack_frame = &ctx.stack_frame().map_set;
+        (
+            stack_frame.map.clone(),
+            &stack_frame.key,
+            &stack_frame.value,
+        )
+    };
+    if map_ptr.is_null() {
+        unimplemented!()
+    } else {
+        let map = map_ptr.as_mut::<Map>();
+        map.set(key, *value)
     };
     leave_runtime_api(ctx)
 }
@@ -866,7 +950,10 @@ pub union StackFrame {
     make_string_from_byte_slice: ManuallyDrop<StackFrameMakeStringFromByteSlice>,
     make_string_from_rune: ManuallyDrop<StackFrameMakeStringFromRune>,
     make_string_from_rune_slice: ManuallyDrop<StackFrameMakeStringFromRuneSlice>,
+    map_get: ManuallyDrop<StackFrameMapGet>,
+    map_get_checked: ManuallyDrop<StackFrameMapGetChecked>,
     map_len: ManuallyDrop<StackFrameMapLen>,
+    map_set: ManuallyDrop<StackFrameMapSet>,
     new: ManuallyDrop<StackFrameNew>,
     recv: ManuallyDrop<StackFrameRecv>,
     send: ManuallyDrop<StackFrameSend>,

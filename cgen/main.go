@@ -656,6 +656,21 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 			} else {
 				panic(fmt.Sprintf("%s", instr))
 			}
+		case *types.Map:
+			result := createValueRelName(instr)
+			var nextFunc, nextFunctionFrame string
+			if instr.CommaOk {
+				nextFunc = "gox5_map_get_checked"
+				nextFunctionFrame = "StackFrameMapGetChecked"
+			} else {
+				nextFunc = "gox5_map_get"
+				nextFunctionFrame = "StackFrameMapGet"
+			}
+			ctx.switchFunctionToCallRuntimeApi(nextFunc, nextFunctionFrame, createInstructionName(instr), &result, nil,
+				paramArgPair{param: "map", arg: createValueRelName(instr.X)},
+				paramArgPair{param: "key", arg: createValueRelName(instr.Index)},
+			)
+
 		default:
 			panic(fmt.Sprintf("%s", instr))
 		}
@@ -726,6 +741,13 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 		ctx.switchFunctionToCallRuntimeApi("gox5_make_map", "StackFrameMakeMap", createInstructionName(instr), &result, nil,
 			paramArgPair{param: "key_type_size", arg: fmt.Sprintf("sizeof(%s)", createTypeName(instr.Type().(*types.Map).Key()))},
 			paramArgPair{param: "value_type_size", arg: fmt.Sprintf("sizeof(%s)", createTypeName(instr.Type().(*types.Map).Elem()))},
+		)
+
+	case *ssa.MapUpdate:
+		ctx.switchFunctionToCallRuntimeApi("gox5_map_set", "StackFrameMapSet", createInstructionName(instr), nil, nil,
+			paramArgPair{param: "map", arg: createValueRelName(instr.Map)},
+			paramArgPair{param: "key", arg: createValueRelName(instr.Key)},
+			paramArgPair{param: "value", arg: createValueRelName(instr.Value)},
 		)
 
 	case *ssa.Panic:
@@ -1028,13 +1050,16 @@ func requireSwitchFunction(instruction ssa.Instruction) bool {
 			}
 		}
 		return false
-	case *ssa.Call, *ssa.Go, *ssa.MakeChan, *ssa.MakeClosure, *ssa.MakeMap, *ssa.Send:
+	case *ssa.Call, *ssa.Go, *ssa.MakeChan, *ssa.MakeClosure, *ssa.MakeMap, *ssa.MapUpdate, *ssa.Send:
 		return true
 	case *ssa.Convert:
 		if dstType, ok := t.Type().(*types.Basic); ok && dstType.Kind() == types.String {
 			return true
 		}
 		return false
+	case *ssa.Lookup:
+		_, ok := t.X.Type().(*types.Map)
+		return ok
 	case *ssa.Slice:
 		if dstType, ok := t.Type().(*types.Basic); ok && dstType.Kind() == types.String {
 			return true
@@ -1865,8 +1890,32 @@ typedef struct {
 	StackFrameCommon common;
 	IntObject* result_ptr;
 	MapObject map;
+	IntObject key;
+} StackFrameMapGet;
+DECLARE_RUNTIME_API(map_get, StackFrameMapGet);
+
+typedef struct {
+	StackFrameCommon common;
+	void* result_ptr;
+	MapObject map;
+	IntObject key;
+} StackFrameMapGetChecked;
+DECLARE_RUNTIME_API(map_get_checked, StackFrameMapGetChecked);
+
+typedef struct {
+	StackFrameCommon common;
+	IntObject* result_ptr;
+	MapObject map;
 } StackFrameMapLen;
 DECLARE_RUNTIME_API(map_len, StackFrameMapLen);
+
+typedef struct {
+	StackFrameCommon common;
+	MapObject map;
+	IntObject key;
+	IntObject value;
+} StackFrameMapSet;
+DECLARE_RUNTIME_API(map_set, StackFrameMapSet);
 
 typedef struct {
 	StackFrameCommon common;
