@@ -60,6 +60,23 @@ func Test4() int {
 	return 4
 }
 
+func Test5() int {
+	m := map[int]int{1: 10, 2: 20, 3: 30}
+	if len(m) != 3 {
+		return 0
+	}
+	if m[1] != 10 {
+		return 1
+	}
+	if m[2] != 20 {
+		return 2
+	}
+	if m[3] != 30 {
+		return 3
+	}
+	return 5
+}
+
 func main() {
 	runTest := func(test func() int) {
 		funcFullName := runtime.FuncForPC(reflect.ValueOf(test).Pointer()).Name()
@@ -70,4 +87,5 @@ func main() {
 	runTest(Test2)
 	runTest(Test3)
 	runTest(Test4)
+	runTest(Test5)
 }

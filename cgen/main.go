@@ -647,7 +647,7 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 		fmt.Fprintf(ctx.stream, "\treturn %s;\n", wrapInFunctionObject(createBasicBlockName(instr.Block().Succs[0])))
 
 	case *ssa.Lookup:
-		switch xt := instr.X.Type().(type) {
+		switch xt := instr.X.Type().Underlying().(type) {
 		case *types.Basic:
 			if xt.Kind() == types.String {
 				raw := fmt.Sprintf("%s.raw[%s.raw]", createValueRelName(instr.X), createValueRelName(instr.Index))
@@ -739,8 +739,8 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 	case *ssa.MakeMap:
 		result := createValueRelName(instr)
 		ctx.switchFunctionToCallRuntimeApi("gox5_make_map", "StackFrameMakeMap", createInstructionName(instr), &result, nil,
-			paramArgPair{param: "key_type_size", arg: fmt.Sprintf("sizeof(%s)", createTypeName(instr.Type().(*types.Map).Key()))},
-			paramArgPair{param: "value_type_size", arg: fmt.Sprintf("sizeof(%s)", createTypeName(instr.Type().(*types.Map).Elem()))},
+			paramArgPair{param: "key_type_size", arg: fmt.Sprintf("sizeof(%s)", createTypeName(instr.Type().Underlying().(*types.Map).Key()))},
+			paramArgPair{param: "value_type_size", arg: fmt.Sprintf("sizeof(%s)", createTypeName(instr.Type().Underlying().(*types.Map).Elem()))},
 		)
 
 	case *ssa.MapUpdate:
@@ -1058,7 +1058,7 @@ func requireSwitchFunction(instruction ssa.Instruction) bool {
 		}
 		return false
 	case *ssa.Lookup:
-		_, ok := t.X.Type().(*types.Map)
+		_, ok := t.X.Type().Underlying().(*types.Map)
 		return ok
 	case *ssa.Slice:
 		if dstType, ok := t.Type().(*types.Basic); ok && dstType.Kind() == types.String {
