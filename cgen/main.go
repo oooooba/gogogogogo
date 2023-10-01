@@ -535,8 +535,10 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 				}
 
 			default:
-				nextFunction := createValueRelName(callee)
-				ctx.switchFunction(nextFunction, callCommon, createValueRelName(instr), createInstructionName(instr))
+				if callee.Name() != "init" {
+					nextFunction := createValueRelName(callee)
+					ctx.switchFunction(nextFunction, callCommon, createValueRelName(instr), createInstructionName(instr))
+				}
 			}
 		}
 
@@ -1056,7 +1058,9 @@ func requireSwitchFunction(instruction ssa.Instruction) bool {
 			}
 		}
 		return false
-	case *ssa.Call, *ssa.Go, *ssa.MakeChan, *ssa.MakeClosure, *ssa.MakeMap, *ssa.MapUpdate, *ssa.Send:
+	case *ssa.Call:
+		return t.Common().Value.Name() != "init"
+	case *ssa.Go, *ssa.MakeChan, *ssa.MakeClosure, *ssa.MakeMap, *ssa.MapUpdate, *ssa.Send:
 		return true
 	case *ssa.Convert:
 		if dstType, ok := t.Type().(*types.Basic); ok && dstType.Kind() == types.String {
@@ -1575,12 +1579,7 @@ func (ctx *Context) emitRuntimeInfo() {
 	})
 	fmt.Fprintln(ctx.stream, "};")
 
-	init_func_name := "dummy_init"
-	ctx.visitAllFunctions(ctx.program, func(function *ssa.Function) {
-		if function.Name() == "init#1" {
-			init_func_name = "f_S_init_H_1"
-		}
-	})
+	init_func_name := "f_S_init"
 
 	fmt.Fprintf(ctx.stream, `
 size_t runtime_info_get_funcs_count(void) {

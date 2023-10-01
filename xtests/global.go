@@ -66,6 +66,24 @@ func Test6() int {
 	return v6.x
 }
 
+var v7 = [3]int{1, 2, 3}
+
+func Test7() int {
+	if len(v7) != 3 {
+		return 0
+	}
+	if v7[0] != 1 {
+		return 1
+	}
+	if v7[1] != 2 {
+		return 2
+	}
+	if v7[2] != 3 {
+		return 3
+	}
+	return 7
+}
+
 func main() {
 	runTest := func(test func() int) {
 		funcFullName := runtime.FuncForPC(reflect.ValueOf(test).Pointer()).Name()
@@ -78,4 +96,5 @@ func main() {
 	runTest(Test4)
 	runTest(Test5)
 	runTest(Test6)
+	runTest(Test7)
 }
