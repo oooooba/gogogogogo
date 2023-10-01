@@ -365,7 +365,7 @@ fn create_light_weight_thread_context(
     global_context: GlobalContextPtr,
 ) -> LightWeightThreadContext {
     let stack_start_addr = global_context
-        .process(|mut global_context| global_context.allocator().allocate_guarded_pages(1));
+        .process(|mut global_context| global_context.allocator().allocate_guarded_pages(10));
     let prev_func = UserFunction::new(terminate);
     LightWeightThreadContext::new(
         global_context,
