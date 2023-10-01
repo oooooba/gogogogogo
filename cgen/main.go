@@ -362,6 +362,8 @@ func (ctx *Context) emitPrint(value ssa.Value) {
 			specifier = "u"
 		case types.Uint64:
 			specifier = "lu"
+		case types.Float32, types.Float64:
+			specifier = "f"
 		case types.String:
 			specifier = "s"
 		default:
