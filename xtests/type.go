@@ -100,6 +100,20 @@ func Test8() int {
 	return 8
 }
 
+type T9 float64
+
+func Test9() int {
+	f := func(x T9) T9 {
+		return T9(float32(x))
+	}
+	var x T9 = 0xe0000000
+	y := f(x)
+	if x != y {
+		return 0
+	}
+	return 9
+}
+
 func main() {
 	runTest := func(test func() int) {
 		funcFullName := runtime.FuncForPC(reflect.ValueOf(test).Pointer()).Name()
@@ -114,4 +128,5 @@ func main() {
 	runTest(Test6)
 	runTest(Test7)
 	runTest(Test8)
+	runTest(Test9)
 }

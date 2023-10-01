@@ -113,6 +113,12 @@ func createValueName(value ssa.Value) string {
 		cst := "0"
 		if !val.IsNil() {
 			cst = val.Value.String()
+			if t, ok := val.Type().Underlying().(*types.Basic); ok {
+				switch t.Kind() {
+				case types.Float32, types.Float64:
+					cst = fmt.Sprintf("%f", val.Float64())
+				}
+			}
 		}
 		if t, ok := val.Type().Underlying().(*types.Interface); ok {
 			return fmt.Sprintf("(%s){%s}", createTypeName(t), cst)

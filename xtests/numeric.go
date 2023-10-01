@@ -296,6 +296,18 @@ func Test17() int {
 	return 17
 }
 
+func Test18() int {
+	f := func(x float64) float64 {
+		return float64(float32(x))
+	}
+	var x float64 = 0xe0000000
+	y := f(x)
+	if x != y {
+		return 0
+	}
+	return 18
+}
+
 func main() {
 	runTest := func(test func() int) {
 		funcFullName := runtime.FuncForPC(reflect.ValueOf(test).Pointer()).Name()
@@ -319,4 +331,5 @@ func main() {
 	runTest(Test15)
 	runTest(Test16)
 	runTest(Test17)
+	runTest(Test18)
 }
