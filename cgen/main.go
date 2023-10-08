@@ -30,8 +30,6 @@ func main() {
 	ctx := Context{
 		stream:           os.Stdout,
 		program:          prog,
-		foundTypeSet:     make(map[string]struct{}),
-		typeSlice:        make([](types.Type), 0),
 		latestNameMap:    make(map[*ssa.BasicBlock]string),
 		signatureNameSet: make(map[string]struct{}),
 	}
@@ -55,8 +53,6 @@ type Context struct {
 	stream           *os.File
 	program          *ssa.Program
 	foundValueSet    map[ssa.Value]struct{}
-	foundTypeSet     map[string]struct{}
-	typeSlice        [](types.Type)
 	latestNameMap    map[*ssa.BasicBlock]string
 	signatureNameSet map[string]struct{}
 }
@@ -1260,7 +1256,7 @@ func (ctx *Context) emitFunctionDefinition(function *ssa.Function) {
 }
 
 func (ctx *Context) emitType() {
-	for _, typ := range ctx.typeSlice {
+	ctx.visitAllTypes(ctx.program, func(typ types.Type) {
 		name := createTypeName(typ)
 		switch typ := typ.(type) {
 		case *types.Array, *types.Pointer, *types.Struct, *types.Tuple:
@@ -1279,10 +1275,10 @@ func (ctx *Context) emitType() {
 		default:
 			panic(fmt.Sprintf("not implemented: %s %T", typ, typ))
 		}
-	}
+	})
 
 	// emit Pointer types first to handle self referential structures
-	for _, typ := range ctx.typeSlice {
+	ctx.visitAllTypes(ctx.program, func(typ types.Type) {
 		if t, ok := typ.(*types.Pointer); ok {
 			name := createTypeName(t)
 			elemType := t.Elem()
@@ -1290,9 +1286,9 @@ func (ctx *Context) emitType() {
 			fmt.Fprintf(ctx.stream, "\t%s* raw;\n", createTypeName(elemType))
 			fmt.Fprintf(ctx.stream, "};\n")
 		}
-	}
+	})
 
-	for _, typ := range ctx.typeSlice {
+	ctx.visitAllTypes(ctx.program, func(typ types.Type) {
 		name := createTypeName(typ)
 		switch typ := typ.(type) {
 		case *types.Array:
@@ -1335,7 +1331,7 @@ union %s { // %s
 		default:
 			panic(fmt.Sprintf("not implemented: %s %T", typ, typ))
 		}
-	}
+	})
 }
 
 func (ctx *Context) emitEqualFunction() {
@@ -1410,12 +1406,12 @@ bool equal_Interface(Interface* lhs, Interface* rhs) {
 	return memcmp(lhs, rhs, sizeof(*lhs)) == 0;
 }
 `)
-	for _, typ := range ctx.typeSlice {
+	ctx.visitAllTypes(ctx.program, func(typ types.Type) {
 		typeName := createTypeName(typ)
 		expr := ""
 		switch typ := typ.(type) {
 		case *types.Basic, *types.Interface, *types.Map:
-			continue
+			return
 		case *types.Named:
 			if _, ok := typ.Underlying().(*types.Interface); ok {
 				expr = fmt.Sprintf("equal_Interface(lhs, rhs)")
@@ -1428,124 +1424,6 @@ bool equal_Interface(Interface* lhs, Interface* rhs) {
 		fmt.Fprintf(ctx.stream, "bool equal_%s(%s* lhs, %s* rhs) { // %s\n", typeName, typeName, typeName, typ)
 		fmt.Fprintf(ctx.stream, "\treturn %s;\n", expr)
 		fmt.Fprintf(ctx.stream, "}\n")
-	}
-}
-
-func (ctx *Context) collectTypes() {
-	var f func(typ types.Type)
-	f = func(typ types.Type) {
-		name := createTypeName(typ)
-		_, ok := ctx.foundTypeSet[name]
-		if ok {
-			return
-		}
-		ctx.foundTypeSet[name] = struct{}{}
-
-		switch typ := typ.(type) {
-		case *types.Array:
-			f(typ.Elem())
-
-		case *types.Struct:
-			for i := 0; i < typ.NumFields(); i++ {
-				f(typ.Field(i).Type())
-			}
-
-		case *types.Basic:
-			// do nothing
-
-		case *types.Chan:
-			// do nothing
-
-		case *types.Interface:
-			// do nothing
-
-		case *types.Map:
-			f(typ.Key())
-			f(typ.Elem())
-
-		case *types.Named:
-			typeName := createTypeName(typ)
-			if typeName == "Value" || typeName == "Func" { // ToDo: ignore standard library definition
-				return
-			}
-			f(typ.Underlying())
-
-		case *types.Pointer:
-			f(typ.Elem())
-
-		case *types.Signature:
-			// do nothing
-
-		case *types.Slice:
-			f(typ.Elem())
-
-		case *types.Tuple:
-			for i := 0; i < typ.Len(); i++ {
-				f(typ.At(i).Type())
-			}
-
-		default:
-			panic(fmt.Sprintf("not implemented: %s %T", typ, typ))
-		}
-
-		ctx.typeSlice = append(ctx.typeSlice, typ)
-	}
-
-	mainPkg := findMainPackage(ctx.program)
-
-	for member := range mainPkg.Members {
-		typ, ok := mainPkg.Members[member].(*ssa.Type)
-		if !ok {
-			continue
-		}
-		f(typ.Type())
-	}
-
-	for member := range mainPkg.Members {
-		gv, ok := mainPkg.Members[member].(*ssa.Global)
-		if !ok {
-			continue
-		}
-		f(gv.Type())
-	}
-
-	var g func(function *ssa.Function)
-	g = func(function *ssa.Function) {
-		sig := function.Signature
-
-		for i := 0; i < sig.Results().Len(); i++ {
-			f(sig.Results().At(i).Type())
-		}
-
-		if sig.Recv() != nil {
-			f(sig.Recv().Type())
-		}
-
-		for i := 0; i < sig.Params().Len(); i++ {
-			f(sig.Params().At(i).Type())
-		}
-	}
-
-	ctx.visitAllFunctions(ctx.program, func(function *ssa.Function) {
-		g(function)
-	})
-
-	libraryFunctions := findLibraryFunctions(ctx.program)
-	for _, function := range libraryFunctions {
-		g(function)
-	}
-
-	ctx.visitAllFunctions(ctx.program, func(function *ssa.Function) {
-		if function.Blocks == nil {
-			return
-		}
-		for _, basicBlock := range function.DomPreorder() {
-			for _, instr := range basicBlock.Instrs {
-				if value, ok := instr.(ssa.Value); ok {
-					f(value.Type())
-				}
-			}
-		}
 	})
 }
 
@@ -1750,6 +1628,125 @@ func (ctx *Context) visitAllFunctions(program *ssa.Program, procedure func(funct
 		g(typ.Type())
 		g(types.NewPointer(typ.Type()))
 	}
+}
+
+func (ctx *Context) visitAllTypes(program *ssa.Program, procedure func(typ types.Type)) {
+	foundTypeSet := make(map[string]struct{})
+	var f func(typ types.Type)
+	f = func(typ types.Type) {
+		name := createTypeName(typ)
+		_, ok := foundTypeSet[name]
+		if ok {
+			return
+		}
+		foundTypeSet[name] = struct{}{}
+
+		switch typ := typ.(type) {
+		case *types.Array:
+			f(typ.Elem())
+
+		case *types.Struct:
+			for i := 0; i < typ.NumFields(); i++ {
+				f(typ.Field(i).Type())
+			}
+
+		case *types.Basic:
+			// do nothing
+
+		case *types.Chan:
+			// do nothing
+
+		case *types.Interface:
+			// do nothing
+
+		case *types.Map:
+			f(typ.Key())
+			f(typ.Elem())
+
+		case *types.Named:
+			typeName := createTypeName(typ)
+			if typeName == "Value" || typeName == "Func" { // ToDo: ignore standard library definition
+				return
+			}
+			f(typ.Underlying())
+
+		case *types.Pointer:
+			f(typ.Elem())
+
+		case *types.Signature:
+			// do nothing
+
+		case *types.Slice:
+			f(typ.Elem())
+
+		case *types.Tuple:
+			for i := 0; i < typ.Len(); i++ {
+				f(typ.At(i).Type())
+			}
+
+		default:
+			panic(fmt.Sprintf("not implemented: %s %T", typ, typ))
+		}
+
+		procedure(typ)
+	}
+
+	mainPkg := findMainPackage(ctx.program)
+
+	for member := range mainPkg.Members {
+		typ, ok := mainPkg.Members[member].(*ssa.Type)
+		if !ok {
+			continue
+		}
+		f(typ.Type())
+	}
+
+	for member := range mainPkg.Members {
+		gv, ok := mainPkg.Members[member].(*ssa.Global)
+		if !ok {
+			continue
+		}
+		f(gv.Type())
+	}
+
+	var g func(function *ssa.Function)
+	g = func(function *ssa.Function) {
+		sig := function.Signature
+
+		for i := 0; i < sig.Results().Len(); i++ {
+			f(sig.Results().At(i).Type())
+		}
+
+		if sig.Recv() != nil {
+			f(sig.Recv().Type())
+		}
+
+		for i := 0; i < sig.Params().Len(); i++ {
+			f(sig.Params().At(i).Type())
+		}
+	}
+
+	ctx.visitAllFunctions(ctx.program, func(function *ssa.Function) {
+		g(function)
+	})
+
+	libraryFunctions := findLibraryFunctions(ctx.program)
+	for _, function := range libraryFunctions {
+		g(function)
+	}
+
+	ctx.visitAllFunctions(ctx.program, func(function *ssa.Function) {
+		if function.Blocks == nil {
+			return
+		}
+		for _, basicBlock := range function.DomPreorder() {
+			for _, instr := range basicBlock.Instrs {
+				if value, ok := instr.(ssa.Value); ok {
+					f(value.Type())
+				}
+			}
+		}
+	})
 }
 
 func (ctx *Context) emitProgram(program *ssa.Program) {
@@ -2036,7 +2033,6 @@ DECLARE_RUNTIME_API(func_for_pc, StackFrameFuncForPc);
 #define f_S_Split gox5_split
 `)
 
-	ctx.collectTypes()
 	ctx.emitType()
 	ctx.emitEqualFunction()
 
