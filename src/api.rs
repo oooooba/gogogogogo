@@ -8,6 +8,7 @@ use super::channel::Channel;
 use super::create_light_weight_thread_context;
 use super::interface::Interface;
 use super::map::Map;
+use super::type_id::TypeId;
 use super::LightWeightThreadContext;
 use super::ObjectPtr;
 
@@ -380,7 +381,7 @@ struct StackFrameMakeInterface {
     common: StackFrameCommon,
     result_ptr: *mut Interface,
     receiver: ObjectPtr,
-    type_id: usize,
+    type_id: TypeId,
     num_methods: usize,
     interface_table: *const (),
 }

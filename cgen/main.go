@@ -260,6 +260,10 @@ func createRawTypeName(typ types.Type) string {
 	panic(typ)
 }
 
+func createTypeIdName(typ types.Type) string {
+	return fmt.Sprintf("runtime_info_type_%s", createTypeName(typ))
+}
+
 func (ctx *Context) switchFunction(nextFunction string, callCommon *ssa.CallCommon, result string, resumeFunction string) {
 	fmt.Fprintf(ctx.stream, "StackFrameCommon* next_frame = (StackFrameCommon*)(frame + 1);\n")
 	fmt.Fprintf(ctx.stream, "assert(((uintptr_t)next_frame) %% sizeof(uintptr_t) == 0);\n")
@@ -734,7 +738,7 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 		result := createValueRelName(instr)
 		ctx.switchFunctionToCallRuntimeApi("gox5_make_interface", "StackFrameMakeInterface", createInstructionName(instr), &result, nil,
 			paramArgPair{param: "receiver", arg: receiver},
-			paramArgPair{param: "type_id", arg: fmt.Sprintf("(uintptr_t)\"%s\"", createTypeName(instr.X.Type()))},
+			paramArgPair{param: "type_id", arg: fmt.Sprintf("(uintptr_t)%s", createTypeIdName(instr.X.Type()))},
 			paramArgPair{param: "num_methods", arg: numMethods},
 			paramArgPair{param: "interface_table", arg: interfaceTable},
 		)
@@ -862,7 +866,7 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 						t.ExplicitMethod(i).Name())
 				}
 			} else {
-				fmt.Fprintf(ctx.stream, "uintptr_t type_id = (uintptr_t)\"%s\";\n", createTypeName(instr.AssertedType))
+				fmt.Fprintf(ctx.stream, "uintptr_t type_id = (uintptr_t)%s;\n", createTypeIdName(instr.AssertedType))
 				fmt.Fprintf(ctx.stream, "bool can_convert = %s.type_id == type_id;\n", createValueRelName(instr.X))
 			}
 			fmt.Fprintf(ctx.stream, "%s = %s;\n", dstObj, wrapInObject("0", instr.Type()))
@@ -1317,6 +1321,12 @@ union %s { // %s
 		default:
 			panic(fmt.Sprintf("not implemented: %s %T", typ, typ))
 		}
+	})
+}
+
+func (ctx *Context) emitTypeInfo() {
+	ctx.visitAllTypes(ctx.program, func(typ types.Type) {
+		fmt.Fprintf(ctx.stream, "const char* %s = \"%s\";\n", createTypeIdName(typ), createTypeName(typ))
 	})
 }
 
@@ -2040,6 +2050,7 @@ FunctionObject gox5_search_method(Interface* interface, StringObject method_name
 `)
 
 	ctx.emitType()
+	ctx.emitTypeInfo()
 	ctx.emitEqualFunction()
 
 	mainPkg := findMainPackage(program)

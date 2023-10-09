@@ -3,6 +3,7 @@ mod channel;
 mod global_context;
 mod interface;
 mod map;
+mod type_id;
 
 use std::collections::VecDeque;
 use std::ffi;

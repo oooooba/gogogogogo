@@ -2,6 +2,7 @@ use std::slice;
 
 use super::api::FunctionObject;
 use super::api::StringObject;
+use super::type_id::TypeId;
 use super::ObjectPtr;
 
 #[derive(Debug)]
@@ -15,7 +16,7 @@ struct InterfaceTableEntry {
 #[repr(C)]
 pub(crate) struct Interface {
     receiver: ObjectPtr,
-    type_id: usize,
+    type_id: TypeId,
     num_methods: usize,
     interface_table: *const InterfaceTableEntry,
 }
@@ -23,7 +24,7 @@ pub(crate) struct Interface {
 impl Interface {
     pub fn new(
         receiver: ObjectPtr,
-        type_id: usize,
+        type_id: TypeId,
         num_methods: usize,
         interface_table: *const (),
     ) -> Self {
