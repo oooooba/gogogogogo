@@ -1357,6 +1357,10 @@ bool equal_Value(Value* lhs, Value* rhs) {
 	return memcmp(lhs, rhs, sizeof(*lhs)) == 0;
 }
 
+bool equal_Func(Func* lhs, Func* rhs) {
+	return memcmp(lhs, rhs, sizeof(*lhs)) == 0;
+}
+
 bool equal_StringObject(StringObject* lhs, StringObject* rhs) {
 	return strcmp(lhs->raw, rhs->raw) == 0;
 }
@@ -1684,7 +1688,7 @@ func (ctx *Context) visitAllTypes(program *ssa.Program, procedure func(typ types
 
 		case *types.Named:
 			typeName := createTypeName(typ)
-			if typeName == "Value" || typeName == "Func" { // ToDo: ignore standard library definition
+			if typeName == encode("Named<Value>") || typeName == encode("Named<Func>") { // ToDo: ignore standard library definition
 				return
 			}
 			f(typ.Underlying())
@@ -2016,6 +2020,9 @@ typedef struct {
 	IntObject e0;
 } Value;
 
+#define Named_lt_Value_gt_ Value 
+#define equal_Named_lt_Value_gt_ equal_Value
+
 typedef struct {
 	StackFrameCommon common;
 	Value* result_ptr;
@@ -2042,6 +2049,9 @@ typedef struct {
 	StringObject name;
 	UserFunction function;
 } Func;
+
+#define Named_lt_Func_gt_ Func 
+#define equal_Named_lt_Func_gt_ equal_Func
 
 typedef struct {
 	StackFrameCommon common;
