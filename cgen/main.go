@@ -1677,6 +1677,14 @@ func (ctx *Context) visitAllTypes(program *ssa.Program, procedure func(typ types
 		procedure(typ)
 	}
 
+	for _, typ := range types.Typ {
+		switch typ.Kind() {
+		case types.Complex64, types.Complex128, types.Invalid, types.UntypedComplex, types.UntypedFloat, types.UntypedInt, types.UntypedNil, types.UntypedRune, types.UntypedString:
+			continue
+		}
+		f(typ)
+	}
+
 	mainPkg := findMainPackage(ctx.program)
 
 	for member := range mainPkg.Members {
