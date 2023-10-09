@@ -1425,24 +1425,39 @@ bool equal_Interface(Interface* lhs, Interface* rhs) {
 	})
 }
 
-func (ctx *Context) emitInterfaceTable(typ *ssa.Type) {
-	t := types.NewPointer(typ.Type())
-	methodSet := ctx.program.MethodSets.MethodSet(t)
-
-	if methodSet.Len() == 0 {
-		return
+func (ctx *Context) emitInterfaceTable() {
+	mainPkg := findMainPackage(ctx.program)
+	allowSet := make(map[string]struct{})
+	for member := range mainPkg.Members {
+		typ, ok := mainPkg.Members[member].(*ssa.Type)
+		if !ok {
+			continue
+		}
+		t := typ.Type()
+		allowSet[createTypeName(types.NewPointer(t))] = struct{}{}
 	}
-
-	fmt.Fprintf(ctx.stream, "struct {\n")
-	fmt.Fprintf(ctx.stream, "\tInterfaceTableEntry entries[%d];\n", methodSet.Len())
-	fmt.Fprintf(ctx.stream, "} interfaceTable_%s = {{\n", createTypeName(t))
-	for i := 0; i < methodSet.Len(); i++ {
-		function := ctx.program.MethodValue(methodSet.At(i))
-		methodName := function.Name()
-		method := wrapInFunctionObject(createFunctionName(function))
-		fmt.Fprintf(ctx.stream, "\t{\"%s\", %s},\n", methodName, method)
-	}
-	fmt.Fprintln(ctx.stream, "}};")
+	ctx.visitAllTypes(ctx.program, func(typ types.Type) {
+		methodSet := ctx.program.MethodSets.MethodSet(typ)
+		entryIndexes := make([]int, 0)
+		if _, ok := allowSet[createTypeName(typ)]; ok {
+			for i := 0; i < methodSet.Len(); i++ {
+				function := ctx.program.MethodValue(methodSet.At(i))
+				if function != nil {
+					entryIndexes = append(entryIndexes, i)
+				}
+			}
+		}
+		fmt.Fprintf(ctx.stream, "struct {\n")
+		fmt.Fprintf(ctx.stream, "\tInterfaceTableEntry entries[%d];\n", len(entryIndexes))
+		fmt.Fprintf(ctx.stream, "} interfaceTable_%s = {{\n", createTypeName(typ))
+		for _, index := range entryIndexes {
+			function := ctx.program.MethodValue(methodSet.At(index))
+			methodName := function.Name()
+			method := wrapInFunctionObject(createFunctionName(function))
+			fmt.Fprintf(ctx.stream, "\t{\"%s\", %s},\n", methodName, method)
+		}
+		fmt.Fprintln(ctx.stream, "}};")
+	})
 }
 
 func (ctx *Context) emitGlobalVariable(gv *ssa.Global) {
@@ -2074,13 +2089,7 @@ FunctionObject gox5_search_method(Interface* interface, StringObject method_name
 		ctx.tryEmitSignatureDefinition(signature, concreteSignatureName, false)
 	}
 
-	for member := range mainPkg.Members {
-		typ, ok := mainPkg.Members[member].(*ssa.Type)
-		if !ok {
-			continue
-		}
-		ctx.emitInterfaceTable(typ)
-	}
+	ctx.emitInterfaceTable()
 
 	for member := range mainPkg.Members {
 		gv, ok := mainPkg.Members[member].(*ssa.Global)
