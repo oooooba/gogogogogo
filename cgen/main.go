@@ -1381,18 +1381,26 @@ func (ctx *Context) emitEqualFunctionDefinition() {
 	}
 	fmt.Fprintf(ctx.stream, `
 bool equal_Value(Value* lhs, Value* rhs) {
+	assert(lhs != NULL);
+	assert(rhs != NULL);
 	return memcmp(lhs, rhs, sizeof(*lhs)) == 0;
 }
 
 bool equal_Func(Func* lhs, Func* rhs) {
+	assert(lhs != NULL);
+	assert(rhs != NULL);
 	return memcmp(lhs, rhs, sizeof(*lhs)) == 0;
 }
 
 bool equal_StringObject(StringObject* lhs, StringObject* rhs) {
+	assert(lhs != NULL);
+	assert(rhs != NULL);
 	return strcmp(lhs->raw, rhs->raw) == 0;
 }
 
 bool equal_MapObject(MapObject* lhs, MapObject* rhs) {
+	assert(lhs != NULL);
+	assert(rhs != NULL);
 	if(lhs->raw == rhs->raw) {
 		return true;
 	}
@@ -1404,6 +1412,9 @@ bool equal_MapObject(MapObject* lhs, MapObject* rhs) {
 }
 
 bool equal_Interface(Interface* lhs, Interface* rhs) {
+	assert(lhs!=NULL);
+	assert(rhs!=NULL);
+
 	if ((lhs->receiver == NULL) && (rhs->receiver == NULL)) {
 		return true;
 	}
@@ -1445,22 +1456,17 @@ bool equal_Interface(Interface* lhs, Interface* rhs) {
 		typeName := createTypeName(typ)
 		expr := ""
 		if typ == typ.Underlying() {
-			switch typ := typ.(type) {
+			switch typ.(type) {
 			case *types.Basic, *types.Interface, *types.Map:
 				return
-			case *types.Pointer:
-				expr = fmt.Sprintf(`
-					lhs->raw == rhs-> raw ? true :
-					((lhs->raw == NULL || rhs-> raw == NULL) ? false :
-					equal_%s(lhs->raw, rhs->raw))
-				`, createTypeName(typ.Elem()))
-			default:
-				expr = "memcmp(lhs, rhs, sizeof(*lhs)) == 0"
 			}
+			expr = "memcmp(lhs, rhs, sizeof(*lhs)) == 0"
 		} else {
 			expr = fmt.Sprintf("equal_%s(lhs, rhs)", createTypeName(typ.Underlying()))
 		}
 		fmt.Fprintf(ctx.stream, "bool equal_%s(%s* lhs, %s* rhs) { // %s\n", typeName, typeName, typeName, typ)
+		fmt.Fprintf(ctx.stream, "\tassert(lhs != NULL);\n")
+		fmt.Fprintf(ctx.stream, "\tassert(rhs != NULL);\n")
 		fmt.Fprintf(ctx.stream, "\treturn %s;\n", expr)
 		fmt.Fprintf(ctx.stream, "}\n")
 	})
