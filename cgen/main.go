@@ -1338,7 +1338,34 @@ func (ctx *Context) emitTypeInfo() {
 	})
 }
 
-func (ctx *Context) emitEqualFunction() {
+func (ctx *Context) emitEqualFunctionDeclaration() {
+	builtinTypes := []string{
+		"Bool", "Float32", "Float64",
+		"Int", "Int8", "Int16", "Int32", "Int64",
+		"UnsafePointer",
+		"Uint", "Uint8", "Uint16", "Uint32", "Uint64",
+	}
+	for _, bt := range builtinTypes {
+		fmt.Fprintf(ctx.stream, "bool equal_%sObject(%sObject* lhs, %sObject* rhs);", bt, bt, bt)
+	}
+	fmt.Fprintf(ctx.stream, `
+bool equal_Value(Value* lhs, Value* rhs);
+bool equal_Func(Func* lhs, Func* rhs);
+bool equal_StringObject(StringObject* lhs, StringObject* rhs);
+bool equal_MapObject(MapObject* lhs, MapObject* rhs);
+bool equal_Interface(Interface* lhs, Interface* rhs);
+`)
+	ctx.visitAllTypes(ctx.program, func(typ types.Type) {
+		typeName := createTypeName(typ)
+		switch typ.(type) {
+		case *types.Basic, *types.Interface, *types.Map:
+			return
+		}
+		fmt.Fprintf(ctx.stream, "bool equal_%s(%s* lhs, %s* rhs); // %s\n", typeName, typeName, typeName, typ)
+	})
+}
+
+func (ctx *Context) emitEqualFunctionDefinition() {
 	builtinTypes := []string{
 		"Bool", "Float32", "Float64",
 		"Int", "Int8", "Int16", "Int32", "Int64",
@@ -1417,17 +1444,21 @@ bool equal_Interface(Interface* lhs, Interface* rhs) {
 	ctx.visitAllTypes(ctx.program, func(typ types.Type) {
 		typeName := createTypeName(typ)
 		expr := ""
-		switch typ := typ.(type) {
-		case *types.Basic, *types.Interface, *types.Map:
-			return
-		case *types.Named:
-			if _, ok := typ.Underlying().(*types.Interface); ok {
-				expr = fmt.Sprintf("equal_Interface(lhs, rhs)")
-			} else {
+		if typ == typ.Underlying() {
+			switch typ := typ.(type) {
+			case *types.Basic, *types.Interface, *types.Map:
+				return
+			case *types.Pointer:
+				expr = fmt.Sprintf(`
+					lhs->raw == rhs-> raw ? true :
+					((lhs->raw == NULL || rhs-> raw == NULL) ? false :
+					equal_%s(lhs->raw, rhs->raw))
+				`, createTypeName(typ.Elem()))
+			default:
 				expr = "memcmp(lhs, rhs, sizeof(*lhs)) == 0"
 			}
-		default:
-			expr = "memcmp(lhs, rhs, sizeof(*lhs)) == 0"
+		} else {
+			expr = fmt.Sprintf("equal_%s(lhs, rhs)", createTypeName(typ.Underlying()))
 		}
 		fmt.Fprintf(ctx.stream, "bool equal_%s(%s* lhs, %s* rhs) { // %s\n", typeName, typeName, typeName, typ)
 		fmt.Fprintf(ctx.stream, "\treturn %s;\n", expr)
@@ -2089,7 +2120,7 @@ FunctionObject gox5_search_method(Interface* interface, StringObject method_name
 `)
 
 	ctx.emitType()
-	ctx.emitEqualFunction()
+	ctx.emitEqualFunctionDeclaration()
 
 	mainPkg := findMainPackage(program)
 
@@ -2106,6 +2137,7 @@ FunctionObject gox5_search_method(Interface* interface, StringObject method_name
 		ctx.tryEmitSignatureDefinition(signature, concreteSignatureName, false)
 	}
 
+	ctx.emitEqualFunctionDefinition()
 	ctx.emitInterfaceTable()
 	ctx.emitTypeInfo()
 
