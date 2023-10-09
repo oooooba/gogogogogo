@@ -8,6 +8,7 @@ struct TypeInfo {
     name: StringObject,
     num_methods: usize,
     interface_table: *const InterfaceTableEntry,
+    is_equal: *const (), // ToDo: unimplemented
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -1334,6 +1334,7 @@ func (ctx *Context) emitTypeInfo() {
 		fmt.Fprintf(ctx.stream, ".name = \"%s\",\n", createTypeName(typ))
 		fmt.Fprintf(ctx.stream, ".num_methods = %s,\n", numMethods)
 		fmt.Fprintf(ctx.stream, ".interface_table = %s,\n", interfaceTable)
+		fmt.Fprintf(ctx.stream, ".is_equal = equal_%s,\n", createTypeName(typ))
 		fmt.Fprintf(ctx.stream, "};\n")
 	})
 }
@@ -1421,33 +1422,12 @@ bool equal_Interface(Interface* lhs, Interface* rhs) {
 	if ((lhs->receiver == NULL) || (rhs->receiver == NULL)) {
 		return false;
 	}
-	Interface l, r;
-	bool is_empty = false;
-	if (lhs->interface_table == (void*)1) {
-		if (!equal_IntObject((IntObject*)lhs->receiver, (IntObject*)rhs->receiver)) {
-			return false;
+
+	for (uintptr_t i = 1; i <= 3; ++i) {
+		if (lhs->interface_table == (void*)i) {
+			bool (*f)(void*, void*) = ((TypeInfo*)(lhs->type_id))->is_equal;
+			return f(lhs->receiver, rhs->receiver);
 		}
-		is_empty = true;
-	}
-	if (lhs->interface_table == (void*)2) {
-		if (!equal_StringObject((StringObject*)lhs->receiver, (StringObject*)rhs->receiver)) {
-			return false;
-		}
-		is_empty = true;
-	}
-	if (lhs->interface_table == (void*)3) {
-		if (*((void**)lhs->receiver) != *((void**)rhs->receiver)) {
-			return false;
-		}
-		is_empty = true;
-	}
-	if (is_empty) {
-		l = *lhs;
-		r = *rhs;
-		l.receiver = NULL;
-		r.receiver = NULL;
-		lhs = &l;
-		rhs = &r;
 	}
 	return memcmp(lhs, rhs, sizeof(*lhs)) == 0;
 }
@@ -1888,6 +1868,7 @@ typedef struct {
 	const char* name;
 	uintptr_t num_methods;
 	const InterfaceTableEntry* interface_table;
+	void* is_equal;
 } TypeInfo;
 
 typedef struct {
