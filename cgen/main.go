@@ -738,7 +738,7 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 		result := createValueRelName(instr)
 		ctx.switchFunctionToCallRuntimeApi("gox5_make_interface", "StackFrameMakeInterface", createInstructionName(instr), &result, nil,
 			paramArgPair{param: "receiver", arg: receiver},
-			paramArgPair{param: "type_id", arg: fmt.Sprintf("(uintptr_t)%s", createTypeIdName(instr.X.Type()))},
+			paramArgPair{param: "type_id", arg: fmt.Sprintf("(uintptr_t)&%s", createTypeIdName(instr.X.Type()))},
 			paramArgPair{param: "num_methods", arg: numMethods},
 			paramArgPair{param: "interface_table", arg: interfaceTable},
 		)
@@ -866,7 +866,7 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 						t.ExplicitMethod(i).Name())
 				}
 			} else {
-				fmt.Fprintf(ctx.stream, "uintptr_t type_id = (uintptr_t)%s;\n", createTypeIdName(instr.AssertedType))
+				fmt.Fprintf(ctx.stream, "uintptr_t type_id = (uintptr_t)&%s;\n", createTypeIdName(instr.AssertedType))
 				fmt.Fprintf(ctx.stream, "bool can_convert = %s.type_id == type_id;\n", createValueRelName(instr.X))
 			}
 			fmt.Fprintf(ctx.stream, "%s = %s;\n", dstObj, wrapInObject("0", instr.Type()))
@@ -1326,7 +1326,9 @@ union %s { // %s
 
 func (ctx *Context) emitTypeInfo() {
 	ctx.visitAllTypes(ctx.program, func(typ types.Type) {
-		fmt.Fprintf(ctx.stream, "const char* %s = \"%s\";\n", createTypeIdName(typ), createTypeName(typ))
+		fmt.Fprintf(ctx.stream, "const TypeInfo %s = {\n", createTypeIdName(typ))
+		fmt.Fprintf(ctx.stream, ".name = \"%s\"\n", createTypeName(typ))
+		fmt.Fprintf(ctx.stream, "};\n")
 	})
 }
 
@@ -1819,6 +1821,10 @@ typedef struct {
 	const char* method_name;
 	FunctionObject method;
 } InterfaceTableEntry;
+
+typedef struct {
+	const char* name;
+} TypeInfo;
 
 typedef struct {
 	void* receiver;
