@@ -1326,8 +1326,14 @@ union %s { // %s
 
 func (ctx *Context) emitTypeInfo() {
 	ctx.visitAllTypes(ctx.program, func(typ types.Type) {
+		interfaceTableName := fmt.Sprintf("interfaceTable_%s", createTypeName(typ))
+		numMethods := fmt.Sprintf("sizeof(%s.entries)/sizeof(%s.entries[0])", interfaceTableName, interfaceTableName)
+		interfaceTable := fmt.Sprintf("&%s.entries[0]", interfaceTableName)
+
 		fmt.Fprintf(ctx.stream, "const TypeInfo %s = {\n", createTypeIdName(typ))
-		fmt.Fprintf(ctx.stream, ".name = \"%s\"\n", createTypeName(typ))
+		fmt.Fprintf(ctx.stream, ".name = \"%s\",\n", createTypeName(typ))
+		fmt.Fprintf(ctx.stream, ".num_methods = %s,\n", numMethods)
+		fmt.Fprintf(ctx.stream, ".interface_table = %s,\n", interfaceTable)
 		fmt.Fprintf(ctx.stream, "};\n")
 	})
 }
@@ -1839,6 +1845,8 @@ typedef struct {
 
 typedef struct {
 	const char* name;
+	uintptr_t num_methods;
+	const InterfaceTableEntry* interface_table;
 } TypeInfo;
 
 typedef struct {
@@ -2071,7 +2079,6 @@ FunctionObject gox5_search_method(Interface* interface, StringObject method_name
 `)
 
 	ctx.emitType()
-	ctx.emitTypeInfo()
 	ctx.emitEqualFunction()
 
 	mainPkg := findMainPackage(program)
@@ -2090,6 +2097,7 @@ FunctionObject gox5_search_method(Interface* interface, StringObject method_name
 	}
 
 	ctx.emitInterfaceTable()
+	ctx.emitTypeInfo()
 
 	for member := range mainPkg.Members {
 		gv, ok := mainPkg.Members[member].(*ssa.Global)

@@ -1,5 +1,3 @@
-use std::slice;
-
 use super::api::FunctionObject;
 use super::api::StringObject;
 use super::type_id::TypeId;
@@ -7,7 +5,7 @@ use super::ObjectPtr;
 
 #[derive(Debug)]
 #[repr(C)]
-struct InterfaceTableEntry {
+pub(crate) struct InterfaceTableEntry {
     method_name: StringObject,
     method: FunctionObject,
 }
@@ -42,7 +40,7 @@ impl Interface {
     }
 
     pub fn search(&self, method_name: StringObject) -> Option<FunctionObject> {
-        let table = unsafe { slice::from_raw_parts(self.interface_table, self.num_methods) };
+        let table = self.type_id.interface_table();
         for entry in table {
             if entry.method_name == method_name {
                 return Some(entry.method.clone());
