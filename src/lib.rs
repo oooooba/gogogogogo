@@ -1,6 +1,7 @@
 mod api;
 mod channel;
 mod global_context;
+mod interface;
 mod map;
 
 use std::collections::VecDeque;
@@ -10,8 +11,10 @@ use std::process;
 use std::ptr;
 use std::slice;
 
+use api::StringObject;
 use api::{FunctionObject, StackFrame, UserFunction};
 use global_context::GlobalContextPtr;
+use interface::Interface;
 
 #[repr(C)]
 pub struct LightWeightThreadContext {
@@ -216,6 +219,11 @@ pub extern "C" fn gox5_make_closure(ctx: &mut LightWeightThreadContext) -> Funct
 }
 
 #[no_mangle]
+pub extern "C" fn gox5_make_interface(ctx: &mut LightWeightThreadContext) -> FunctionObject {
+    api::make_interface(ctx)
+}
+
+#[no_mangle]
 pub extern "C" fn gox5_make_map(ctx: &mut LightWeightThreadContext) -> FunctionObject {
     api::make_map(ctx)
 }
@@ -302,6 +310,16 @@ pub extern "C" fn gox5_value_of(ctx: &mut LightWeightThreadContext) -> FunctionO
 #[no_mangle]
 pub extern "C" fn gox5_value_pointer(ctx: &mut LightWeightThreadContext) -> FunctionObject {
     api::value_pointer(ctx)
+}
+
+#[no_mangle]
+pub extern "C" fn gox5_search_method(
+    interface: *const (),
+    method_name: StringObject,
+) -> FunctionObject {
+    let interface = unsafe { &*(interface as *const Interface) };
+    let method = interface.search(method_name);
+    method.unwrap_or_else(FunctionObject::new_null)
 }
 
 extern "C" fn terminate(_ctx: &mut LightWeightThreadContext) -> FunctionObject {

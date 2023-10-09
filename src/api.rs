@@ -6,6 +6,7 @@ use std::slice;
 
 use super::channel::Channel;
 use super::create_light_weight_thread_context;
+use super::interface::Interface;
 use super::map::Map;
 use super::LightWeightThreadContext;
 use super::ObjectPtr;
@@ -69,15 +70,6 @@ impl PartialEq<UserFunctionInner> for UserFunction {
         let rhs = *other as *const ();
         lhs == rhs
     }
-}
-
-#[derive(Debug)]
-#[repr(C)]
-pub struct Interface {
-    receiver: ObjectPtr,
-    type_id: usize,
-    num_methods: usize,
-    interface_table: *const (),
 }
 
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -380,6 +372,32 @@ pub fn make_closure(ctx: &mut LightWeightThreadContext) -> FunctionObject {
         let stack_frame = &mut ctx.stack_frame_mut().make_closure;
         *stack_frame.result_ptr = FunctionObject::from_closure_layout_ptr(ptr as *const ());
     };
+    leave_runtime_api(ctx)
+}
+
+#[repr(C)]
+struct StackFrameMakeInterface {
+    common: StackFrameCommon,
+    result_ptr: *mut Interface,
+    receiver: ObjectPtr,
+    type_id: usize,
+    num_methods: usize,
+    interface_table: *const (),
+}
+
+pub fn make_interface(ctx: &mut LightWeightThreadContext) -> FunctionObject {
+    let frame = unsafe { &ctx.stack_frame().make_interface };
+
+    let interface = Interface::new(
+        frame.receiver.clone(),
+        frame.type_id,
+        frame.num_methods,
+        frame.interface_table,
+    );
+    unsafe {
+        ptr::copy_nonoverlapping(&interface, frame.result_ptr, 1);
+    }
+    mem::forget(interface);
     leave_runtime_api(ctx)
 }
 
@@ -887,7 +905,7 @@ pub fn value_of(ctx: &mut LightWeightThreadContext) -> FunctionObject {
     };
 
     let object = unsafe {
-        let function_object_ptr = param0.receiver.0 as *const FunctionObject;
+        let function_object_ptr = param0.receiver().0 as *const FunctionObject;
         (*function_object_ptr).0 as *mut ObjectPtr
     };
 
@@ -946,6 +964,7 @@ pub union StackFrame {
     func_name: ManuallyDrop<StackFrameFuncName>,
     make_chan: ManuallyDrop<StackFrameMakeChan>,
     make_closure: ManuallyDrop<StackFrameMakeClosure>,
+    make_interface: ManuallyDrop<StackFrameMakeInterface>,
     make_map: ManuallyDrop<StackFrameMakeMap>,
     make_string_from_byte_slice: ManuallyDrop<StackFrameMakeStringFromByteSlice>,
     make_string_from_rune: ManuallyDrop<StackFrameMakeStringFromRune>,

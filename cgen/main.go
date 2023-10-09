@@ -452,19 +452,10 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 	case *ssa.Call:
 		callCommon := instr.Common()
 		if callCommon.Method != nil {
-			methodName := callCommon.Method.Name()
-			fmt.Fprintf(ctx.stream, `
-			FunctionObject next_function = {.raw = NULL};
-			Interface* interface = &%s;
-			for (uintptr_t i = 0; i < interface->num_methods; ++i) {
-				InterfaceTableEntry* entry = &interface->interface_table[i];
-				if (strcmp(entry->method_name, "%s") == 0) {
-					next_function = entry->method;
-					break;
-				}
-			}
-			assert(next_function.raw != NULL);
-			`, createValueRelName(callCommon.Value), methodName)
+			fmt.Fprintf(ctx.stream,
+				"FunctionObject next_function = gox5_search_method(&%s, (StringObject){\"%s\"});\n",
+				createValueRelName(callCommon.Value), callCommon.Method.Name())
+			fmt.Fprintf(ctx.stream, "assert(next_function.raw != NULL);\n")
 			nextFunction := "next_function"
 			ctx.switchFunction(nextFunction, callCommon, createValueRelName(instr), createInstructionName(instr))
 		} else {
@@ -708,20 +699,18 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 		)
 
 	case *ssa.MakeInterface:
-		valueName := createValueRelName(instr)
-		interfaceTableName := fmt.Sprintf("interfaceTable_%s", createTypeName(instr.X.Type()))
+		var receiver, numMethods, interfaceTable string
 		if instr.Type().Underlying().(*types.Interface).Empty() {
 			switch instrX := instr.X.(type) {
 			case *ssa.Const, *ssa.Function:
 				id := fmt.Sprintf("tmp_%s", createValueName(instr))
 				fmt.Fprintf(ctx.stream, "frame->%s = %s;\n", id, createValueRelName(instrX))
-				fmt.Fprintf(ctx.stream, "%s.receiver = &frame->%s;\n", valueName, id)
+				receiver = fmt.Sprintf("&frame->%s", id)
 
 			default:
-				fmt.Fprintf(ctx.stream, "%s.receiver = &%s;\n", valueName, createValueRelName(instr.X))
+				receiver = fmt.Sprintf("&%s", createValueRelName(instr.X))
 			}
-			fmt.Fprintf(ctx.stream, "%s.type_id = (uintptr_t)\"%s\";\n", valueName, createTypeName(instr.X.Type()))
-			fmt.Fprintf(ctx.stream, "%s.num_methods = 0;\n", valueName)
+			numMethods = fmt.Sprintf("0")
 			typ := "NULL"
 			switch t := instr.X.Type().Underlying().(type) {
 			case *types.Basic:
@@ -734,13 +723,21 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 			case *types.Pointer:
 				typ = "3"
 			}
-			fmt.Fprintf(ctx.stream, "%s.interface_table = (void*)%s;\n", valueName, typ)
+			interfaceTable = fmt.Sprintf("(void*)%s", typ)
 		} else {
-			fmt.Fprintf(ctx.stream, "%s.receiver = %s.raw;\n", valueName, createValueRelName(instr.X))
-			fmt.Fprintf(ctx.stream, "%s.type_id = (uintptr_t)\"%s\";\n", valueName, createTypeName(instr.X.Type()))
-			fmt.Fprintf(ctx.stream, "%s.num_methods = sizeof(%s.entries)/sizeof(%s.entries[0]);\n", valueName, interfaceTableName, interfaceTableName)
-			fmt.Fprintf(ctx.stream, "%s.interface_table = &%s.entries[0];\n", valueName, interfaceTableName)
+			receiver = fmt.Sprintf("%s.raw", createValueRelName(instr.X))
+			interfaceTableName := fmt.Sprintf("interfaceTable_%s", createTypeName(instr.X.Type()))
+			numMethods = fmt.Sprintf("sizeof(%s.entries)/sizeof(%s.entries[0])", interfaceTableName, interfaceTableName)
+			interfaceTable = fmt.Sprintf("&%s.entries[0]", interfaceTableName)
 		}
+
+		result := createValueRelName(instr)
+		ctx.switchFunctionToCallRuntimeApi("gox5_make_interface", "StackFrameMakeInterface", createInstructionName(instr), &result, nil,
+			paramArgPair{param: "receiver", arg: receiver},
+			paramArgPair{param: "type_id", arg: fmt.Sprintf("(uintptr_t)\"%s\"", createTypeName(instr.X.Type()))},
+			paramArgPair{param: "num_methods", arg: numMethods},
+			paramArgPair{param: "interface_table", arg: interfaceTable},
+		)
 
 	case *ssa.MakeMap:
 		result := createValueRelName(instr)
@@ -860,20 +857,9 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 				fmt.Fprintf(ctx.stream, "bool can_convert = true;\n")
 				fmt.Fprintf(ctx.stream, "Interface* interface = &%s;\n", srcObj)
 				for i := 0; i < t.NumExplicitMethods(); i++ {
-					methodName := t.ExplicitMethod(i).Name()
-					fmt.Fprintf(ctx.stream, `
-					{
-						bool found = false;
-						for (uintptr_t i = 0; i < interface->num_methods; ++i) {
-							InterfaceTableEntry* entry = &interface->interface_table[i];
-							if (strcmp(entry->method_name, "%s") == 0) {
-								found = true;
-								break;
-							}
-						}
-						can_convert = can_convert && found;
-					}
-					`, methodName)
+					fmt.Fprintf(ctx.stream,
+						"can_convert = can_convert && (gox5_search_method(interface, (StringObject){\"%s\"}).raw != NULL);\n",
+						t.ExplicitMethod(i).Name())
 				}
 			} else {
 				fmt.Fprintf(ctx.stream, "uintptr_t type_id = (uintptr_t)\"%s\";\n", createTypeName(instr.AssertedType))
@@ -1058,7 +1044,7 @@ func requireSwitchFunction(instruction ssa.Instruction) bool {
 		return false
 	case *ssa.Call:
 		return t.Common().Value.Name() != "init"
-	case *ssa.Go, *ssa.MakeChan, *ssa.MakeClosure, *ssa.MakeMap, *ssa.MapUpdate, *ssa.Send:
+	case *ssa.Go, *ssa.MakeChan, *ssa.MakeClosure, *ssa.MakeInterface, *ssa.MakeMap, *ssa.MapUpdate, *ssa.Send:
 		return true
 	case *ssa.Convert:
 		if dstType, ok := t.Type().(*types.Basic); ok && dstType.Kind() == types.String {
@@ -1863,6 +1849,16 @@ DECLARE_RUNTIME_API(make_closure, StackFrameMakeClosure);
 
 typedef struct {
 	StackFrameCommon common;
+	Interface* result_ptr;
+	void* receiver;
+	uintptr_t type_id;
+	uintptr_t num_methods;
+	void* interface_table;
+} StackFrameMakeInterface;
+DECLARE_RUNTIME_API(make_interface, StackFrameMakeInterface);
+
+typedef struct {
+	StackFrameCommon common;
 	MapObject* result_ptr;
 	uintptr_t key_type_size;
 	uintptr_t value_type_size;
@@ -2031,6 +2027,8 @@ typedef struct {
 DECLARE_RUNTIME_API(func_for_pc, StackFrameFuncForPc);
 
 #define f_S_Split gox5_split
+
+FunctionObject gox5_search_method(Interface* interface, StringObject method_name);
 `)
 
 	ctx.emitType()
