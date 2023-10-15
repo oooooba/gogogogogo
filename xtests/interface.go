@@ -539,6 +539,87 @@ func Test26() int {
 	return 26
 }
 
+func Test27() int {
+	var ia, ib interface{}
+
+	n := 42
+	ia = n
+	ib = n
+	if ia != ib {
+		return 0
+	}
+	if ia == nil {
+		return 1
+	}
+
+	var nt T = 43
+	ia = nt
+	ib = nt
+	if ia != ib {
+		return 2
+	}
+	if ia == nil {
+		return 3
+	}
+
+	nn := func() int { return 44 }()
+	ia = nn
+	ib = nn
+	if ia != ib {
+		return 4
+	}
+	if ia == nil {
+		return 5
+	}
+
+	nnn := func() int { return 0 }()
+	ia = nnn
+	ib = nnn
+	if ia != ib {
+		return 6
+	}
+	if ia == nil {
+		return 7
+	}
+
+	return 27
+}
+
+type S3 struct {
+	p *S3
+}
+
+func Test28() int {
+	s := S3{}
+	s.p = &s
+
+	if s.p != &s {
+		return 0
+	}
+
+	var i1 interface{}
+	i1 = s
+	s1 := i1.(S3)
+	if s1.p != &s {
+		return 1
+	}
+	if s1.p == &s1 {
+		return 2
+	}
+
+	var i2 interface{}
+	i2 = &s
+	s2 := i2.(*S3)
+	if s2.p != &s {
+		return 3
+	}
+	if s2.p != s2 {
+		return 4
+	}
+
+	return 28
+}
+
 func main() {
 	runTest := func(test func() int) {
 		funcFullName := runtime.FuncForPC(reflect.ValueOf(test).Pointer()).Name()
@@ -571,4 +652,6 @@ func main() {
 	runTest(Test24)
 	runTest(Test25)
 	runTest(Test26)
+	runTest(Test27)
+	runTest(Test28)
 }
