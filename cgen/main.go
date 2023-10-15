@@ -728,7 +728,7 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 			receiver = fmt.Sprintf("%s.raw", createValueRelName(instr.X))
 		}
 
-		typeId := fmt.Sprintf("(uintptr_t)&%s", createTypeIdName(instr.X.Type()))
+		typeId := fmt.Sprintf("(TypeId){ .info = &%s }", createTypeIdName(instr.X.Type()))
 
 		result := createValueRelName(instr)
 		ctx.switchFunctionToCallRuntimeApi("gox5_make_interface", "StackFrameMakeInterface", createInstructionName(instr), &result, nil,
@@ -859,8 +859,8 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 						t.ExplicitMethod(i).Name())
 				}
 			} else {
-				fmt.Fprintf(ctx.stream, "uintptr_t type_id = (uintptr_t)&%s;\n", createTypeIdName(instr.AssertedType))
-				fmt.Fprintf(ctx.stream, "bool can_convert = %s.type_id == type_id;\n", createValueRelName(instr.X))
+				fmt.Fprintf(ctx.stream, "TypeId type_id = (TypeId){ .info = &%s };\n", createTypeIdName(instr.AssertedType))
+				fmt.Fprintf(ctx.stream, "bool can_convert = %s.type_id.id == type_id.id;\n", createValueRelName(instr.X))
 			}
 			fmt.Fprintf(ctx.stream, "%s = %s;\n", dstObj, wrapInObject("0", instr.Type()))
 			fmt.Fprintf(ctx.stream, "if (can_convert) {\n")
@@ -1423,7 +1423,7 @@ bool equal_InterfaceEmpty(Interface* lhs, Interface* rhs) {
 		return false;
 	}
 
-	bool (*f)(void*, void*) = ((TypeInfo*)(lhs->type_id))->is_equal;
+	bool (*f)(void*, void*) = lhs->type_id.info->is_equal;
 	return f(lhs->receiver, rhs->receiver);
 }
 
@@ -1438,7 +1438,7 @@ bool equal_InterfaceNonEmpty(Interface* lhs, Interface* rhs) {
 		return false;
 	}
 
-	bool (*f)(void*, void*) = ((TypeInfo*)(lhs->type_id))->is_equal;
+	bool (*f)(void*, void*) = lhs->type_id.info->is_equal;
 	return f(lhs, rhs);
 }
 `)
@@ -1833,6 +1833,13 @@ typedef struct {
 	const void* func_ptr;
 } UserFunction;
 
+struct TypeInfo;
+
+typedef union {
+	uintptr_t id;
+	const struct TypeInfo* info;
+} TypeId;
+
 #define DEFINE_BUILTIN_OBJECT_TYPE(name, raw_type) \
 	typedef struct { raw_type raw; } name ## Object
 
@@ -1883,7 +1890,7 @@ typedef struct {
 	FunctionObject method;
 } InterfaceTableEntry;
 
-typedef struct {
+typedef struct TypeInfo {
 	const char* name;
 	uintptr_t num_methods;
 	const InterfaceTableEntry* interface_table;
@@ -1892,7 +1899,7 @@ typedef struct {
 
 typedef struct {
 	void* receiver;
-	uintptr_t type_id;
+	TypeId type_id;
 } Interface;
 
 typedef struct {
@@ -1937,7 +1944,7 @@ typedef struct {
 	StackFrameCommon common;
 	Interface* result_ptr;
 	void* receiver;
-	uintptr_t type_id;
+	TypeId type_id;
 } StackFrameMakeInterface;
 DECLARE_RUNTIME_API(make_interface, StackFrameMakeInterface);
 
