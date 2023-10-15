@@ -449,6 +449,16 @@ func Test23() int {
 		return 7
 	}
 
+	ss := S0{n: 46}
+	ia = ss
+	ib = ss
+	if ia != ib {
+		return 8
+	}
+	if ia == nil {
+		return 9
+	}
+
 	return 23
 }
 
@@ -496,6 +506,16 @@ func Test24() int {
 	}
 	if ia == nil {
 		return 7
+	}
+
+	ss := S0{n: 46}
+	ia = ss
+	ib = ss
+	if ia != ib {
+		return 8
+	}
+	if ia == nil {
+		return 9
 	}
 
 	return 24

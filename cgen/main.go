@@ -398,7 +398,17 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 		raw := ""
 		switch op := instr.Op; op {
 		case token.EQL, token.NEQ:
-			fmt.Fprintf(ctx.stream, "bool raw = equal_%s(&%s, &%s) %s true;", createTypeName(instr.X.Type()), createValueRelName(instr.X), createValueRelName(instr.Y), instr.Op)
+			var equalFunc string
+			if t, ok := instr.X.Type().Underlying().(*types.Interface); ok {
+				if t.Empty() {
+					equalFunc = "equal_InterfaceEmpty"
+				} else {
+					equalFunc = "equal_InterfaceNonEmpty"
+				}
+			} else {
+				equalFunc = fmt.Sprintf("equal_%s", createTypeName(instr.X.Type()))
+			}
+			fmt.Fprintf(ctx.stream, "bool raw = %s(&%s, &%s) %s true;", equalFunc, createValueRelName(instr.X), createValueRelName(instr.Y), instr.Op)
 			raw = "raw"
 		case token.LSS, token.LEQ, token.GTR, token.GEQ:
 			raw = fmt.Sprintf("%s.raw %s %s.raw", createValueRelName(instr.X), instr.Op.String(), createValueRelName(instr.Y))
@@ -1413,6 +1423,13 @@ bool equal_MapObject(MapObject* lhs, MapObject* rhs) {
 }
 
 bool equal_Interface(Interface* lhs, Interface* rhs) {
+	(void)lhs;
+	(void)rhs;
+	assert(false); // dummy
+	return false;
+}
+
+bool equal_InterfaceEmpty(Interface* lhs, Interface* rhs) {
 	assert(lhs!=NULL);
 	assert(rhs!=NULL);
 
@@ -1423,26 +1440,45 @@ bool equal_Interface(Interface* lhs, Interface* rhs) {
 		return false;
 	}
 
-	for (uintptr_t i = 1; i <= 3; ++i) {
-		if (lhs->interface_table == (void*)i) {
-			bool (*f)(void*, void*) = ((TypeInfo*)(lhs->type_id))->is_equal;
-			return f(lhs->receiver, rhs->receiver);
-		}
+	bool (*f)(void*, void*) = ((TypeInfo*)(lhs->type_id))->is_equal;
+	return f(lhs->receiver, rhs->receiver);
+}
+
+bool equal_InterfaceNonEmpty(Interface* lhs, Interface* rhs) {
+	assert(lhs!=NULL);
+	assert(rhs!=NULL);
+
+	if ((lhs->receiver == NULL) && (rhs->receiver == NULL)) {
+		return true;
 	}
-	return memcmp(lhs, rhs, sizeof(*lhs)) == 0;
+	if ((lhs->receiver == NULL) || (rhs->receiver == NULL)) {
+		return false;
+	}
+
+	bool (*f)(void*, void*) = ((TypeInfo*)(lhs->type_id))->is_equal;
+	return f(lhs, rhs);
 }
 `)
 	ctx.visitAllTypes(ctx.program, func(typ types.Type) {
 		typeName := createTypeName(typ)
-		expr := ""
-		if typ == typ.Underlying() {
+		underlyingType := typ.Underlying()
+		var expr string
+		if typ == underlyingType {
 			switch typ.(type) {
 			case *types.Basic, *types.Interface, *types.Map:
 				return
 			}
 			expr = "memcmp(lhs, rhs, sizeof(*lhs)) == 0"
 		} else {
-			expr = fmt.Sprintf("equal_%s(lhs, rhs)", createTypeName(typ.Underlying()))
+			if t, ok := underlyingType.(*types.Interface); ok {
+				if t.Empty() {
+					expr = "equal_InterfaceEmpty(lhs, rhs)"
+				} else {
+					expr = "equal_InterfaceNonEmpty(lhs, rhs)"
+				}
+			} else {
+				expr = fmt.Sprintf("equal_%s(lhs, rhs)", createTypeName(underlyingType))
+			}
 		}
 		fmt.Fprintf(ctx.stream, "bool equal_%s(%s* lhs, %s* rhs) { // %s\n", typeName, typeName, typeName, typ)
 		fmt.Fprintf(ctx.stream, "\tassert(lhs != NULL);\n")
