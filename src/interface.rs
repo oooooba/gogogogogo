@@ -15,24 +15,11 @@ pub(crate) struct InterfaceTableEntry {
 pub(crate) struct Interface {
     receiver: ObjectPtr,
     type_id: TypeId,
-    num_methods: usize,
-    interface_table: *const InterfaceTableEntry,
 }
 
 impl Interface {
-    pub fn new(
-        receiver: ObjectPtr,
-        type_id: TypeId,
-        num_methods: usize,
-        interface_table: *const (),
-    ) -> Self {
-        let interface_table = interface_table as *const InterfaceTableEntry;
-        Self {
-            receiver,
-            type_id,
-            num_methods,
-            interface_table,
-        }
+    pub fn new(receiver: ObjectPtr, type_id: TypeId) -> Self {
+        Self { receiver, type_id }
     }
 
     pub fn receiver(&self) -> ObjectPtr {

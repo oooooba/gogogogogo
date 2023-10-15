@@ -382,19 +382,12 @@ struct StackFrameMakeInterface {
     result_ptr: *mut Interface,
     receiver: ObjectPtr,
     type_id: TypeId,
-    num_methods: usize,
-    interface_table: *const (),
 }
 
 pub fn make_interface(ctx: &mut LightWeightThreadContext) -> FunctionObject {
     let frame = unsafe { &ctx.stack_frame().make_interface };
 
-    let interface = Interface::new(
-        frame.receiver.clone(),
-        frame.type_id,
-        frame.num_methods,
-        frame.interface_table,
-    );
+    let interface = Interface::new(frame.receiver.clone(), frame.type_id);
     unsafe {
         ptr::copy_nonoverlapping(&interface, frame.result_ptr, 1);
     }

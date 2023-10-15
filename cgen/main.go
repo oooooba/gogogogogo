@@ -729,16 +729,11 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 		}
 
 		typeId := fmt.Sprintf("(uintptr_t)&%s", createTypeIdName(instr.X.Type()))
-		interfaceTableName := fmt.Sprintf("interfaceTable_%s", createTypeName(instr.X.Type()))
-		numMethods := fmt.Sprintf("sizeof(%s.entries)/sizeof(%s.entries[0])", interfaceTableName, interfaceTableName)
-		interfaceTable := fmt.Sprintf("&%s.entries[0]", interfaceTableName)
 
 		result := createValueRelName(instr)
 		ctx.switchFunctionToCallRuntimeApi("gox5_make_interface", "StackFrameMakeInterface", createInstructionName(instr), &result, nil,
 			paramArgPair{param: "receiver", arg: receiver},
 			paramArgPair{param: "type_id", arg: typeId},
-			paramArgPair{param: "num_methods", arg: numMethods},
-			paramArgPair{param: "interface_table", arg: interfaceTable},
 		)
 
 	case *ssa.MakeMap:
@@ -1898,8 +1893,6 @@ typedef struct {
 typedef struct {
 	void* receiver;
 	uintptr_t type_id;
-	uintptr_t num_methods;
-	InterfaceTableEntry* interface_table;
 } Interface;
 
 typedef struct {
@@ -1945,8 +1938,6 @@ typedef struct {
 	Interface* result_ptr;
 	void* receiver;
 	uintptr_t type_id;
-	uintptr_t num_methods;
-	void* interface_table;
 } StackFrameMakeInterface;
 DECLARE_RUNTIME_API(make_interface, StackFrameMakeInterface);
 
