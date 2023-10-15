@@ -362,6 +362,9 @@ func Test21() int {
 	if ia != ib {
 		return 0
 	}
+	if ia != nil {
+		return 1
+	}
 	return 21
 }
 
@@ -394,6 +397,9 @@ func Test22() int {
 	ib = &sb
 	if ia == ib {
 		return 4
+	}
+	if ia == nil {
+		return 5
 	}
 
 	return 22
@@ -438,6 +444,9 @@ func Test23() int {
 	ib = &sb
 	if ia == ib {
 		return 6
+	}
+	if ia == nil {
+		return 7
 	}
 
 	return 23
@@ -484,6 +493,9 @@ func Test24() int {
 	ib = &sb
 	if ia == ib {
 		return 6
+	}
+	if ia == nil {
+		return 7
 	}
 
 	return 24
