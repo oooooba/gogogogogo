@@ -713,7 +713,7 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 		)
 
 	case *ssa.MakeInterface:
-		var receiver, numMethods, interfaceTable string
+		var receiver string
 		if instr.Type().Underlying().(*types.Interface).Empty() {
 			switch instrX := instr.X.(type) {
 			case *ssa.Const, *ssa.Function:
@@ -724,31 +724,19 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 			default:
 				receiver = fmt.Sprintf("&%s", createValueRelName(instr.X))
 			}
-			numMethods = fmt.Sprintf("0")
-			typ := "NULL"
-			switch t := instr.X.Type().Underlying().(type) {
-			case *types.Basic:
-				switch t.Kind() {
-				case types.Int, types.Int8, types.Int16, types.Int32, types.Int64, types.Uint, types.Uint8, types.Uint16, types.Uint32, types.Uint64, types.Uintptr:
-					typ = "1"
-				case types.String:
-					typ = "2"
-				}
-			case *types.Pointer:
-				typ = "3"
-			}
-			interfaceTable = fmt.Sprintf("(void*)%s", typ)
 		} else {
 			receiver = fmt.Sprintf("%s.raw", createValueRelName(instr.X))
-			interfaceTableName := fmt.Sprintf("interfaceTable_%s", createTypeName(instr.X.Type()))
-			numMethods = fmt.Sprintf("sizeof(%s.entries)/sizeof(%s.entries[0])", interfaceTableName, interfaceTableName)
-			interfaceTable = fmt.Sprintf("&%s.entries[0]", interfaceTableName)
 		}
+
+		typeId := fmt.Sprintf("(uintptr_t)&%s", createTypeIdName(instr.X.Type()))
+		interfaceTableName := fmt.Sprintf("interfaceTable_%s", createTypeName(instr.X.Type()))
+		numMethods := fmt.Sprintf("sizeof(%s.entries)/sizeof(%s.entries[0])", interfaceTableName, interfaceTableName)
+		interfaceTable := fmt.Sprintf("&%s.entries[0]", interfaceTableName)
 
 		result := createValueRelName(instr)
 		ctx.switchFunctionToCallRuntimeApi("gox5_make_interface", "StackFrameMakeInterface", createInstructionName(instr), &result, nil,
 			paramArgPair{param: "receiver", arg: receiver},
-			paramArgPair{param: "type_id", arg: fmt.Sprintf("(uintptr_t)&%s", createTypeIdName(instr.X.Type()))},
+			paramArgPair{param: "type_id", arg: typeId},
 			paramArgPair{param: "num_methods", arg: numMethods},
 			paramArgPair{param: "interface_table", arg: interfaceTable},
 		)
@@ -1911,7 +1899,7 @@ typedef struct {
 	void* receiver;
 	uintptr_t type_id;
 	uintptr_t num_methods;
-	InterfaceTableEntry* interface_table; // ToDo: use distinguish object type for empty interface (1: int, 2 string)
+	InterfaceTableEntry* interface_table;
 } Interface;
 
 typedef struct {
