@@ -739,8 +739,8 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 	case *ssa.MakeMap:
 		result := createValueRelName(instr)
 		ctx.switchFunctionToCallRuntimeApi("gox5_make_map", "StackFrameMakeMap", createInstructionName(instr), &result, nil,
-			paramArgPair{param: "key_type_size", arg: fmt.Sprintf("sizeof(%s)", createTypeName(instr.Type().Underlying().(*types.Map).Key()))},
-			paramArgPair{param: "value_type_size", arg: fmt.Sprintf("sizeof(%s)", createTypeName(instr.Type().Underlying().(*types.Map).Elem()))},
+			paramArgPair{param: "key_type", arg: fmt.Sprintf("(TypeId){ .info = &%s }", createTypeIdName(instr.Type().Underlying().(*types.Map).Key()))},
+			paramArgPair{param: "value_type", arg: fmt.Sprintf("(TypeId){ .info = &%s }", createTypeIdName(instr.Type().Underlying().(*types.Map).Elem()))},
 		)
 
 	case *ssa.MapUpdate:
@@ -1951,8 +1951,8 @@ DECLARE_RUNTIME_API(make_interface, StackFrameMakeInterface);
 typedef struct {
 	StackFrameCommon common;
 	MapObject* result_ptr;
-	uintptr_t key_type_size;
-	uintptr_t value_type_size;
+	TypeId key_type;
+	TypeId value_type;
 } StackFrameMakeMap;
 DECLARE_RUNTIME_API(make_map, StackFrameMakeMap);
 

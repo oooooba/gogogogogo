@@ -399,14 +399,14 @@ pub fn make_interface(ctx: &mut LightWeightThreadContext) -> FunctionObject {
 struct StackFrameMakeMap {
     common: StackFrameCommon,
     result_ptr: *mut ObjectPtr,
-    key_type_size: usize,
-    value_type_size: usize,
+    key_type: TypeId,
+    value_type: TypeId,
 }
 
-pub fn allocate_map(
+fn allocate_map(
     ctx: &mut LightWeightThreadContext,
-    key_type_size: usize,
-    value_type_size: usize,
+    key_type: TypeId,
+    value_type: TypeId,
 ) -> *mut Map {
     let object_size = mem::size_of::<Map>();
     let ptr = ctx.global_context().process(|mut global_context| {
@@ -417,7 +417,7 @@ pub fn allocate_map(
             }) as *mut Map
     });
 
-    let map = Map::new(key_type_size, value_type_size);
+    let map = Map::new(key_type, value_type);
     unsafe {
         ptr::copy_nonoverlapping(&map, ptr, 1);
     }
@@ -426,11 +426,11 @@ pub fn allocate_map(
 }
 
 pub fn make_map(ctx: &mut LightWeightThreadContext) -> FunctionObject {
-    let (key_type_size, value_type_size) = unsafe {
+    let (key_type, value_type) = unsafe {
         let stack_frame = &ctx.stack_frame().make_map;
-        (stack_frame.key_type_size, stack_frame.value_type_size)
+        (stack_frame.key_type, stack_frame.value_type)
     };
-    let ptr = allocate_map(ctx, key_type_size, value_type_size);
+    let ptr = allocate_map(ctx, key_type, value_type);
     let ptr = ObjectPtr(ptr as *mut ());
     unsafe {
         let stack_frame = &mut ctx.stack_frame_mut().make_map;

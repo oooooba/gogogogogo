@@ -1,13 +1,19 @@
 use std::collections::HashMap;
 
-pub struct Map {
+use super::type_id::TypeId;
+
+pub(crate) struct Map {
     map: HashMap<usize, usize>,
+    _key_type: TypeId,
+    _value_type: TypeId,
 }
 
 impl Map {
-    pub fn new(_key_type_size: usize, _value_type_size: usize) -> Self {
+    pub fn new(key_type: TypeId, value_type: TypeId) -> Self {
         Map {
             map: HashMap::new(),
+            _key_type: key_type,
+            _value_type: value_type,
         }
     }
 
