@@ -562,19 +562,22 @@ struct StackFrameMapGet {
 }
 
 pub fn map_get(ctx: &mut LightWeightThreadContext) -> FunctionObject {
-    let (map_ptr, key) = unsafe {
+    let (mut map_ptr, key, result_ptr) = unsafe {
         let stack_frame = &ctx.stack_frame().map_get;
-        (&stack_frame.map, &stack_frame.key)
+        (
+            stack_frame.map.clone(),
+            stack_frame.key,
+            stack_frame.result_ptr,
+        )
     };
-    let value = if map_ptr.is_null() {
+    if map_ptr.is_null() {
         unimplemented!()
     } else {
-        let map = map_ptr.as_ref::<Map>();
-        map.get(key).unwrap()
-    };
-    unsafe {
-        let stack_frame = &mut ctx.stack_frame_mut().map_get;
-        *stack_frame.result_ptr = value;
+        let map = map_ptr.as_mut::<Map>();
+        let key = ObjectPtr(&key as *const usize as *mut ());
+        let value = ObjectPtr(result_ptr as *const usize as *mut ());
+        let found = map.get(key, value);
+        assert!(found);
     };
     leave_runtime_api(ctx)
 }
@@ -594,19 +597,29 @@ struct StackFrameMapGetChecked {
 }
 
 pub fn map_get_checked(ctx: &mut LightWeightThreadContext) -> FunctionObject {
-    let (map_ptr, key) = unsafe {
+    let (mut map_ptr, key, result_ptr) = unsafe {
         let stack_frame = &ctx.stack_frame().map_get_checked;
-        (&stack_frame.map, &stack_frame.key)
+        (
+            stack_frame.map.clone(),
+            stack_frame.key,
+            stack_frame.result_ptr,
+        )
     };
-    let (value, found) = if map_ptr.is_null() {
+    if map_ptr.is_null() {
         unimplemented!()
     } else {
-        let map = map_ptr.as_ref::<Map>();
-        map.get(key).map_or((0, false), |v| (v, true))
-    };
-    unsafe {
-        let stack_frame = &mut ctx.stack_frame_mut().map_get_checked;
-        *stack_frame.result_ptr = MapGetCheckedResult { value, found };
+        let map = map_ptr.as_mut::<Map>();
+        let key = ObjectPtr(&key as *const usize as *mut () as *mut ());
+        let value = ObjectPtr(unsafe { &mut (*result_ptr).value } as *const usize as *mut ());
+        let found = map.get(key, value);
+        if !found {
+            unsafe {
+                (*result_ptr).value = 0;
+            }
+        }
+        unsafe {
+            (*result_ptr).found = found;
+        }
     };
     leave_runtime_api(ctx)
 }
@@ -656,8 +669,13 @@ pub fn map_set(ctx: &mut LightWeightThreadContext) -> FunctionObject {
     if map_ptr.is_null() {
         unimplemented!()
     } else {
-        let map = map_ptr.as_mut::<Map>();
-        map.set(key, *value)
+        ctx.global_context().process(|mut global_context| {
+            let key = ObjectPtr(key as *const usize as *mut ());
+            let value = ObjectPtr(value as *const usize as *mut ());
+            let map = map_ptr.as_mut::<Map>();
+            let allocator = global_context.allocator();
+            map.set(key, value, allocator);
+        });
     };
     leave_runtime_api(ctx)
 }
