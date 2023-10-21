@@ -1329,6 +1329,7 @@ func (ctx *Context) emitTypeInfo() {
 		fmt.Fprintf(ctx.stream, ".num_methods = %s,\n", numMethods)
 		fmt.Fprintf(ctx.stream, ".interface_table = %s,\n", interfaceTable)
 		fmt.Fprintf(ctx.stream, ".is_equal = equal_%s,\n", createTypeName(typ))
+		fmt.Fprintf(ctx.stream, ".size = sizeof(%s),\n", createTypeName(typ))
 		fmt.Fprintf(ctx.stream, "};\n")
 	})
 }
@@ -1896,6 +1897,7 @@ typedef struct TypeInfo {
 	uintptr_t num_methods;
 	const InterfaceTableEntry* interface_table;
 	void* is_equal;
+	uintptr_t size;
 } TypeInfo;
 
 typedef struct {

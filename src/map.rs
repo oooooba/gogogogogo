@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
-use std::mem;
 use std::ptr;
 
 use super::type_id::TypeId;
@@ -40,7 +39,7 @@ impl Hash for Key {
 pub(crate) struct Map {
     map: HashMap<Key, ObjectPtr>,
     key_type: TypeId,
-    _value_type: TypeId,
+    value_type: TypeId,
 }
 
 impl Map {
@@ -48,7 +47,7 @@ impl Map {
         Map {
             map: HashMap::new(),
             key_type,
-            _value_type: value_type,
+            value_type,
         }
     }
 
@@ -60,7 +59,7 @@ impl Map {
         let key = Key::new(key, self.key_type);
         match self.map.get(&key) {
             Some(val) => {
-                let object_size = mem::size_of::<usize>();
+                let object_size = self.value_type.size();
                 unsafe {
                     ptr::copy_nonoverlapping(val.0 as *const u8, value.0 as *mut u8, object_size);
                 }
@@ -71,14 +70,14 @@ impl Map {
     }
 
     pub fn set(&mut self, key: ObjectPtr, value: ObjectPtr, allocator: &mut dyn ObjectAllocator) {
-        let key_object_size = mem::size_of::<usize>();
+        let key_object_size = self.key_type.size();
         let key_ptr = allocator.allocate(key_object_size, |_| {}) as *mut u8;
         unsafe {
             ptr::copy_nonoverlapping(key.0 as *const u8, key_ptr, key_object_size);
         }
         let key = ObjectPtr(key_ptr as *mut ());
 
-        let value_object_size = mem::size_of::<usize>();
+        let value_object_size = self.value_type.size();
         let value_ptr = allocator.allocate(value_object_size, |_| {}) as *mut u8;
         unsafe {
             ptr::copy_nonoverlapping(value.0 as *const u8, value_ptr, value_object_size);
