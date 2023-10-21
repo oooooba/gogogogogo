@@ -11,8 +11,8 @@ impl GlobalContext {
         GlobalContext { allocator }
     }
 
-    pub fn allocator(&mut self) -> &mut Box<dyn ObjectAllocator> {
-        &mut self.allocator
+    pub fn allocator(&mut self) -> &mut dyn ObjectAllocator {
+        &mut *self.allocator
     }
 }
 
