@@ -57,15 +57,20 @@ impl Map {
 
     pub fn get(&self, key: ObjectPtr, value: ObjectPtr) -> bool {
         let key = Key::new(key, self.key_type);
+        let object_size = self.value_type.size();
         match self.map.get(&key) {
             Some(val) => {
-                let object_size = self.value_type.size();
                 unsafe {
                     ptr::copy_nonoverlapping(val.0 as *const u8, value.0 as *mut u8, object_size);
                 }
                 true
             }
-            None => false,
+            None => {
+                unsafe {
+                    ptr::write_bytes(value.0 as *mut u8, 0, object_size);
+                }
+                false
+            }
         }
     }
 

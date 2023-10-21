@@ -563,7 +563,7 @@ struct StackFrameMapGet {
 }
 
 pub fn map_get(ctx: &mut LightWeightThreadContext) -> FunctionObject {
-    let (mut map_ptr, key, value_ptr, found_ptr) = unsafe {
+    let (mut map_ptr, key, value_ptr, mut found_ptr) = unsafe {
         let stack_frame = &ctx.stack_frame().map_get;
         (
             stack_frame.map.clone(),
@@ -582,14 +582,7 @@ pub fn map_get(ctx: &mut LightWeightThreadContext) -> FunctionObject {
     if found_ptr.is_null() {
         assert!(found);
     } else {
-        if !found {
-            unsafe {
-                *(value_ptr.0 as *mut usize) = 0;
-            }
-        }
-        unsafe {
-            *(found_ptr.0 as *mut bool) = found;
-        }
+        *found_ptr.as_mut() = found;
     }
     leave_runtime_api(ctx)
 }
