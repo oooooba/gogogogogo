@@ -34,9 +34,9 @@ impl GlobalContextPtr {
         GlobalContextPtr::from(arc_ptr2)
     }
 
-    pub fn process<F, T>(&self, procedure: F) -> T
+    pub fn process<F, T>(&self, mut procedure: F) -> T
     where
-        F: Fn(MutexGuard<GlobalContext>) -> T,
+        F: FnMut(MutexGuard<GlobalContext>) -> T,
     {
         let raw_ptr = self.0 as *const Mutex<GlobalContext>;
         let arc_ptr = unsafe { Arc::from_raw(raw_ptr) };
