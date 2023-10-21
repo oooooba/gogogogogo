@@ -556,71 +556,41 @@ pub fn make_string_from_rune_slice(ctx: &mut LightWeightThreadContext) -> Functi
 #[repr(C)]
 struct StackFrameMapGet {
     common: StackFrameCommon,
-    result_ptr: *mut usize,
     map: ObjectPtr,
     key: usize,
+    value: ObjectPtr,
+    found: ObjectPtr,
 }
 
 pub fn map_get(ctx: &mut LightWeightThreadContext) -> FunctionObject {
-    let (mut map_ptr, key, result_ptr) = unsafe {
+    let (mut map_ptr, key, value_ptr, found_ptr) = unsafe {
         let stack_frame = &ctx.stack_frame().map_get;
         (
             stack_frame.map.clone(),
             stack_frame.key,
-            stack_frame.result_ptr,
+            stack_frame.value.clone(),
+            stack_frame.found.clone(),
         )
     };
     if map_ptr.is_null() {
         unimplemented!()
-    } else {
-        let map = map_ptr.as_mut::<Map>();
-        let key = ObjectPtr(&key as *const usize as *mut ());
-        let value = ObjectPtr(result_ptr as *const usize as *mut ());
-        let found = map.get(key, value);
+    };
+    let map = map_ptr.as_mut::<Map>();
+    let key = ObjectPtr(&key as *const usize as *mut ());
+    let value = value_ptr.clone();
+    let found = map.get(key, value);
+    if found_ptr.is_null() {
         assert!(found);
-    };
-    leave_runtime_api(ctx)
-}
-
-#[repr(C)]
-struct MapGetCheckedResult {
-    value: usize,
-    found: bool,
-}
-
-#[repr(C)]
-struct StackFrameMapGetChecked {
-    common: StackFrameCommon,
-    result_ptr: *mut MapGetCheckedResult,
-    map: ObjectPtr,
-    key: usize,
-}
-
-pub fn map_get_checked(ctx: &mut LightWeightThreadContext) -> FunctionObject {
-    let (mut map_ptr, key, result_ptr) = unsafe {
-        let stack_frame = &ctx.stack_frame().map_get_checked;
-        (
-            stack_frame.map.clone(),
-            stack_frame.key,
-            stack_frame.result_ptr,
-        )
-    };
-    if map_ptr.is_null() {
-        unimplemented!()
     } else {
-        let map = map_ptr.as_mut::<Map>();
-        let key = ObjectPtr(&key as *const usize as *mut () as *mut ());
-        let value = ObjectPtr(unsafe { &mut (*result_ptr).value } as *const usize as *mut ());
-        let found = map.get(key, value);
         if !found {
             unsafe {
-                (*result_ptr).value = 0;
+                *(value_ptr.0 as *mut usize) = 0;
             }
         }
         unsafe {
-            (*result_ptr).found = found;
+            *(found_ptr.0 as *mut bool) = found;
         }
-    };
+    }
     leave_runtime_api(ctx)
 }
 
@@ -982,7 +952,6 @@ pub union StackFrame {
     make_string_from_rune: ManuallyDrop<StackFrameMakeStringFromRune>,
     make_string_from_rune_slice: ManuallyDrop<StackFrameMakeStringFromRuneSlice>,
     map_get: ManuallyDrop<StackFrameMapGet>,
-    map_get_checked: ManuallyDrop<StackFrameMapGetChecked>,
     map_len: ManuallyDrop<StackFrameMapLen>,
     map_set: ManuallyDrop<StackFrameMapSet>,
     new: ManuallyDrop<StackFrameNew>,

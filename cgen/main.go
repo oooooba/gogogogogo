@@ -669,19 +669,20 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 			}
 		case *types.Map:
 			result := createValueRelName(instr)
-			var nextFunc, nextFunctionFrame string
+			var value, found string
 			if instr.CommaOk {
-				nextFunc = "gox5_map_get_checked"
-				nextFunctionFrame = "StackFrameMapGetChecked"
+				value = fmt.Sprintf("&%s.raw.e0", result)
+				found = fmt.Sprintf("&%s.raw.e1.raw", result)
 			} else {
-				nextFunc = "gox5_map_get"
-				nextFunctionFrame = "StackFrameMapGet"
+				value = fmt.Sprintf("&%s", result)
+				found = "NULL"
 			}
-			ctx.switchFunctionToCallRuntimeApi(nextFunc, nextFunctionFrame, createInstructionName(instr), &result, nil,
+			ctx.switchFunctionToCallRuntimeApi("gox5_map_get", "StackFrameMapGet", createInstructionName(instr), nil, nil,
 				paramArgPair{param: "map", arg: createValueRelName(instr.X)},
 				paramArgPair{param: "key", arg: createValueRelName(instr.Index)},
+				paramArgPair{param: "value", arg: value},
+				paramArgPair{param: "found", arg: found},
 			)
-
 		default:
 			panic(fmt.Sprintf("%s", instr))
 		}
@@ -1979,19 +1980,12 @@ DECLARE_RUNTIME_API(make_string_from_rune_slice, StackFrameMakeStringFromRuneSli
 
 typedef struct {
 	StackFrameCommon common;
-	IntObject* result_ptr;
 	MapObject map;
 	IntObject key;
+	void* value;
+	bool* found;
 } StackFrameMapGet;
 DECLARE_RUNTIME_API(map_get, StackFrameMapGet);
-
-typedef struct {
-	StackFrameCommon common;
-	void* result_ptr;
-	MapObject map;
-	IntObject key;
-} StackFrameMapGetChecked;
-DECLARE_RUNTIME_API(map_get_checked, StackFrameMapGetChecked);
 
 typedef struct {
 	StackFrameCommon common;
