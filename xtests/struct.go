@@ -200,6 +200,115 @@ func Test20() int {
 	return s.x
 }
 
+type S6 struct {
+	x int
+	y *int
+}
+
+type S7 struct {
+	x int
+	y string
+}
+
+type S8 struct {
+	x int
+	y *string
+}
+
+func Test21() int {
+	l_s_1 := S{n: 1}
+	r_s_1 := S{n: 1}
+	if l_s_1 != r_s_1 {
+		return 0
+	}
+
+	l_s_2 := S{n: 1}
+	r_s_2 := S{n: 2}
+	if l_s_2 == r_s_2 {
+		return 1
+	}
+
+	l_s1_1 := S1{n: 2, m: 2}
+	r_s1_1 := S1{n: 2, m: 2}
+	if l_s1_1 != r_s1_1 {
+		return 2
+	}
+
+	l_s1_2 := S1{n: 2, m: 2}
+	r_s1_2 := S1{n: 2, m: 3}
+	if l_s1_2 == r_s1_2 {
+		return 3
+	}
+
+	l_s6_1 := S6{x: 3, y: nil}
+	r_s6_1 := S6{x: 3, y: nil}
+	if l_s6_1 != r_s6_1 {
+		return 4
+	}
+
+	n_s6_2 := 4
+	l_s6_2 := S6{x: 3, y: &n_s6_2}
+	r_s6_2 := S6{x: 3, y: &n_s6_2}
+	if l_s6_2 != r_s6_2 {
+		return 5
+	}
+
+	n_s6_3 := 4
+	l_s6_3 := S6{x: 3, y: &n_s6_2}
+	r_s6_3 := S6{x: 3, y: &n_s6_3}
+	if l_s6_3 == r_s6_3 {
+		return 5
+	}
+
+	l_s7_1 := S7{x: 4, y: ""}
+	r_s7_1 := S7{x: 4, y: ""}
+	if l_s7_1 != r_s7_1 {
+		return 6
+	}
+
+	l_s7_2 := S7{x: 4, y: "abc"}
+	r_s7_2 := S7{x: 4, y: "abc"}
+	if l_s7_2 != r_s7_2 {
+		return 7
+	}
+
+	l_s7_3 := S7{x: 4, y: "abc"}
+	r_s7_3 := S7{x: 4, y: "def"}
+	if l_s7_3 == r_s7_3 {
+		return 8
+	}
+
+	s_n7_4 := "a"
+	s_n7_4 += "bc"
+	l_s7_4 := S7{x: 4, y: "abc"}
+	r_s7_4 := S7{x: 4, y: s_n7_4}
+	if l_s7_4 != r_s7_4 {
+		return 9
+	}
+
+	l_s8_1 := S8{x: 5, y: nil}
+	r_s8_1 := S8{x: 5, y: nil}
+	if l_s8_1 != r_s8_1 {
+		return 10
+	}
+
+	s_n8_2 := "abc"
+	l_s8_2 := S8{x: 5, y: &s_n8_2}
+	r_s8_2 := S8{x: 5, y: &s_n8_2}
+	if l_s8_2 != r_s8_2 {
+		return 11
+	}
+
+	s_n8_3 := "abc"
+	l_s8_3 := S8{x: 5, y: &s_n8_2}
+	r_s8_3 := S8{x: 5, y: &s_n8_3}
+	if l_s8_3 == r_s8_3 {
+		return 12
+	}
+
+	return 21
+}
+
 func main() {
 	runTest := func(test func() int) {
 		funcFullName := runtime.FuncForPC(reflect.ValueOf(test).Pointer()).Name()
@@ -226,4 +335,5 @@ func main() {
 	runTest(Test18)
 	runTest(Test19)
 	runTest(Test20)
+	runTest(Test21)
 }

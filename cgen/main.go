@@ -1451,9 +1451,16 @@ bool equal_InterfaceNonEmpty(Interface* lhs, Interface* rhs) {
 		body += "\tassert(lhs != NULL);\n"
 		body += "\tassert(rhs != NULL);\n"
 		if typ == underlyingType {
-			switch typ.(type) {
+			switch t := typ.(type) {
 			case *types.Basic, *types.Interface, *types.Map:
 				return
+			case *types.Struct:
+				for i := 0; i < t.NumFields(); i++ {
+					field := t.Field(i)
+					name := field.Name()
+					body += fmt.Sprintf("if (!equal_%s(&lhs->%s, &rhs->%s)) { return false; } // %s\n", createTypeName(field.Type()), name, name, field)
+				}
+				body += "return true;"
 			default:
 				body += "return memcmp(lhs, rhs, sizeof(*lhs)) == 0;"
 			}
