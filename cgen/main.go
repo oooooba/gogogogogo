@@ -1447,28 +1447,29 @@ bool equal_InterfaceNonEmpty(Interface* lhs, Interface* rhs) {
 	ctx.visitAllTypes(ctx.program, func(typ types.Type) {
 		typeName := createTypeName(typ)
 		underlyingType := typ.Underlying()
-		var expr string
+		var body = ""
+		body += "\tassert(lhs != NULL);\n"
+		body += "\tassert(rhs != NULL);\n"
 		if typ == underlyingType {
 			switch typ.(type) {
 			case *types.Basic, *types.Interface, *types.Map:
 				return
+			default:
+				body += "return memcmp(lhs, rhs, sizeof(*lhs)) == 0;"
 			}
-			expr = "memcmp(lhs, rhs, sizeof(*lhs)) == 0"
 		} else {
 			if t, ok := underlyingType.(*types.Interface); ok {
 				if t.Empty() {
-					expr = "equal_InterfaceEmpty(lhs, rhs)"
+					body = "return equal_InterfaceEmpty(lhs, rhs);\n"
 				} else {
-					expr = "equal_InterfaceNonEmpty(lhs, rhs)"
+					body = "return equal_InterfaceNonEmpty(lhs, rhs);\n"
 				}
 			} else {
-				expr = fmt.Sprintf("equal_%s(lhs, rhs)", createTypeName(underlyingType))
+				body += fmt.Sprintf("return equal_%s(lhs, rhs);\n", createTypeName(underlyingType))
 			}
 		}
 		fmt.Fprintf(ctx.stream, "bool equal_%s(%s* lhs, %s* rhs) { // %s\n", typeName, typeName, typeName, typ)
-		fmt.Fprintf(ctx.stream, "\tassert(lhs != NULL);\n")
-		fmt.Fprintf(ctx.stream, "\tassert(rhs != NULL);\n")
-		fmt.Fprintf(ctx.stream, "\treturn %s;\n", expr)
+		fmt.Fprintf(ctx.stream, "%s", body)
 		fmt.Fprintf(ctx.stream, "}\n")
 	})
 }
