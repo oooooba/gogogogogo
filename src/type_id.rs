@@ -2,6 +2,7 @@ use std::slice;
 
 use super::api::StringObject;
 use super::interface::InterfaceTableEntry;
+use super::ObjectPtr;
 
 #[repr(C)]
 struct TypeInfo {
@@ -9,6 +10,7 @@ struct TypeInfo {
     num_methods: usize,
     interface_table: *const InterfaceTableEntry,
     is_equal: *const (), // ToDo: unimplemented
+    hash: extern "C" fn(ObjectPtr) -> usize,
     size: usize,
 }
 
@@ -29,5 +31,10 @@ impl TypeId {
     pub fn size(&self) -> usize {
         let type_info = self.type_info();
         type_info.size
+    }
+
+    pub fn hash_func(&self) -> extern "C" fn(ObjectPtr) -> usize {
+        let type_info = self.type_info();
+        type_info.hash
     }
 }

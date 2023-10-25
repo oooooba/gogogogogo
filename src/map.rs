@@ -7,15 +7,12 @@ use super::{ObjectAllocator, ObjectPtr};
 
 struct Key {
     ptr: ObjectPtr,
-    _type_id: TypeId,
+    type_id: TypeId,
 }
 
 impl Key {
     fn new(ptr: ObjectPtr, type_id: TypeId) -> Self {
-        Self {
-            ptr,
-            _type_id: type_id,
-        }
+        Self { ptr, type_id }
     }
 }
 
@@ -31,8 +28,9 @@ impl Eq for Key {}
 
 impl Hash for Key {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        let v = *self.ptr.as_ref::<usize>();
-        v.hash(state);
+        let hash_func = self.type_id.hash_func();
+        let h = hash_func(self.ptr.clone());
+        h.hash(state); // ToDo: use h as hash value
     }
 }
 

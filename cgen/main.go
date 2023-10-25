@@ -1329,6 +1329,7 @@ func (ctx *Context) emitTypeInfo() {
 		fmt.Fprintf(ctx.stream, ".num_methods = %s,\n", numMethods)
 		fmt.Fprintf(ctx.stream, ".interface_table = %s,\n", interfaceTable)
 		fmt.Fprintf(ctx.stream, ".is_equal = equal_%s,\n", createTypeName(typ))
+		fmt.Fprintf(ctx.stream, ".hash = hash_%s,\n", createTypeName(typ))
 		fmt.Fprintf(ctx.stream, ".size = sizeof(%s),\n", createTypeName(typ))
 		fmt.Fprintf(ctx.stream, "};\n")
 	})
@@ -1476,6 +1477,128 @@ bool equal_InterfaceNonEmpty(Interface* lhs, Interface* rhs) {
 			}
 		}
 		fmt.Fprintf(ctx.stream, "bool equal_%s(%s* lhs, %s* rhs) { // %s\n", typeName, typeName, typeName, typ)
+		fmt.Fprintf(ctx.stream, "%s", body)
+		fmt.Fprintf(ctx.stream, "}\n")
+	})
+}
+
+func (ctx *Context) emitHashFunctionDeclaration() {
+	builtinTypes := []string{
+		"Bool", "Float32", "Float64",
+		"Int", "Int8", "Int16", "Int32", "Int64",
+		"UnsafePointer",
+		"Uint", "Uint8", "Uint16", "Uint32", "Uint64",
+	}
+	for _, bt := range builtinTypes {
+		fmt.Fprintf(ctx.stream, "uintptr_t hash_%sObject(%sObject* obj);", bt, bt)
+	}
+	fmt.Fprintf(ctx.stream, `
+uintptr_t hash_Value(Value* obj);
+uintptr_t hash_Func(Func* obj);
+uintptr_t hash_StringObject(StringObject* obj);
+uintptr_t hash_MapObject(MapObject* obj);
+uintptr_t hash_Interface(Interface* obj);
+`)
+	ctx.visitAllTypes(ctx.program, func(typ types.Type) {
+		typeName := createTypeName(typ)
+		switch typ.(type) {
+		case *types.Basic, *types.Interface, *types.Map:
+			return
+		}
+		fmt.Fprintf(ctx.stream, "uintptr_t hash_%s(%s* obj); // %s\n", typeName, typeName, typ)
+	})
+}
+
+func (ctx *Context) emitHashFunctionDefinition() {
+	builtinTypes := []string{
+		"Bool", "Float32", "Float64",
+		"Int", "Int8", "Int16", "Int32", "Int64",
+		"UnsafePointer",
+		"Uint", "Uint8", "Uint16", "Uint32", "Uint64",
+	}
+	for _, bt := range builtinTypes {
+		fmt.Fprintf(ctx.stream, `
+		uintptr_t hash_%sObject(%sObject* obj) {
+			return (uintptr_t)obj->raw;
+		}
+		`, bt, bt)
+	}
+	fmt.Fprintf(ctx.stream, `
+uintptr_t hash_Value(Value* obj) {
+	assert(obj != NULL);
+	assert(false); /// not implemented
+	return 0;
+}
+
+uintptr_t hash_Func(Func* obj) {
+	assert(obj != NULL);
+	assert(false); /// not implemented
+	return 0;
+}
+
+uintptr_t hash_StringObject(StringObject* obj) {
+	assert(obj != NULL);
+	assert(false); /// not implemented
+	return 0;
+}
+
+uintptr_t hash_MapObject(MapObject* obj) {
+	assert(obj != NULL);
+	assert(false); /// not implemented
+	return 0;
+}
+
+uintptr_t hash_Interface(Interface* obj) {
+	(void)obj;
+	assert(false); /// not implemented
+	return 0;
+}
+
+uintptr_t hash_InterfaceEmpty(Interface* obj) {
+	assert(obj!=NULL);
+	assert(false); /// not implemented
+	return 0;
+}
+
+uintptr_t hash_InterfaceNonEmpty(Interface* obj) {
+	assert(obj!=NULL);
+	assert(false); /// not implemented
+	return 0;
+}
+`)
+	ctx.visitAllTypes(ctx.program, func(typ types.Type) {
+		typeName := createTypeName(typ)
+		underlyingType := typ.Underlying()
+		var body = ""
+		body += "\tassert(obj != NULL);\n"
+		if typ == underlyingType {
+			switch t := typ.(type) {
+			case *types.Basic, *types.Interface, *types.Map:
+				return
+			case *types.Struct:
+				body += "uintptr_t hash = 0;\n"
+				for i := 0; i < t.NumFields(); i++ {
+					field := t.Field(i)
+					name := field.Name()
+					body += fmt.Sprintf("hash += hash_%s(&obj->%s); // %s\n", createTypeName(field.Type()), name, field)
+				}
+				body += "return hash;\n"
+			default:
+				body += "assert(false); /// not implemented\n"
+				body += "return 0;\n"
+			}
+		} else {
+			if t, ok := underlyingType.(*types.Interface); ok {
+				if t.Empty() {
+					body = "return hash_InterfaceEmpty(obj);\n"
+				} else {
+					body = "return hash_InterfaceNonEmpty(obj);\n"
+				}
+			} else {
+				body += fmt.Sprintf("return hash_%s(obj);\n", createTypeName(underlyingType))
+			}
+		}
+		fmt.Fprintf(ctx.stream, "uintptr_t hash_%s(%s* obj) { // %s\n", typeName, typeName, typ)
 		fmt.Fprintf(ctx.stream, "%s", body)
 		fmt.Fprintf(ctx.stream, "}\n")
 	})
@@ -1905,6 +2028,7 @@ typedef struct TypeInfo {
 	uintptr_t num_methods;
 	const InterfaceTableEntry* interface_table;
 	void* is_equal;
+	void* hash;
 	uintptr_t size;
 } TypeInfo;
 
@@ -2134,6 +2258,7 @@ FunctionObject gox5_search_method(Interface* interface, StringObject method_name
 
 	ctx.emitType()
 	ctx.emitEqualFunctionDeclaration()
+	ctx.emitHashFunctionDeclaration()
 
 	mainPkg := findMainPackage(program)
 
@@ -2151,6 +2276,7 @@ FunctionObject gox5_search_method(Interface* interface, StringObject method_name
 	}
 
 	ctx.emitEqualFunctionDefinition()
+	ctx.emitHashFunctionDefinition()
 	ctx.emitInterfaceTable()
 	ctx.emitTypeInfo()
 
