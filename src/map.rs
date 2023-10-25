@@ -18,9 +18,8 @@ impl Key {
 
 impl PartialEq for Key {
     fn eq(&self, other: &Self) -> bool {
-        let lhs = self.ptr.as_ref::<usize>();
-        let rhs = other.ptr.as_ref::<usize>();
-        lhs == rhs
+        let is_equal_func = self.type_id.is_equal_func();
+        is_equal_func(self.ptr.clone(), other.ptr.clone())
     }
 }
 
