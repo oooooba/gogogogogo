@@ -669,6 +669,14 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 			}
 		case *types.Map:
 			result := createValueRelName(instr)
+			var keyId string
+			if key, ok := instr.Index.(*ssa.Const); ok {
+				keyId = fmt.Sprintf("frame->tmp_%p", key)
+				fmt.Fprintf(ctx.stream, "%s = %s;\n", keyId, createValueRelName(key))
+			} else {
+				keyId = createValueRelName(instr.Index)
+			}
+			key := fmt.Sprintf("&%s", keyId)
 			var value, found string
 			if instr.CommaOk {
 				value = fmt.Sprintf("&%s.raw.e0", result)
@@ -679,7 +687,7 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 			}
 			ctx.switchFunctionToCallRuntimeApi("gox5_map_get", "StackFrameMapGet", createInstructionName(instr), nil, nil,
 				paramArgPair{param: "map", arg: createValueRelName(instr.X)},
-				paramArgPair{param: "key", arg: createValueRelName(instr.Index)},
+				paramArgPair{param: "key", arg: key},
 				paramArgPair{param: "value", arg: value},
 				paramArgPair{param: "found", arg: found},
 			)
@@ -745,10 +753,24 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 		)
 
 	case *ssa.MapUpdate:
+		var keyId string
+		if key, ok := instr.Key.(*ssa.Const); ok {
+			keyId = fmt.Sprintf("frame->tmp_%p", key)
+			fmt.Fprintf(ctx.stream, "%s = %s;\n", keyId, createValueRelName(key))
+		} else {
+			keyId = createValueRelName(instr.Key)
+		}
+		var valueId string
+		if value, ok := instr.Value.(*ssa.Const); ok {
+			valueId = fmt.Sprintf("frame->tmp_%p", value)
+			fmt.Fprintf(ctx.stream, "%s = %s;\n", valueId, createValueRelName(value))
+		} else {
+			valueId = createValueRelName(instr.Value)
+		}
 		ctx.switchFunctionToCallRuntimeApi("gox5_map_set", "StackFrameMapSet", createInstructionName(instr), nil, nil,
 			paramArgPair{param: "map", arg: createValueRelName(instr.Map)},
-			paramArgPair{param: "key", arg: createValueRelName(instr.Key)},
-			paramArgPair{param: "value", arg: createValueRelName(instr.Value)},
+			paramArgPair{param: "key", arg: fmt.Sprintf("&%s", keyId)},
+			paramArgPair{param: "value", arg: fmt.Sprintf("&%s", valueId)},
 		)
 
 	case *ssa.Panic:
@@ -964,6 +986,12 @@ func (ctx *Context) emitValueDeclaration(value ssa.Value) {
 	case *ssa.Lookup:
 		ctx.emitValueDeclaration(val.X)
 		ctx.emitValueDeclaration(val.Index)
+		if _, ok := val.X.Type().Underlying().(*types.Map); ok {
+			if key, ok := val.Index.(*ssa.Const); ok {
+				id := fmt.Sprintf("tmp_%p", key)
+				fmt.Fprintf(ctx.stream, "\t%s %s; // %s : %s\n", createTypeName(key.Type()), id, key, key.Type())
+			}
+		}
 
 	case *ssa.MakeChan:
 		ctx.emitValueDeclaration(val.Size)
@@ -1176,6 +1204,17 @@ func (ctx *Context) emitFunctionDeclaration(function *ssa.Function) {
 			for _, instr := range basicBlock.Instrs {
 				if value, ok := instr.(ssa.Value); ok {
 					ctx.emitValueDeclaration(value)
+				}
+				switch instr := instr.(type) {
+				case *ssa.MapUpdate:
+					if key, ok := instr.Key.(*ssa.Const); ok {
+						id := fmt.Sprintf("tmp_%p", key)
+						fmt.Fprintf(ctx.stream, "\t%s %s; // %s : %s\n", createTypeName(key.Type()), id, key, key.Type())
+					}
+					if value, ok := instr.Value.(*ssa.Const); ok {
+						id := fmt.Sprintf("tmp_%p", value)
+						fmt.Fprintf(ctx.stream, "\t%s %s; // %s : %s\n", createTypeName(value.Type()), id, value, value.Type())
+					}
 				}
 			}
 		}
@@ -2115,7 +2154,7 @@ DECLARE_RUNTIME_API(make_string_from_rune_slice, StackFrameMakeStringFromRuneSli
 typedef struct {
 	StackFrameCommon common;
 	MapObject map;
-	IntObject key;
+	void* key;
 	void* value;
 	bool* found;
 } StackFrameMapGet;
@@ -2131,8 +2170,8 @@ DECLARE_RUNTIME_API(map_len, StackFrameMapLen);
 typedef struct {
 	StackFrameCommon common;
 	MapObject map;
-	IntObject key;
-	IntObject value;
+	void* key;
+	void* value;
 } StackFrameMapSet;
 DECLARE_RUNTIME_API(map_set, StackFrameMapSet);
 

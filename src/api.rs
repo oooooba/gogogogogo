@@ -557,27 +557,25 @@ pub fn make_string_from_rune_slice(ctx: &mut LightWeightThreadContext) -> Functi
 struct StackFrameMapGet {
     common: StackFrameCommon,
     map: ObjectPtr,
-    key: usize,
+    key: ObjectPtr,
     value: ObjectPtr,
     found: ObjectPtr,
 }
 
 pub fn map_get(ctx: &mut LightWeightThreadContext) -> FunctionObject {
-    let (mut map_ptr, key, value_ptr, mut found_ptr) = unsafe {
+    let (mut map, key, value, mut found_ptr) = unsafe {
         let stack_frame = &ctx.stack_frame().map_get;
         (
             stack_frame.map.clone(),
-            stack_frame.key,
+            stack_frame.key.clone(),
             stack_frame.value.clone(),
             stack_frame.found.clone(),
         )
     };
-    if map_ptr.is_null() {
+    if map.is_null() {
         unimplemented!()
     };
-    let map = map_ptr.as_mut::<Map>();
-    let key = ObjectPtr(&key as *const usize as *mut ());
-    let value = value_ptr.clone();
+    let map = map.as_mut::<Map>();
     let found = map.get(key, value);
     if found_ptr.is_null() {
         assert!(found);
@@ -616,28 +614,26 @@ pub fn map_len(ctx: &mut LightWeightThreadContext) -> FunctionObject {
 struct StackFrameMapSet {
     common: StackFrameCommon,
     map: ObjectPtr,
-    key: usize,
-    value: usize,
+    key: ObjectPtr,
+    value: ObjectPtr,
 }
 
 pub fn map_set(ctx: &mut LightWeightThreadContext) -> FunctionObject {
-    let (mut map_ptr, key, value) = unsafe {
+    let (mut map, key, value) = unsafe {
         let stack_frame = &ctx.stack_frame().map_set;
         (
             stack_frame.map.clone(),
-            &stack_frame.key,
-            &stack_frame.value,
+            stack_frame.key.clone(),
+            stack_frame.value.clone(),
         )
     };
-    if map_ptr.is_null() {
+    if map.is_null() {
         unimplemented!()
     } else {
         ctx.global_context().process(|mut global_context| {
-            let key = ObjectPtr(key as *const usize as *mut ());
-            let value = ObjectPtr(value as *const usize as *mut ());
-            let map = map_ptr.as_mut::<Map>();
+            let map = map.as_mut::<Map>();
             let allocator = global_context.allocator();
-            map.set(key, value, allocator);
+            map.set(key.clone(), value.clone(), allocator);
         });
     };
     leave_runtime_api(ctx)
