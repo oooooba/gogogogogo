@@ -178,6 +178,8 @@ func createTypeName(typ types.Type) string {
 				return fmt.Sprintf("Int32Object")
 			case types.Int64:
 				return fmt.Sprintf("Int64Object")
+			case types.Invalid:
+				return fmt.Sprintf("InvalidObject")
 			case types.String:
 				return fmt.Sprintf("StringObject")
 			case types.UnsafePointer:
@@ -222,6 +224,10 @@ func createTypeName(typ types.Type) string {
 			}
 			name += ">"
 			return name
+		default:
+			if typ.String() == "iter" {
+				return "IterObject"
+			}
 		}
 		panic(fmt.Sprintf("type not supported: %s", typ.String()))
 	}
@@ -773,6 +779,27 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 			paramArgPair{param: "value", arg: fmt.Sprintf("&%s", valueId)},
 		)
 
+	case *ssa.Next:
+		result := createValueRelName(instr)
+		iter := fmt.Sprintf("%s", createValueRelName(instr.Iter))
+		mp := fmt.Sprintf("%s.obj", iter)
+		key := fmt.Sprintf("&%s.raw.e1", result)
+		var value string
+		if instr.Type().(*types.Tuple).At(2).Type().(*types.Basic).Kind() == types.Invalid {
+			value = "NULL"
+		} else {
+			value = fmt.Sprintf("&%s.raw.e2", result)
+		}
+		found := fmt.Sprintf("&%s.raw.e0.raw", result)
+		count := fmt.Sprintf("&%s.count", iter)
+		ctx.switchFunctionToCallRuntimeApi("gox5_map_next", "StackFrameMapNext", createInstructionName(instr), nil, nil,
+			paramArgPair{param: "map", arg: mp},
+			paramArgPair{param: "key", arg: key},
+			paramArgPair{param: "value", arg: value},
+			paramArgPair{param: "found", arg: found},
+			paramArgPair{param: "count", arg: count},
+		)
+
 	case *ssa.Panic:
 		fmt.Fprintf(ctx.stream, "fprintf(stderr, \"panic\\n\");\n")
 		fmt.Fprintf(ctx.stream, "assert(false);\n")
@@ -784,6 +811,9 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 				ctx.latestNameMap[basicBlock.Preds[i]], createValueRelName(instr), createValueRelName(edge))
 		}
 		fmt.Fprintln(ctx.stream, "\t{ assert(false); }")
+
+	case *ssa.Range:
+		fmt.Fprintf(ctx.stream, "%s = (IterObject){.obj = %s};\n", createValueRelName(instr), createValueRelName(instr.X))
 
 	case *ssa.Return:
 		fmt.Fprintf(ctx.stream, "ctx->stack_pointer = frame->common.prev_stack_pointer;\n")
@@ -1017,6 +1047,9 @@ func (ctx *Context) emitValueDeclaration(value ssa.Value) {
 			ctx.emitValueDeclaration(val.Reserve)
 		}
 
+	case *ssa.Next:
+		ctx.emitValueDeclaration(val.Iter)
+
 	case *ssa.Parameter:
 		canEmit = false
 
@@ -1024,6 +1057,9 @@ func (ctx *Context) emitValueDeclaration(value ssa.Value) {
 		for _, edge := range val.Edges {
 			ctx.emitValueDeclaration(edge)
 		}
+
+	case *ssa.Range:
+		ctx.emitValueDeclaration(val.X)
 
 	case *ssa.Slice:
 		ctx.emitValueDeclaration(val.X)
@@ -1080,6 +1116,8 @@ func requireSwitchFunction(instruction ssa.Instruction) bool {
 	case *ssa.Lookup:
 		_, ok := t.X.Type().Underlying().(*types.Map)
 		return ok
+	case *ssa.Next:
+		return true
 	case *ssa.Slice:
 		if dstType, ok := t.Type().(*types.Basic); ok && dstType.Kind() == types.String {
 			return true
@@ -1296,6 +1334,10 @@ func (ctx *Context) emitType() {
 			fmt.Fprintf(ctx.stream, "typedef union %s %s; // %s\n", name, name, typ)
 
 		default:
+			if typ.String() == "iter" {
+				return
+			}
+
 			panic(fmt.Sprintf("not implemented: %s %T", typ, typ))
 		}
 	})
@@ -1352,6 +1394,10 @@ union %s { // %s
 			fmt.Fprintf(ctx.stream, "};\n")
 
 		default:
+			if typ.String() == "iter" {
+				return
+			}
+
 			panic(fmt.Sprintf("not implemented: %s %T", typ, typ))
 		}
 	})
@@ -1387,6 +1433,7 @@ func (ctx *Context) emitEqualFunctionDeclaration() {
 	fmt.Fprintf(ctx.stream, `
 bool equal_Value(Value* lhs, Value* rhs);
 bool equal_Func(Func* lhs, Func* rhs);
+bool equal_InvalidObject(InvalidObject* lhs, InvalidObject* rhs);
 bool equal_StringObject(StringObject* lhs, StringObject* rhs);
 bool equal_MapObject(MapObject* lhs, MapObject* rhs);
 bool equal_Interface(Interface* lhs, Interface* rhs);
@@ -1426,6 +1473,12 @@ bool equal_Func(Func* lhs, Func* rhs) {
 	assert(lhs != NULL);
 	assert(rhs != NULL);
 	return memcmp(lhs, rhs, sizeof(*lhs)) == 0;
+}
+
+bool equal_InvalidObject(InvalidObject* lhs, InvalidObject* rhs) {
+	assert(lhs != NULL);
+	assert(rhs != NULL);
+	return true;
 }
 
 bool equal_StringObject(StringObject* lhs, StringObject* rhs) {
@@ -1534,6 +1587,7 @@ func (ctx *Context) emitHashFunctionDeclaration() {
 	fmt.Fprintf(ctx.stream, `
 uintptr_t hash_Value(Value* obj);
 uintptr_t hash_Func(Func* obj);
+uintptr_t hash_InvalidObject(InvalidObject* obj);
 uintptr_t hash_StringObject(StringObject* obj);
 uintptr_t hash_MapObject(MapObject* obj);
 uintptr_t hash_Interface(Interface* obj);
@@ -1570,6 +1624,12 @@ uintptr_t hash_Value(Value* obj) {
 }
 
 uintptr_t hash_Func(Func* obj) {
+	assert(obj != NULL);
+	assert(false); /// not implemented
+	return 0;
+}
+
+uintptr_t hash_InvalidObject(InvalidObject* obj) {
 	assert(obj != NULL);
 	assert(false); /// not implemented
 	return 0;
@@ -1916,6 +1976,11 @@ func (ctx *Context) visitAllTypes(program *ssa.Program, procedure func(typ types
 			}
 
 		default:
+			if typ.String() == "iter" {
+				/// iterator of map or string
+				return
+			}
+
 			panic(fmt.Sprintf("not implemented: %s %T", typ, typ))
 		}
 
@@ -2043,6 +2108,15 @@ typedef struct {
 	void* raw;
 } MapObject;
 
+typedef struct {
+	void* raw;
+} InvalidObject;
+
+typedef struct {
+	MapObject obj;
+	uintptr_t count;
+} IterObject;
+
 typedef struct StackFrameCommon {
 	FunctionObject resume_func;
 	struct StackFrameCommon* prev_stack_pointer;
@@ -2166,6 +2240,16 @@ typedef struct {
 	MapObject map;
 } StackFrameMapLen;
 DECLARE_RUNTIME_API(map_len, StackFrameMapLen);
+
+typedef struct {
+	StackFrameCommon common;
+	MapObject map;
+	void* key;
+	void* value;
+	bool* found;
+	uintptr_t* count;
+} StackFrameMapNext;
+DECLARE_RUNTIME_API(map_next, StackFrameMapNext);
 
 typedef struct {
 	StackFrameCommon common;

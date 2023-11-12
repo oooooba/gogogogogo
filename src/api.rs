@@ -611,6 +611,40 @@ pub fn map_len(ctx: &mut LightWeightThreadContext) -> FunctionObject {
 }
 
 #[repr(C)]
+struct StackFrameMapNext {
+    common: StackFrameCommon,
+    map: ObjectPtr,
+    key: ObjectPtr,
+    value: ObjectPtr,
+    found: ObjectPtr,
+    count: ObjectPtr,
+}
+
+pub fn map_next(ctx: &mut LightWeightThreadContext) -> FunctionObject {
+    let (map, key, value, mut found_ptr, mut count) = unsafe {
+        let stack_frame = &ctx.stack_frame().map_next;
+        (
+            stack_frame.map.clone(),
+            stack_frame.key.clone(),
+            stack_frame.value.clone(),
+            stack_frame.found.clone(),
+            stack_frame.count.clone(),
+        )
+    };
+    if map.is_null() {
+        unimplemented!()
+    };
+    let map = map.as_ref::<Map>();
+    let nth = *count.as_ref::<usize>();
+    let found = map.nth(key, value, nth);
+    *found_ptr.as_mut() = found;
+    if found {
+        *count.as_mut() = nth + 1;
+    }
+    leave_runtime_api(ctx)
+}
+
+#[repr(C)]
 struct StackFrameMapSet {
     common: StackFrameCommon,
     map: ObjectPtr,
@@ -942,6 +976,7 @@ pub union StackFrame {
     make_string_from_rune_slice: ManuallyDrop<StackFrameMakeStringFromRuneSlice>,
     map_get: ManuallyDrop<StackFrameMapGet>,
     map_len: ManuallyDrop<StackFrameMapLen>,
+    map_next: ManuallyDrop<StackFrameMapNext>,
     map_set: ManuallyDrop<StackFrameMapSet>,
     new: ManuallyDrop<StackFrameNew>,
     recv: ManuallyDrop<StackFrameRecv>,

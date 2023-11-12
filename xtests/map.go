@@ -77,6 +77,55 @@ func Test5() int {
 	return 5
 }
 
+func Test6() int {
+	m := map[int]int{1: 10, 2: 20, 3: 30}
+	var found [4]bool
+	for k := range m {
+		if !(k == 1 || k == 2 || k == 3) {
+			return k * 10
+		}
+		if found[k] {
+			return k * 100
+		}
+		found[k] = true
+	}
+	if found[0] {
+		return 0
+	}
+	for i := 1; i < 4; i++ {
+		if !found[i] {
+			return i * 1000
+		}
+	}
+	return 6
+}
+
+func Test7() int {
+	m := map[int]int{1: 10, 2: 20, 3: 30}
+	var found [4]bool
+	for k, v := range m {
+		if !(k == 1 || k == 2 || k == 3) {
+			return k * 10
+		}
+		if found[k] {
+			return k * 100
+		}
+		if k*10 != v {
+			return k * 100
+		}
+		found[k] = true
+	}
+	if found[0] {
+		return 0
+	}
+	for i := 1; i < 4; i++ {
+		if !found[i] {
+			return i * 1000
+		}
+	}
+	return 7
+}
+
 func main() {
 	runTest := func(test func() int) {
 		funcFullName := runtime.FuncForPC(reflect.ValueOf(test).Pointer()).Name()
@@ -88,4 +137,6 @@ func main() {
 	runTest(Test3)
 	runTest(Test4)
 	runTest(Test5)
+	runTest(Test6)
+	runTest(Test7)
 }

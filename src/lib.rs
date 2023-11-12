@@ -259,6 +259,11 @@ pub extern "C" fn gox5_map_len(ctx: &mut LightWeightThreadContext) -> FunctionOb
 }
 
 #[no_mangle]
+pub extern "C" fn gox5_map_next(ctx: &mut LightWeightThreadContext) -> FunctionObject {
+    api::map_next(ctx)
+}
+
+#[no_mangle]
 pub extern "C" fn gox5_map_set(ctx: &mut LightWeightThreadContext) -> FunctionObject {
     api::map_set(ctx)
 }
