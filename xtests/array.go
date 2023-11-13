@@ -121,6 +121,52 @@ func Test12() int {
 	return 12
 }
 
+func Test13() int {
+	a := [5]int{0, 2, 4, 6, 8}
+	var found [5]bool
+	for i := range a {
+		if i >= 5 {
+			return 0
+		}
+		if found[i] {
+			return (i + 1) * 10
+		}
+		if i*2 != a[i] {
+			return (i + 1) * 100
+		}
+		found[i] = true
+	}
+	for i := 0; i < 5; i++ {
+		if !found[i] {
+			return (i + 1) * 1000
+		}
+	}
+	return 13
+}
+
+func Test14() int {
+	a := [5]int{0, 2, 4, 6, 8}
+	var found [5]bool
+	for i, x := range a {
+		if i >= 5 {
+			return 0
+		}
+		if found[i] {
+			return (i + 1) * 10
+		}
+		if i*2 != x {
+			return (i + 1) * 100
+		}
+		found[i] = true
+	}
+	for i := 0; i < 5; i++ {
+		if !found[i] {
+			return (i + 1) * 1000
+		}
+	}
+	return 14
+}
+
 func main() {
 	runTest := func(test func() int) {
 		funcFullName := runtime.FuncForPC(reflect.ValueOf(test).Pointer()).Name()
@@ -139,4 +185,6 @@ func main() {
 	runTest(Test10)
 	runTest(Test11)
 	runTest(Test12)
+	runTest(Test13)
+	runTest(Test14)
 }

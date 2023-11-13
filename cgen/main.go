@@ -597,6 +597,16 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 		fmt.Fprintf(ctx.stream, "%s* raw = &(%s.raw->%s);\n", createTypeName(instr.Type().(*types.Pointer).Elem()), createValueRelName(instr.X), instr.X.Type().(*types.Pointer).Elem().Underlying().(*types.Struct).Field(instr.Field).Name())
 		fmt.Fprintf(ctx.stream, "%s = %s;\n", createValueRelName(instr), wrapInObject("raw", instr.Type()))
 
+	case *ssa.Index:
+		fmt.Fprintf(ctx.stream, "uintptr_t index = %s.raw;\n", createValueRelName(instr.Index))
+		switch t := instr.X.Type().(type) {
+		case *types.Array:
+			fmt.Fprintf(ctx.stream, "%s val = %s.raw[index];\n", createTypeName(t.Elem()), createValueRelName(instr.X))
+		default:
+			panic(fmt.Sprintf("%s, %s, %s", instr, instr.X, t))
+		}
+		fmt.Fprintf(ctx.stream, "%s = val;\n", createValueRelName(instr))
+
 	case *ssa.IndexAddr:
 		fmt.Fprintf(ctx.stream, "uintptr_t index = %s.raw;\n", createValueRelName(instr.Index))
 		switch t := instr.X.Type().(type) {
@@ -1008,6 +1018,10 @@ func (ctx *Context) emitValueDeclaration(value ssa.Value) {
 
 	case *ssa.Function:
 		canEmit = false
+
+	case *ssa.Index:
+		ctx.emitValueDeclaration(val.X)
+		ctx.emitValueDeclaration(val.Index)
 
 	case *ssa.IndexAddr:
 		ctx.emitValueDeclaration(val.X)
