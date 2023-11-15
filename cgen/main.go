@@ -593,6 +593,10 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 	case *ssa.Extract:
 		fmt.Fprintf(ctx.stream, "%s = %s.raw.e%d;\n", createValueRelName(instr), createValueRelName(instr.Tuple), instr.Index)
 
+	case *ssa.Field:
+		fmt.Fprintf(ctx.stream, "%s val = %s.%s;\n", createTypeName(instr.Type()), createValueRelName(instr.X), instr.X.Type().Underlying().(*types.Struct).Field(instr.Field).Name())
+		fmt.Fprintf(ctx.stream, "%s = val;\n", createValueRelName(instr))
+
 	case *ssa.FieldAddr:
 		fmt.Fprintf(ctx.stream, "%s* raw = &(%s.raw->%s);\n", createTypeName(instr.Type().(*types.Pointer).Elem()), createValueRelName(instr.X), instr.X.Type().(*types.Pointer).Elem().Underlying().(*types.Struct).Field(instr.Field).Name())
 		fmt.Fprintf(ctx.stream, "%s = %s;\n", createValueRelName(instr), wrapInObject("raw", instr.Type()))
@@ -1006,6 +1010,9 @@ func (ctx *Context) emitValueDeclaration(value ssa.Value) {
 
 	case *ssa.Extract:
 		ctx.emitValueDeclaration(val.Tuple)
+
+	case *ssa.Field:
+		ctx.emitValueDeclaration(val.X)
 
 	case *ssa.FieldAddr:
 		ctx.emitValueDeclaration(val.X)

@@ -126,6 +126,33 @@ func Test7() int {
 	return 7
 }
 
+type S struct {
+	x int
+	y int
+}
+
+func Test8() int {
+	m := map[S]S{}
+	if len(m) != 0 {
+		return 0
+	}
+	s := S{x: 1, y: 2}
+	m[s] = s
+	if len(m) != 1 {
+		return 1
+	}
+	if m[s] != s {
+		return 2
+	}
+	if m[s].x != 1 {
+		return 3
+	}
+	if m[s].y != 2 {
+		return 4
+	}
+	return 8
+}
+
 func main() {
 	runTest := func(test func() int) {
 		funcFullName := runtime.FuncForPC(reflect.ValueOf(test).Pointer()).Name()
@@ -139,4 +166,5 @@ func main() {
 	runTest(Test5)
 	runTest(Test6)
 	runTest(Test7)
+	runTest(Test8)
 }

@@ -309,6 +309,17 @@ func Test21() int {
 	return 21
 }
 
+type S9 struct {
+	x int
+}
+
+func Test22() int {
+	f := func() S9 {
+		return S9{x: 22}
+	}
+	return f().x
+}
+
 func main() {
 	runTest := func(test func() int) {
 		funcFullName := runtime.FuncForPC(reflect.ValueOf(test).Pointer()).Name()
@@ -336,4 +347,5 @@ func main() {
 	runTest(Test19)
 	runTest(Test20)
 	runTest(Test21)
+	runTest(Test22)
 }
