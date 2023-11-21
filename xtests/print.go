@@ -83,6 +83,16 @@ func Test9() int {
 	return 9
 }
 
+func Test10() int {
+	println(0.0)
+	println(-0.0)
+	println(0.3)
+	println(3.3)
+	println(1.2345678)
+	println(-12.345678)
+	return 10
+}
+
 func main() {
 	runTest := func(test func() int) {
 		funcFullName := runtime.FuncForPC(reflect.ValueOf(test).Pointer()).Name()
@@ -98,4 +108,5 @@ func main() {
 	runTest(Test7)
 	runTest(Test8)
 	runTest(Test9)
+	runTest(Test10)
 }
