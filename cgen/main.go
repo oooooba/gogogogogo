@@ -111,8 +111,8 @@ func createValueName(value ssa.Value) string {
 			cst = val.Value.String()
 			if t, ok := val.Type().Underlying().(*types.Basic); ok {
 				switch t.Kind() {
-				case types.Float32, types.Float64:
-					cst = fmt.Sprintf("%f", val.Float64())
+				case types.Complex64, types.Complex128, types.Float32, types.Float64:
+					cst = fmt.Sprintf("%g", val.Complex128())
 				}
 			}
 		}
