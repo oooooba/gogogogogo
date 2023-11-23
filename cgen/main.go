@@ -164,6 +164,10 @@ func createTypeName(typ types.Type) string {
 			switch t.Kind() {
 			case types.Bool, types.UntypedBool:
 				return fmt.Sprintf("BoolObject")
+			case types.Complex64:
+				return fmt.Sprintf("Complex64Object")
+			case types.Complex128:
+				return fmt.Sprintf("Complex128Object")
 			case types.Float32:
 				return fmt.Sprintf("Float32Object")
 			case types.Float64:
@@ -516,6 +520,14 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 				case "cap":
 					fmt.Fprintf(ctx.stream, "uintptr_t raw = %s.typed.capacity;", createValueRelName(callCommon.Args[0]))
 					raw = "raw"
+
+				case "complex":
+					raw = fmt.Sprintf("%s.raw + %s.raw * I",
+						createValueRelName(callCommon.Args[0]), createValueRelName(callCommon.Args[1]))
+
+				case "imag":
+					raw = fmt.Sprintf("cimag(%s.raw)", createValueRelName(callCommon.Args[0]))
+
 				case "len":
 					switch t := callCommon.Args[0].Type().(type) {
 					case *types.Basic:
@@ -553,6 +565,9 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 						ctx.emitPrint(arg)
 					}
 					fmt.Fprintf(ctx.stream, "fprintf(stderr, \"\\n\");\n")
+
+				case "real":
+					raw = fmt.Sprintf("creal(%s.raw)", createValueRelName(callCommon.Args[0]))
 
 				default:
 					panic(fmt.Sprintf("unsuported builtin function: %s", callee.Name()))
@@ -1464,7 +1479,9 @@ func (ctx *Context) emitTypeInfo() {
 
 func (ctx *Context) emitEqualFunctionDeclaration() {
 	builtinTypes := []string{
-		"Bool", "Float32", "Float64",
+		"Bool",
+		"Complex64", "Complex128",
+		"Float32", "Float64",
 		"Int", "Int8", "Int16", "Int32", "Int64",
 		"UnsafePointer",
 		"Uint", "Uint8", "Uint16", "Uint32", "Uint64",
@@ -1492,7 +1509,9 @@ bool equal_Interface(Interface* lhs, Interface* rhs);
 
 func (ctx *Context) emitEqualFunctionDefinition() {
 	builtinTypes := []string{
-		"Bool", "Float32", "Float64",
+		"Bool",
+		"Complex64", "Complex128",
+		"Float32", "Float64",
 		"Int", "Int8", "Int16", "Int32", "Int64",
 		"UnsafePointer",
 		"Uint", "Uint8", "Uint16", "Uint32", "Uint64",
@@ -1618,7 +1637,9 @@ bool equal_InterfaceNonEmpty(Interface* lhs, Interface* rhs) {
 
 func (ctx *Context) emitHashFunctionDeclaration() {
 	builtinTypes := []string{
-		"Bool", "Float32", "Float64",
+		"Bool",
+		"Complex64", "Complex128",
+		"Float32", "Float64",
 		"Int", "Int8", "Int16", "Int32", "Int64",
 		"UnsafePointer",
 		"Uint", "Uint8", "Uint16", "Uint32", "Uint64",
@@ -1646,7 +1667,9 @@ uintptr_t hash_Interface(Interface* obj);
 
 func (ctx *Context) emitHashFunctionDefinition() {
 	builtinTypes := []string{
-		"Bool", "Float32", "Float64",
+		"Bool",
+		"Complex64", "Complex128",
+		"Float32", "Float64",
 		"Int", "Int8", "Int16", "Int32", "Int64",
 		"UnsafePointer",
 		"Uint", "Uint8", "Uint16", "Uint32", "Uint64",
@@ -2031,7 +2054,7 @@ func (ctx *Context) visitAllTypes(program *ssa.Program, procedure func(typ types
 
 	for _, typ := range types.Typ {
 		switch typ.Kind() {
-		case types.Complex64, types.Complex128, types.Invalid, types.UntypedComplex, types.UntypedFloat, types.UntypedInt, types.UntypedNil, types.UntypedRune, types.UntypedString:
+		case types.Invalid, types.UntypedComplex, types.UntypedFloat, types.UntypedInt, types.UntypedNil, types.UntypedRune, types.UntypedString:
 			continue
 		}
 		f(typ)
@@ -2102,6 +2125,7 @@ func (ctx *Context) emitProgram(program *ssa.Program) {
 #include <stdint.h>
 #include <string.h>
 #include <assert.h>
+#include <complex.h>
 
 #define DECLARE_RUNTIME_API(name, param_type) \
 	FunctionObject (gox5_##name)(LightWeightThreadContext* ctx)
@@ -2123,6 +2147,8 @@ typedef union {
 	typedef struct { raw_type raw; } name ## Object
 
 DEFINE_BUILTIN_OBJECT_TYPE(Bool, bool);
+DEFINE_BUILTIN_OBJECT_TYPE(Complex64, float complex);
+DEFINE_BUILTIN_OBJECT_TYPE(Complex128, double complex);
 DEFINE_BUILTIN_OBJECT_TYPE(Float32, float);
 DEFINE_BUILTIN_OBJECT_TYPE(Float64, double);
 DEFINE_BUILTIN_OBJECT_TYPE(Int, intptr_t);
