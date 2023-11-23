@@ -360,6 +360,12 @@ func (ctx *Context) emitPrint(value ssa.Value) {
 		case types.Bool:
 			fmt.Fprintf(ctx.stream, `fprintf(stderr, "%%s", %s.raw ? "true" : "false");`+"\n", createValueRelName(value))
 			return
+		case types.Complex64, types.Complex128:
+			fmt.Fprintln(ctx.stream, `fprintf(stderr, "(");`)
+			fmt.Fprintf(ctx.stream, "builtin_print_float(creal(%s.raw));\n", createValueRelName(value))
+			fmt.Fprintf(ctx.stream, "builtin_print_float(cimag(%s.raw));\n", createValueRelName(value))
+			fmt.Fprintln(ctx.stream, `fprintf(stderr, "i)");`)
+			return
 		case types.Int:
 			specifier = "ld"
 		case types.Int8, types.Int16, types.Int32:

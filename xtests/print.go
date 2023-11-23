@@ -94,6 +94,12 @@ func Test10() int {
 	return 10
 }
 
+func Test11() int {
+	println(complex(1, 2))
+	println(complex(-3, -4))
+	return 11
+}
+
 func main() {
 	runTest := func(test func() int) {
 		funcFullName := runtime.FuncForPC(reflect.ValueOf(test).Pointer()).Name()
@@ -110,4 +116,5 @@ func main() {
 	runTest(Test8)
 	runTest(Test9)
 	runTest(Test10)
+	runTest(Test11)
 }
