@@ -2061,7 +2061,7 @@ func (ctx *Context) visitAllTypes(program *ssa.Program, procedure func(typ types
 
 	for _, typ := range types.Typ {
 		switch typ.Kind() {
-		case types.Invalid, types.UntypedComplex, types.UntypedFloat, types.UntypedInt, types.UntypedNil, types.UntypedRune, types.UntypedString:
+		case types.Invalid, types.UntypedBool, types.UntypedComplex, types.UntypedFloat, types.UntypedInt, types.UntypedNil, types.UntypedRune, types.UntypedString:
 			continue
 		}
 		f(typ)
