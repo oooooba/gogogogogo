@@ -1423,7 +1423,11 @@ union %s { // %s
 			fmt.Fprintf(ctx.stream, "struct %s { // %s\n", name, typ)
 			for i := 0; i < typ.NumFields(); i++ {
 				field := typ.Field(i)
-				fmt.Fprintf(ctx.stream, "\t%s %s; // %s\n", createTypeName(field.Type()), field.Name(), field)
+				fieldName := field.Name()
+				if fieldName == "_" {
+					fieldName = fmt.Sprintf("_%p", field)
+				}
+				fmt.Fprintf(ctx.stream, "\t%s %s; // %s\n", createTypeName(field.Type()), fieldName, field)
 			}
 			fmt.Fprintf(ctx.stream, "};\n")
 
@@ -1598,6 +1602,9 @@ bool equal_InterfaceNonEmpty(Interface* lhs, Interface* rhs) {
 				for i := 0; i < t.NumFields(); i++ {
 					field := t.Field(i)
 					name := field.Name()
+					if name == "_" {
+						continue
+					}
 					body += fmt.Sprintf("if (!equal_%s(&lhs->%s, &rhs->%s)) { return false; } // %s\n", createTypeName(field.Type()), name, name, field)
 				}
 				body += "return true;"
@@ -1730,6 +1737,9 @@ uintptr_t hash_InterfaceNonEmpty(Interface* obj) {
 				for i := 0; i < t.NumFields(); i++ {
 					field := t.Field(i)
 					name := field.Name()
+					if name == "_" {
+						continue
+					}
 					body += fmt.Sprintf("hash += hash_%s(&obj->%s); // %s\n", createTypeName(field.Type()), name, field)
 				}
 				body += "return hash;\n"

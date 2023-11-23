@@ -320,6 +320,26 @@ func Test22() int {
 	return f().x
 }
 
+type S10 struct {
+	_ int
+	x int
+	_ struct{}
+	y int
+	_ string
+}
+
+func Test23() int {
+	f := func() S10 {
+		return S10{x: 1, y: 2}
+	}
+	s1 := f()
+	s2 := S10{x: 1, y: 2}
+	if s1 != s2 {
+		return 0
+	}
+	return 23
+}
+
 func main() {
 	runTest := func(test func() int) {
 		funcFullName := runtime.FuncForPC(reflect.ValueOf(test).Pointer()).Name()
@@ -348,4 +368,5 @@ func main() {
 	runTest(Test20)
 	runTest(Test21)
 	runTest(Test22)
+	runTest(Test23)
 }
