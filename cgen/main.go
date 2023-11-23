@@ -1801,7 +1801,9 @@ func (ctx *Context) emitRuntimeInfo() {
 	})
 	fmt.Fprintln(ctx.stream, "};")
 
-	init_func_name := "f_S_init"
+	mainPkg := findMainPackage(ctx.program)
+	mainFunctionName := createFunctionName(mainPkg.Members["main"].(*ssa.Function))
+	initFunctionName := createFunctionName(mainPkg.Members["init"].(*ssa.Function))
 
 	fmt.Fprintf(ctx.stream, `
 size_t runtime_info_get_funcs_count(void) {
@@ -1813,21 +1815,13 @@ const Func* runtime_info_refer_func(size_t i) {
 }
 
 UserFunction runtime_info_get_entry_point(void) {
-	return (UserFunction) { .func_ptr = f_S_main };
-}
-
-FunctionObject dummy_init (LightWeightThreadContext* ctx){
-	assert(ctx->marker == 0xdeadbeef);
-	StackFrame_f_S_init* frame = (void*)ctx->stack_pointer;
-	assert(frame->common.free_vars == NULL);
-	ctx->stack_pointer = frame->common.prev_stack_pointer;
-	return frame->common.resume_func;
+	return (UserFunction) { .func_ptr = %s };
 }
 
 UserFunction runtime_info_get_init_point(void) {
 	return (UserFunction) { .func_ptr = %s };
 }
-`, init_func_name)
+`, mainFunctionName, initFunctionName)
 }
 
 func findMainPackage(program *ssa.Program) *ssa.Package {
