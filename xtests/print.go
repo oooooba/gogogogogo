@@ -90,6 +90,7 @@ func Test10() int {
 	println(3.3)
 	println(1.2345678)
 	println(-12.345678)
+	println(1.2345678e123)
 	return 10
 }
 

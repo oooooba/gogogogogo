@@ -370,15 +370,23 @@ func (ctx *Context) emitPrint(value ssa.Value) {
 			specifier = "lu"
 		case types.Float32, types.Float64:
 			fmt.Fprintf(ctx.stream, `{
-	char buf[30];
+	char buf[20];
 	int len = snprintf(buf, sizeof(buf) / sizeof(buf[0]), "%%+.6e", %s.raw);
-	for(; len > 0; --len) {
-		char c = buf[len];
+	int len_e = 0;
+	for(int i = len - 1; i > 0; --i) {
+		char c = buf[i];
 		if(c == '+' || c == '-') break;
-		buf[len + 1] = buf[len];
+		++len_e;
 	}
-	assert(len > 0);
-	buf[len + 1] = '0';
+	if(len_e < 3) {
+		for(; len > 0; --len) {
+			char c = buf[len];
+			if(c == '+' || c == '-') break;
+			buf[len + 1] = c;
+		}
+		assert(len > 0);
+		buf[len + 1] = '0';
+	}
 	fprintf(stderr, "%%s", buf);
 }`, createValueRelName(value))
 			return
