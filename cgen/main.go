@@ -373,28 +373,8 @@ func (ctx *Context) emitPrint(value ssa.Value) {
 		case types.Uint64:
 			specifier = "lu"
 		case types.Float32, types.Float64:
-			fmt.Fprintf(ctx.stream, `{
-	char buf[20];
-	int len = snprintf(buf, sizeof(buf) / sizeof(buf[0]), "%%+.6e", %s.raw);
-	int len_e = 0;
-	for(int i = len - 1; i > 0; --i) {
-		char c = buf[i];
-		if(c == '+' || c == '-') break;
-		++len_e;
-	}
-	if(len_e < 3) {
-		for(; len > 0; --len) {
-			char c = buf[len];
-			if(c == '+' || c == '-') break;
-			buf[len + 1] = c;
-		}
-		assert(len > 0);
-		buf[len + 1] = '0';
-	}
-	fprintf(stderr, "%%s", buf);
-}`, createValueRelName(value))
+			fmt.Fprintf(ctx.stream, "builtin_print_float(%s.raw);\n", createValueRelName(value))
 			return
-
 		case types.String:
 			specifier = "s"
 		default:
@@ -2119,7 +2099,7 @@ func (ctx *Context) visitAllTypes(program *ssa.Program, procedure func(typ types
 }
 
 func (ctx *Context) emitProgram(program *ssa.Program) {
-	fmt.Fprint(ctx.stream, `
+	fmt.Fprintf(ctx.stream, `
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdint.h>
@@ -2445,6 +2425,27 @@ DECLARE_RUNTIME_API(func_for_pc, StackFrameFuncForPc);
 #define f_S_Split gox5_split
 
 FunctionObject gox5_search_method(Interface* interface, StringObject method_name);
+
+__attribute__((unused)) static void builtin_print_float(double val) {
+	char buf[20];
+	int len = snprintf(buf, sizeof(buf) / sizeof(buf[0]), "%%+.6e", val);
+	int len_e = 0;
+	for(int i = len - 1; i > 0; --i) {
+		char c = buf[i];
+		if(c == '+' || c == '-') break;
+		++len_e;
+	}
+	if(len_e < 3) {
+		for(; len > 0; --len) {
+			char c = buf[len];
+			if(c == '+' || c == '-') break;
+			buf[len + 1] = c;
+		}
+		assert(len > 0);
+		buf[len + 1] = '0';
+	}
+	fprintf(stderr, "%%s", buf);
+}
 `)
 
 	ctx.emitType()
