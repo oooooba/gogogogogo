@@ -129,8 +129,9 @@ func createValueName(value ssa.Value) string {
 			}
 		}
 		panic(fmt.Sprintf("unreachable: val=%s, params=%v", val, val.Parent().Params))
-	} else if _, ok := value.(*ssa.Global); ok {
-		return encode(fmt.Sprintf("gv$%s$%p", value.Name(), value))
+	} else if val, ok := value.(*ssa.Global); ok {
+		packageName := createPackageName(val.Package())
+		return encode(fmt.Sprintf("gv$%s$%s$%p", value.Name(), packageName, value))
 	} else {
 		parentName := value.Parent().Name()
 		return encode(fmt.Sprintf("v$%s$%s$%p", value.Name(), parentName, value))
@@ -981,19 +982,33 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 }
 
 func createInstructionName(instruction ssa.Instruction) string {
-	return encode(fmt.Sprintf("i$%s$%s$%p", instruction.Block().String(), instruction.Parent().Name(), instruction))
+	function := instruction.Parent()
+	functionName := function.Name()
+	packageName := createPackageName(function.Package())
+	return encode(fmt.Sprintf("i$%s$%s$%s$%p", instruction.Block().String(), functionName, packageName, instruction))
 }
 
 func createBasicBlockName(basicBlock *ssa.BasicBlock) string {
-	return encode(fmt.Sprintf("b$%s$%s$%p", basicBlock.String(), basicBlock.Parent().Name(), basicBlock))
+	function := basicBlock.Parent()
+	functionName := function.Name()
+	packageName := createPackageName(function.Package())
+	return encode(fmt.Sprintf("b$%s$%s$%s$%p", basicBlock.String(), functionName, packageName, basicBlock))
 }
 
 func createFunctionName(function *ssa.Function) string {
+	packageName := createPackageName(function.Package())
 	methodType := ""
 	if function.Signature.Recv() != nil {
 		methodType = fmt.Sprintf("$%s", createTypeName(function.Signature.Recv().Type()))
 	}
-	return encode(fmt.Sprintf("f$%s%s", function.Name(), methodType))
+	return encode(fmt.Sprintf("f$%s$%s%s", function.Name(), packageName, methodType))
+}
+
+func createPackageName(pkg *ssa.Package) string {
+	if pkg == nil {
+		return "nil"
+	}
+	return pkg.Pkg.Name()
 }
 
 func (ctx *Context) emitCallCommonDeclaration(callCommon *ssa.CallCommon) {
@@ -1807,7 +1822,9 @@ func (ctx *Context) emitGlobalVariable(gv *ssa.Global) {
 func (ctx *Context) emitRuntimeInfo() {
 	fmt.Fprintln(ctx.stream, "Func runtime_info_funcs[] = {")
 	ctx.visitAllFunctions(ctx.program, func(function *ssa.Function) {
-		fmt.Fprintf(ctx.stream, "{ (StringObject){.raw = \"main.%s\" }, (UserFunction){.func_ptr = %s} },\n", function.Name(), createFunctionName(function))
+		packageName := createPackageName(function.Pkg)
+		functionName := function.Name()
+		fmt.Fprintf(ctx.stream, "{ (StringObject){.raw = \"%s.%s\" }, (UserFunction){.func_ptr = %s} },\n", packageName, functionName, createFunctionName(function))
 	})
 	fmt.Fprintln(ctx.stream, "};")
 
@@ -2336,7 +2353,7 @@ typedef struct {
 } StackFrameSchedule;
 DECLARE_RUNTIME_API(schedule, StackFrameSchedule);
 
-#define f_S_Gosched gox5_schedule
+#define f_S_Gosched_S_runtime gox5_schedule
 
 typedef struct {
 	StackFrameCommon common;
@@ -2379,7 +2396,7 @@ typedef struct {
 } StackFrameValueOf;
 DECLARE_RUNTIME_API(value_of, StackFrameValueOf);
 
-#define f_S_ValueOf gox5_value_of
+#define f_S_ValueOf_S_reflect gox5_value_of
 
 // ToDo: WA to handle reflect.Value.Pointer
 
@@ -2390,7 +2407,7 @@ typedef struct {
 } StackFrameValuePointer;
 DECLARE_RUNTIME_API(value_pointer, StackFrameValuePointer);
 
-#define f_S_Pointer_S_Named___lt___Value___gt___ gox5_value_pointer
+#define f_S_Pointer_S_reflect_S_Named___lt___Value___gt___ gox5_value_pointer
 
 // ToDo: WA to handle runtime.FuncForPC
 
@@ -2409,7 +2426,7 @@ typedef struct {
 } StackFrameFuncForPc;
 DECLARE_RUNTIME_API(func_for_pc, StackFrameFuncForPc);
 
-#define f_S_FuncForPC gox5_func_for_pc
+#define f_S_FuncForPC_S_runtime gox5_func_for_pc
 
 // ToDo: WA to handle runtime.Func.Name
 
@@ -2420,7 +2437,7 @@ typedef struct {
 } StackFrameFuncName;
 DECLARE_RUNTIME_API(func_name, StackFrameFuncName);
 
-#define f_S_Name_S_Pointer___lt___Named___lt___Func___gt______gt___ gox5_func_name
+#define f_S_Name_S_runtime_S_Pointer___lt___Named___lt___Func___gt______gt___ gox5_func_name
 
 // ToDo: WA to handle strings.Split
 
@@ -2432,7 +2449,7 @@ typedef struct {
 } StackFrameSplit;
 DECLARE_RUNTIME_API(func_for_pc, StackFrameFuncForPc);
 
-#define f_S_Split gox5_split
+#define f_S_Split_S_strings gox5_split
 
 FunctionObject gox5_search_method(Interface* interface, StringObject method_name);
 
