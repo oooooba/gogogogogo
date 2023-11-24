@@ -275,6 +275,17 @@ func createTypeIdName(typ types.Type) string {
 	return fmt.Sprintf("runtime_info_type_%s", createTypeName(typ))
 }
 
+func createFieldName(field *types.Var) string {
+	rawFieldName := field.Name()
+	disallowedWords := []string{"_", "signed"} // ToDo: add C keywords
+	for _, disallowedWord := range disallowedWords {
+		if rawFieldName == disallowedWord {
+			return fmt.Sprintf("%s_%p", rawFieldName, field)
+		}
+	}
+	return rawFieldName
+}
+
 func (ctx *Context) switchFunction(nextFunction string, callCommon *ssa.CallCommon, result string, resumeFunction string) {
 	fmt.Fprintf(ctx.stream, "StackFrameCommon* next_frame = (StackFrameCommon*)(frame + 1);\n")
 	fmt.Fprintf(ctx.stream, "assert(((uintptr_t)next_frame) %% sizeof(uintptr_t) == 0);\n")
@@ -617,11 +628,13 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 		fmt.Fprintf(ctx.stream, "%s = %s.raw.e%d;\n", createValueRelName(instr), createValueRelName(instr.Tuple), instr.Index)
 
 	case *ssa.Field:
-		fmt.Fprintf(ctx.stream, "%s val = %s.%s;\n", createTypeName(instr.Type()), createValueRelName(instr.X), instr.X.Type().Underlying().(*types.Struct).Field(instr.Field).Name())
+		name := createFieldName(instr.X.Type().Underlying().(*types.Struct).Field(instr.Field))
+		fmt.Fprintf(ctx.stream, "%s val = %s.%s;\n", createTypeName(instr.Type()), createValueRelName(instr.X), name)
 		fmt.Fprintf(ctx.stream, "%s = val;\n", createValueRelName(instr))
 
 	case *ssa.FieldAddr:
-		fmt.Fprintf(ctx.stream, "%s* raw = &(%s.raw->%s);\n", createTypeName(instr.Type().(*types.Pointer).Elem()), createValueRelName(instr.X), instr.X.Type().(*types.Pointer).Elem().Underlying().(*types.Struct).Field(instr.Field).Name())
+		name := createFieldName(instr.X.Type().(*types.Pointer).Elem().Underlying().(*types.Struct).Field(instr.Field))
+		fmt.Fprintf(ctx.stream, "%s* raw = &(%s.raw->%s);\n", createTypeName(instr.Type().(*types.Pointer).Elem()), createValueRelName(instr.X), name)
 		fmt.Fprintf(ctx.stream, "%s = %s;\n", createValueRelName(instr), wrapInObject("raw", instr.Type()))
 
 	case *ssa.Index:
@@ -1438,10 +1451,7 @@ union %s { // %s
 			fmt.Fprintf(ctx.stream, "struct %s { // %s\n", name, typ)
 			for i := 0; i < typ.NumFields(); i++ {
 				field := typ.Field(i)
-				fieldName := field.Name()
-				if fieldName == "_" {
-					fieldName = fmt.Sprintf("_%p", field)
-				}
+				fieldName := createFieldName(field)
 				fmt.Fprintf(ctx.stream, "\t%s %s; // %s\n", createTypeName(field.Type()), fieldName, field)
 			}
 			fmt.Fprintf(ctx.stream, "};\n")
@@ -1602,10 +1612,10 @@ bool equal_InterfaceNonEmpty(Interface* lhs, Interface* rhs) {
 			case *types.Struct:
 				for i := 0; i < t.NumFields(); i++ {
 					field := t.Field(i)
-					name := field.Name()
-					if name == "_" {
+					if field.Name() == "_" {
 						continue
 					}
+					name := createFieldName(field)
 					body += fmt.Sprintf("if (!equal_%s(&lhs->%s, &rhs->%s)) { return false; } // %s\n", createTypeName(field.Type()), name, name, field)
 				}
 				body += "return true;"
@@ -1723,10 +1733,10 @@ uintptr_t hash_InterfaceNonEmpty(Interface* obj) {
 				body += "uintptr_t hash = 0;\n"
 				for i := 0; i < t.NumFields(); i++ {
 					field := t.Field(i)
-					name := field.Name()
-					if name == "_" {
+					if field.Name() == "_" {
 						continue
 					}
+					name := createFieldName(field)
 					body += fmt.Sprintf("hash += hash_%s(&obj->%s); // %s\n", createTypeName(field.Type()), name, field)
 				}
 				body += "return hash;\n"
