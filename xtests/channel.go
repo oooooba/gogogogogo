@@ -1,11 +1,5 @@
 package main
 
-import (
-	"reflect"
-	"runtime"
-	"strings"
-)
-
 func Test1() int {
 	ch := make(chan int)
 	_ = ch
@@ -26,12 +20,10 @@ func Test3() int {
 }
 
 func main() {
-	runTest := func(test func() int) {
-		funcFullName := runtime.FuncForPC(reflect.ValueOf(test).Pointer()).Name()
-		funcName := strings.Split(funcFullName, ".")[1]
-		println(funcName+":", test())
+	runTest := func(testName string, test func() int) {
+		println(testName+":", test())
 	}
-	runTest(Test1)
-	runTest(Test2)
-	runTest(Test3)
+	runTest("Test1", Test1)
+	runTest("Test2", Test2)
+	runTest("Test3", Test3)
 }

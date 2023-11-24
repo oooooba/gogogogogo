@@ -1,11 +1,5 @@
 package main
 
-import (
-	"reflect"
-	"runtime"
-	"strings"
-)
-
 func Test1() int {
 	count := 0
 	if true {
@@ -105,19 +99,17 @@ func Test10() int {
 }
 
 func main() {
-	runTest := func(test func() int) {
-		funcFullName := runtime.FuncForPC(reflect.ValueOf(test).Pointer()).Name()
-		funcName := strings.Split(funcFullName, ".")[1]
-		println(funcName+":", test())
+	runTest := func(testName string, test func() int) {
+		println(testName+":", test())
 	}
-	runTest(Test1)
-	runTest(Test2)
-	runTest(Test3)
-	runTest(Test4)
-	runTest(Test5)
-	runTest(Test6)
-	runTest(Test7)
-	runTest(Test8)
-	runTest(Test9)
-	runTest(Test10)
+	runTest("Test1", Test1)
+	runTest("Test2", Test2)
+	runTest("Test3", Test3)
+	runTest("Test4", Test4)
+	runTest("Test5", Test5)
+	runTest("Test6", Test6)
+	runTest("Test7", Test7)
+	runTest("Test8", Test8)
+	runTest("Test9", Test9)
+	runTest("Test10", Test10)
 }

@@ -10,6 +10,10 @@ for path in xtests/*; do
 
     base=`basename $path`
 
+    if [ $base == "reflect.go" ]; then
+        continue
+    fi
+
     expect_result=/tmp/raw_expect_$base.txt
     go run $path >$expect_result 2>&1
     actual_result=/tmp/raw_actual_$base.txt

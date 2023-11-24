@@ -1,11 +1,5 @@
 package main
 
-import (
-	"reflect"
-	"runtime"
-	"strings"
-)
-
 type I interface {
 	f() int
 }
@@ -641,37 +635,35 @@ func Test28() int {
 }
 
 func main() {
-	runTest := func(test func() int) {
-		funcFullName := runtime.FuncForPC(reflect.ValueOf(test).Pointer()).Name()
-		funcName := strings.Split(funcFullName, ".")[1]
-		println(funcName+":", test())
+	runTest := func(testName string, test func() int) {
+		println(testName+":", test())
 	}
-	runTest(Test1)
-	runTest(Test2)
-	runTest(Test3)
-	runTest(Test4)
-	runTest(Test5)
-	runTest(Test6)
-	runTest(Test7)
-	runTest(Test8)
-	runTest(Test9)
-	runTest(Test10)
-	runTest(Test11)
-	runTest(Test12)
-	runTest(Test13)
-	runTest(Test14)
-	runTest(Test15)
-	runTest(Test16)
-	runTest(Test17)
-	runTest(Test18)
-	runTest(Test19)
-	runTest(Test20)
-	runTest(Test21)
-	runTest(Test22)
-	runTest(Test23)
-	runTest(Test24)
-	runTest(Test25)
-	runTest(Test26)
-	runTest(Test27)
-	runTest(Test28)
+	runTest("Test1", Test1)
+	runTest("Test2", Test2)
+	runTest("Test3", Test3)
+	runTest("Test4", Test4)
+	runTest("Test5", Test5)
+	runTest("Test6", Test6)
+	runTest("Test7", Test7)
+	runTest("Test8", Test8)
+	runTest("Test9", Test9)
+	runTest("Test10", Test10)
+	runTest("Test11", Test11)
+	runTest("Test12", Test12)
+	runTest("Test13", Test13)
+	runTest("Test14", Test14)
+	runTest("Test15", Test15)
+	runTest("Test16", Test16)
+	runTest("Test17", Test17)
+	runTest("Test18", Test18)
+	runTest("Test19", Test19)
+	runTest("Test20", Test20)
+	runTest("Test21", Test21)
+	runTest("Test22", Test22)
+	runTest("Test23", Test23)
+	runTest("Test24", Test24)
+	runTest("Test25", Test25)
+	runTest("Test26", Test26)
+	runTest("Test27", Test27)
+	runTest("Test28", Test28)
 }
