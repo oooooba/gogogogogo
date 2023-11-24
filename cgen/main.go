@@ -1495,8 +1495,6 @@ func (ctx *Context) emitEqualFunctionDeclaration() {
 		fmt.Fprintf(ctx.stream, "bool equal_%sObject(%sObject* lhs, %sObject* rhs);", bt, bt, bt)
 	}
 	fmt.Fprintf(ctx.stream, `
-bool equal_Value(Value* lhs, Value* rhs);
-bool equal_Func(Func* lhs, Func* rhs);
 bool equal_InvalidObject(InvalidObject* lhs, InvalidObject* rhs);
 bool equal_StringObject(StringObject* lhs, StringObject* rhs);
 bool equal_MapObject(MapObject* lhs, MapObject* rhs);
@@ -1529,18 +1527,6 @@ func (ctx *Context) emitEqualFunctionDefinition() {
 		`, bt, bt, bt)
 	}
 	fmt.Fprintf(ctx.stream, `
-bool equal_Value(Value* lhs, Value* rhs) {
-	assert(lhs != NULL);
-	assert(rhs != NULL);
-	return memcmp(lhs, rhs, sizeof(*lhs)) == 0;
-}
-
-bool equal_Func(Func* lhs, Func* rhs) {
-	assert(lhs != NULL);
-	assert(rhs != NULL);
-	return memcmp(lhs, rhs, sizeof(*lhs)) == 0;
-}
-
 bool equal_InvalidObject(InvalidObject* lhs, InvalidObject* rhs) {
 	assert(lhs != NULL);
 	assert(rhs != NULL);
@@ -1656,8 +1642,6 @@ func (ctx *Context) emitHashFunctionDeclaration() {
 		fmt.Fprintf(ctx.stream, "uintptr_t hash_%sObject(%sObject* obj);", bt, bt)
 	}
 	fmt.Fprintf(ctx.stream, `
-uintptr_t hash_Value(Value* obj);
-uintptr_t hash_Func(Func* obj);
 uintptr_t hash_InvalidObject(InvalidObject* obj);
 uintptr_t hash_StringObject(StringObject* obj);
 uintptr_t hash_MapObject(MapObject* obj);
@@ -1690,18 +1674,6 @@ func (ctx *Context) emitHashFunctionDefinition() {
 		`, bt, bt)
 	}
 	fmt.Fprintf(ctx.stream, `
-uintptr_t hash_Value(Value* obj) {
-	assert(obj != NULL);
-	assert(false); /// not implemented
-	return 0;
-}
-
-uintptr_t hash_Func(Func* obj) {
-	assert(obj != NULL);
-	assert(false); /// not implemented
-	return 0;
-}
-
 uintptr_t hash_InvalidObject(InvalidObject* obj) {
 	assert(obj != NULL);
 	assert(false); /// not implemented
@@ -1860,100 +1832,6 @@ func findMainPackage(program *ssa.Program) *ssa.Package {
 	panic("main package not found")
 }
 
-func findLibraryFunctions(program *ssa.Program) []*ssa.Function {
-	var functions []*ssa.Function
-	for _, pkg := range program.AllPackages() {
-		if pkg.Pkg.Name() != "reflect" {
-			continue
-		}
-		for symbol := range pkg.Members {
-			function, ok := pkg.Members[symbol].(*ssa.Function)
-			if !ok {
-				continue
-			}
-
-			if symbol != "ValueOf" {
-				continue
-			}
-
-			functions = append(functions, function)
-		}
-
-		typ, ok := pkg.Members["Value"].(*ssa.Type)
-		if !ok {
-			continue
-		}
-
-		methodSet := program.MethodSets.MethodSet(typ.Type())
-		for i := 0; i < methodSet.Len(); i++ {
-			function := program.MethodValue(methodSet.At(i))
-			if function == nil {
-				continue
-			}
-			l := strings.Split(function.String(), ".")
-			methodName := l[len(l)-1]
-			if methodName != "Pointer" {
-				continue
-			}
-			functions = append(functions, function)
-		}
-	}
-	for _, pkg := range program.AllPackages() {
-		if pkg.Pkg.Name() != "runtime" {
-			continue
-		}
-		for symbol := range pkg.Members {
-			function, ok := pkg.Members[symbol].(*ssa.Function)
-			if !ok {
-				continue
-			}
-
-			if symbol != "FuncForPC" {
-				continue
-			}
-
-			functions = append(functions, function)
-		}
-
-		typ, ok := pkg.Members["Func"].(*ssa.Type)
-		if !ok {
-			continue
-		}
-
-		methodSet := program.MethodSets.MethodSet(types.NewPointer(typ.Type()))
-		for i := 0; i < methodSet.Len(); i++ {
-			function := program.MethodValue(methodSet.At(i))
-			if function == nil {
-				continue
-			}
-			l := strings.Split(function.String(), ".")
-			methodName := l[len(l)-1]
-			if methodName != "Name" {
-				continue
-			}
-			functions = append(functions, function)
-		}
-	}
-	for _, pkg := range program.AllPackages() {
-		if pkg.Pkg.Name() != "strings" {
-			continue
-		}
-		for symbol := range pkg.Members {
-			function, ok := pkg.Members[symbol].(*ssa.Function)
-			if !ok {
-				continue
-			}
-
-			if symbol != "Split" {
-				continue
-			}
-
-			functions = append(functions, function)
-		}
-	}
-	return functions
-}
-
 func (ctx *Context) visitAllFunctions(program *ssa.Program, procedure func(function *ssa.Function)) {
 	var f func(function *ssa.Function)
 	f = func(function *ssa.Function) {
@@ -2027,10 +1905,6 @@ func (ctx *Context) visitAllTypes(program *ssa.Program, procedure func(typ types
 			f(typ.Elem())
 
 		case *types.Named:
-			typeName := createTypeName(typ)
-			if typeName == encode("Named<Value>") || typeName == encode("Named<Func>") { // ToDo: ignore standard library definition
-				return
-			}
 			f(typ.Underlying())
 
 		case *types.Pointer:
@@ -2105,11 +1979,6 @@ func (ctx *Context) visitAllTypes(program *ssa.Program, procedure func(typ types
 	ctx.visitAllFunctions(ctx.program, func(function *ssa.Function) {
 		g(function)
 	})
-
-	libraryFunctions := findLibraryFunctions(ctx.program)
-	for _, function := range libraryFunctions {
-		g(function)
-	}
 
 	ctx.visitAllFunctions(ctx.program, func(function *ssa.Function) {
 		if function.Blocks == nil {
@@ -2380,76 +2249,10 @@ typedef struct {
 } StackFrameStrview;
 DECLARE_RUNTIME_API(strview, StackFrameStrview);
 
-// ToDo: WA to handle reflect.ValueOf
-
-typedef struct {
-	IntObject e0;
-} Value;
-
-#define Named_lt_Value_gt_ Value 
-#define equal_Named_lt_Value_gt_ equal_Value
-
-typedef struct {
-	StackFrameCommon common;
-	Value* result_ptr;
-	Interface param0;
-} StackFrameValueOf;
-DECLARE_RUNTIME_API(value_of, StackFrameValueOf);
-
-#define f_S_ValueOf_S_reflect gox5_value_of
-
-// ToDo: WA to handle reflect.Value.Pointer
-
-typedef struct {
-	StackFrameCommon common;
-	IntObject* result_ptr;
-	Value param0;
-} StackFrameValuePointer;
-DECLARE_RUNTIME_API(value_pointer, StackFrameValuePointer);
-
-#define f_S_Pointer_S_reflect_S_Named___lt___Value___gt___ gox5_value_pointer
-
-// ToDo: WA to handle runtime.FuncForPC
-
 typedef struct {
 	StringObject name;
 	UserFunction function;
 } Func;
-
-#define Named_lt_Func_gt_ Func 
-#define equal_Named_lt_Func_gt_ equal_Func
-
-typedef struct {
-	StackFrameCommon common;
-	const Func** result_ptr;
-	IntObject param0;
-} StackFrameFuncForPc;
-DECLARE_RUNTIME_API(func_for_pc, StackFrameFuncForPc);
-
-#define f_S_FuncForPC_S_runtime gox5_func_for_pc
-
-// ToDo: WA to handle runtime.Func.Name
-
-typedef struct {
-	StackFrameCommon common;
-	StringObject* result_ptr;
-	Func* param0;
-} StackFrameFuncName;
-DECLARE_RUNTIME_API(func_name, StackFrameFuncName);
-
-#define f_S_Name_S_runtime_S_Pointer___lt___Named___lt___Func___gt______gt___ gox5_func_name
-
-// ToDo: WA to handle strings.Split
-
-typedef struct {
-	StackFrameCommon common;
-	SliceObject* result_ptr;
-	StringObject param0;
-	StringObject param1;
-} StackFrameSplit;
-DECLARE_RUNTIME_API(func_for_pc, StackFrameFuncForPc);
-
-#define f_S_Split_S_strings gox5_split
 
 FunctionObject gox5_search_method(Interface* interface, StringObject method_name);
 
@@ -2484,15 +2287,6 @@ __attribute__((unused)) static void builtin_print_float(double val) {
 	ctx.visitAllFunctions(program, func(function *ssa.Function) {
 		ctx.emitFunctionDeclaration(function)
 	})
-
-	libraryFunctions := findLibraryFunctions(program)
-	for _, function := range libraryFunctions {
-		ctx.emitFunctionHeader(createFunctionName(function), ";")
-
-		signature := function.Signature
-		concreteSignatureName := createSignatureName(signature, false)
-		ctx.tryEmitSignatureDefinition(signature, concreteSignatureName, false)
-	}
 
 	ctx.emitEqualFunctionDefinition()
 	ctx.emitHashFunctionDefinition()
