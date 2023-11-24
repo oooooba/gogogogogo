@@ -1387,8 +1387,74 @@ func (ctx *Context) emitFunctionDefinition(function *ssa.Function) {
 	}
 }
 
-func (ctx *Context) emitType() {
+func (ctx *Context) retrieveOrderedTypes() []types.Type {
+	orderedTypes := make([]types.Type, 0)
+
+	foundTypeSet := make(map[string]struct{})
+	var f func(typ types.Type)
+	f = func(typ types.Type) {
+		name := createTypeName(typ)
+		if _, ok := foundTypeSet[name]; ok {
+			return
+		}
+
+		switch typ := typ.(type) {
+		case *types.Array:
+			f(typ.Elem())
+
+		case *types.Struct:
+			for i := 0; i < typ.NumFields(); i++ {
+				f(typ.Field(i).Type())
+			}
+
+		case *types.Basic: // do nothing
+
+		case *types.Chan: // do nothing
+
+		case *types.Interface: // do nothing
+
+		case *types.Map:
+			f(typ.Key())
+			f(typ.Elem())
+
+		case *types.Named:
+			f(typ.Underlying())
+
+		case *types.Pointer: // do nothing (should not enter)
+
+		case *types.Signature: // do nothing
+
+		case *types.Slice:
+			f(typ.Elem())
+
+		case *types.Tuple:
+			for i := 0; i < typ.Len(); i++ {
+				f(typ.At(i).Type())
+			}
+
+		default:
+			if typ.String() == "iter" {
+				/// iterator of map or string
+			} else {
+				panic(fmt.Sprintf("not implemented: %s %T", typ, typ))
+			}
+		}
+
+		foundTypeSet[name] = struct{}{}
+		orderedTypes = append(orderedTypes, typ)
+	}
+
 	ctx.visitAllTypes(ctx.program, func(typ types.Type) {
+		f(typ)
+	})
+
+	return orderedTypes
+}
+
+func (ctx *Context) emitType() {
+	orderedTypes := ctx.retrieveOrderedTypes()
+
+	for _, typ := range orderedTypes {
 		name := createTypeName(typ)
 		switch typ := typ.(type) {
 		case *types.Array, *types.Pointer, *types.Struct, *types.Tuple:
@@ -1411,10 +1477,10 @@ func (ctx *Context) emitType() {
 
 			panic(fmt.Sprintf("not implemented: %s %T", typ, typ))
 		}
-	})
+	}
 
 	// emit Pointer types first to handle self referential structures
-	ctx.visitAllTypes(ctx.program, func(typ types.Type) {
+	for _, typ := range orderedTypes {
 		if t, ok := typ.(*types.Pointer); ok {
 			name := createTypeName(t)
 			elemType := t.Elem()
@@ -1422,9 +1488,9 @@ func (ctx *Context) emitType() {
 			fmt.Fprintf(ctx.stream, "\t%s* raw;\n", createTypeName(elemType))
 			fmt.Fprintf(ctx.stream, "};\n")
 		}
-	})
+	}
 
-	ctx.visitAllTypes(ctx.program, func(typ types.Type) {
+	for _, typ := range orderedTypes {
 		name := createTypeName(typ)
 		switch typ := typ.(type) {
 		case *types.Array:
@@ -1472,7 +1538,7 @@ union %s { // %s
 
 			panic(fmt.Sprintf("not implemented: %s %T", typ, typ))
 		}
-	})
+	}
 }
 
 func (ctx *Context) emitTypeInfo() {
