@@ -2017,22 +2017,16 @@ func (ctx *Context) visitAllTypes(program *ssa.Program, procedure func(typ types
 		f(typ)
 	}
 
-	mainPkg := findMainPackage(ctx.program)
+	for _, pkg := range program.AllPackages() {
+		for member := range pkg.Members {
+			switch member := pkg.Members[member].(type) {
+			case *ssa.Type:
+				f(member.Type())
 
-	for member := range mainPkg.Members {
-		typ, ok := mainPkg.Members[member].(*ssa.Type)
-		if !ok {
-			continue
+			case *ssa.Global:
+				f(member.Type())
+			}
 		}
-		f(typ.Type())
-	}
-
-	for member := range mainPkg.Members {
-		gv, ok := mainPkg.Members[member].(*ssa.Global)
-		if !ok {
-			continue
-		}
-		f(gv.Type())
 	}
 
 	var g func(function *ssa.Function)
@@ -2358,8 +2352,6 @@ __attribute__((unused)) static void builtin_print_float(double val) {
 	ctx.emitEqualFunctionDeclaration()
 	ctx.emitHashFunctionDeclaration()
 
-	mainPkg := findMainPackage(program)
-
 	ctx.visitAllFunctions(program, func(function *ssa.Function) {
 		ctx.emitFunctionDeclaration(function)
 	})
@@ -2369,12 +2361,14 @@ __attribute__((unused)) static void builtin_print_float(double val) {
 	ctx.emitInterfaceTable()
 	ctx.emitTypeInfo()
 
-	for member := range mainPkg.Members {
-		gv, ok := mainPkg.Members[member].(*ssa.Global)
-		if !ok {
-			continue
+	for _, pkg := range program.AllPackages() {
+		for member := range pkg.Members {
+			gv, ok := pkg.Members[member].(*ssa.Global)
+			if !ok {
+				continue
+			}
+			ctx.emitGlobalVariable(gv)
 		}
-		ctx.emitGlobalVariable(gv)
 	}
 
 	ctx.visitAllFunctions(program, func(function *ssa.Function) {
