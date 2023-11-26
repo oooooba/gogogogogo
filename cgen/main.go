@@ -778,26 +778,29 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 		)
 
 	case *ssa.MakeInterface:
-		var receiver string
-		if instr.Type().Underlying().(*types.Interface).Empty() {
-			switch instrX := instr.X.(type) {
-			case *ssa.Const, *ssa.Function:
-				id := fmt.Sprintf("tmp_%s", createValueName(instr))
-				fmt.Fprintf(ctx.stream, "frame->%s = %s;\n", id, createValueRelName(instrX))
-				receiver = fmt.Sprintf("&frame->%s", id)
+		var receiverObject string
+		switch instrX := instr.X.(type) {
+		case *ssa.Const, *ssa.Function:
+			id := fmt.Sprintf("tmp_%s", createValueName(instr))
+			fmt.Fprintf(ctx.stream, "frame->%s = %s;\n", id, createValueRelName(instrX))
+			receiverObject = fmt.Sprintf("frame->%s", id)
 
-			default:
-				receiver = fmt.Sprintf("&%s", createValueRelName(instr.X))
-			}
+		default:
+			receiverObject = fmt.Sprintf("%s", createValueRelName(instr.X))
+		}
+
+		var receiverPointer string
+		if instr.Type().Underlying().(*types.Interface).Empty() {
+			receiverPointer = fmt.Sprintf("&%s", receiverObject)
 		} else {
-			receiver = fmt.Sprintf("%s.raw", createValueRelName(instr.X))
+			receiverPointer = fmt.Sprintf("%s.raw", receiverObject)
 		}
 
 		typeId := fmt.Sprintf("(TypeId){ .info = &%s }", createTypeIdName(instr.X.Type()))
 
 		result := createValueRelName(instr)
 		ctx.switchFunctionToCallRuntimeApi("gox5_make_interface", "StackFrameMakeInterface", createInstructionName(instr), &result, nil,
-			paramArgPair{param: "receiver", arg: receiver},
+			paramArgPair{param: "receiver", arg: receiverPointer},
 			paramArgPair{param: "type_id", arg: typeId},
 		)
 
@@ -1115,12 +1118,10 @@ func (ctx *Context) emitValueDeclaration(value ssa.Value) {
 
 	case *ssa.MakeInterface:
 		ctx.emitValueDeclaration(val.X)
-		if val.Type().Underlying().(*types.Interface).Empty() {
-			switch valX := val.X.(type) {
-			case *ssa.Const, *ssa.Function:
-				id := fmt.Sprintf("tmp_%s", createValueName(val))
-				fmt.Fprintf(ctx.stream, "\t%s %s; // %s : %s\n", createTypeName(valX.Type()), id, valX.String(), valX.Type())
-			}
+		switch valX := val.X.(type) {
+		case *ssa.Const, *ssa.Function:
+			id := fmt.Sprintf("tmp_%s", createValueName(val))
+			fmt.Fprintf(ctx.stream, "\t%s %s; // %s : %s\n", createTypeName(valX.Type()), id, valX.String(), valX.Type())
 		}
 
 	case *ssa.MakeMap:
