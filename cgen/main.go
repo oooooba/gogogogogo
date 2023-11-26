@@ -1559,62 +1559,14 @@ func (ctx *Context) emitTypeInfo() {
 }
 
 func (ctx *Context) emitEqualFunctionDeclaration() {
-	builtinTypes := []string{
-		"Bool",
-		"Complex64", "Complex128",
-		"Float32", "Float64",
-		"Int", "Int8", "Int16", "Int32", "Int64",
-		"UnsafePointer",
-		"Uint", "Uint8", "Uint16", "Uint32", "Uint64",
-	}
-	for _, bt := range builtinTypes {
-		fmt.Fprintf(ctx.stream, "bool equal_%sObject(%sObject* lhs, %sObject* rhs);", bt, bt, bt)
-	}
-	fmt.Fprintf(ctx.stream, `
-bool equal_InvalidObject(InvalidObject* lhs, InvalidObject* rhs);
-bool equal_StringObject(StringObject* lhs, StringObject* rhs);
-bool equal_MapObject(MapObject* lhs, MapObject* rhs);
-bool equal_Interface(Interface* lhs, Interface* rhs);
-`)
 	ctx.visitAllTypes(ctx.program, func(typ types.Type) {
 		typeName := createTypeName(typ)
-		switch typ.(type) {
-		case *types.Basic, *types.Interface, *types.Map:
-			return
-		}
 		fmt.Fprintf(ctx.stream, "bool equal_%s(%s* lhs, %s* rhs); // %s\n", typeName, typeName, typeName, typ)
 	})
 }
 
 func (ctx *Context) emitEqualFunctionDefinition() {
-	builtinTypes := []string{
-		"Bool",
-		"Complex64", "Complex128",
-		"Float32", "Float64",
-		"Int", "Int8", "Int16", "Int32", "Int64",
-		"UnsafePointer",
-		"Uint", "Uint8", "Uint16", "Uint32", "Uint64",
-	}
-	for _, bt := range builtinTypes {
-		fmt.Fprintf(ctx.stream, `
-		bool equal_%sObject(%sObject* lhs, %sObject* rhs) {
-			return lhs->raw == rhs->raw;
-		}
-		`, bt, bt, bt)
-	}
 	fmt.Fprintf(ctx.stream, `
-bool equal_InvalidObject(InvalidObject* lhs, InvalidObject* rhs) {
-	assert(lhs != NULL);
-	assert(rhs != NULL);
-	return true;
-}
-
-bool equal_StringObject(StringObject* lhs, StringObject* rhs) {
-	assert(lhs != NULL);
-	assert(rhs != NULL);
-	return strcmp(lhs->raw, rhs->raw) == 0;
-}
-
 bool equal_MapObject(MapObject* lhs, MapObject* rhs) {
 	assert(lhs != NULL);
 	assert(rhs != NULL);
@@ -1673,7 +1625,14 @@ bool equal_InterfaceNonEmpty(Interface* lhs, Interface* rhs) {
 		body += "\tassert(rhs != NULL);\n"
 		if typ == underlyingType {
 			switch t := typ.(type) {
-			case *types.Basic, *types.Interface, *types.Map:
+			case *types.Basic:
+				switch t.Kind() {
+				case types.String:
+					body += "return strcmp(lhs->raw, rhs->raw) == 0;\n"
+				default:
+					body += "return lhs->raw == rhs->raw;\n"
+				}
+			case *types.Interface, *types.Map:
 				return
 			case *types.Struct:
 				for i := 0; i < t.NumFields(); i++ {
@@ -1706,62 +1665,14 @@ bool equal_InterfaceNonEmpty(Interface* lhs, Interface* rhs) {
 }
 
 func (ctx *Context) emitHashFunctionDeclaration() {
-	builtinTypes := []string{
-		"Bool",
-		"Complex64", "Complex128",
-		"Float32", "Float64",
-		"Int", "Int8", "Int16", "Int32", "Int64",
-		"UnsafePointer",
-		"Uint", "Uint8", "Uint16", "Uint32", "Uint64",
-	}
-	for _, bt := range builtinTypes {
-		fmt.Fprintf(ctx.stream, "uintptr_t hash_%sObject(%sObject* obj);", bt, bt)
-	}
-	fmt.Fprintf(ctx.stream, `
-uintptr_t hash_InvalidObject(InvalidObject* obj);
-uintptr_t hash_StringObject(StringObject* obj);
-uintptr_t hash_MapObject(MapObject* obj);
-uintptr_t hash_Interface(Interface* obj);
-`)
 	ctx.visitAllTypes(ctx.program, func(typ types.Type) {
 		typeName := createTypeName(typ)
-		switch typ.(type) {
-		case *types.Basic, *types.Interface, *types.Map:
-			return
-		}
 		fmt.Fprintf(ctx.stream, "uintptr_t hash_%s(%s* obj); // %s\n", typeName, typeName, typ)
 	})
 }
 
 func (ctx *Context) emitHashFunctionDefinition() {
-	builtinTypes := []string{
-		"Bool",
-		"Complex64", "Complex128",
-		"Float32", "Float64",
-		"Int", "Int8", "Int16", "Int32", "Int64",
-		"UnsafePointer",
-		"Uint", "Uint8", "Uint16", "Uint32", "Uint64",
-	}
-	for _, bt := range builtinTypes {
-		fmt.Fprintf(ctx.stream, `
-		uintptr_t hash_%sObject(%sObject* obj) {
-			return (uintptr_t)obj->raw;
-		}
-		`, bt, bt)
-	}
 	fmt.Fprintf(ctx.stream, `
-uintptr_t hash_InvalidObject(InvalidObject* obj) {
-	assert(obj != NULL);
-	assert(false); /// not implemented
-	return 0;
-}
-
-uintptr_t hash_StringObject(StringObject* obj) {
-	assert(obj != NULL);
-	assert(false); /// not implemented
-	return 0;
-}
-
 uintptr_t hash_MapObject(MapObject* obj) {
 	assert(obj != NULL);
 	assert(false); /// not implemented
@@ -1793,7 +1704,15 @@ uintptr_t hash_InterfaceNonEmpty(Interface* obj) {
 		body += "\tassert(obj != NULL);\n"
 		if typ == underlyingType {
 			switch t := typ.(type) {
-			case *types.Basic, *types.Interface, *types.Map:
+			case *types.Basic:
+				switch t.Kind() {
+				case types.String:
+					body += "assert(false); /// not implemented\n"
+					body += "return 0;\n"
+				default:
+					body += "return (uintptr_t)obj->raw;\n"
+				}
+			case *types.Interface, *types.Map:
 				return
 			case *types.Struct:
 				body += "uintptr_t hash = 0;\n"
