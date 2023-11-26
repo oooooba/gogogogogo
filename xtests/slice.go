@@ -277,6 +277,39 @@ func Test19() int {
 	return c[1]
 }
 
+func Test20() int {
+	a := func(n int) []int {
+		return make([]int, n)
+	}(5)
+	if len(a) != 5 {
+		return 0
+	}
+	for i := 0; i < len(a); i++ {
+		if a[i] != 0 {
+			return 10 + i
+		}
+	}
+	return 20
+}
+
+func Test21() int {
+	a := func(n int, m int) []int {
+		return make([]int, n, m)
+	}(5, 6)
+	if len(a) != 5 {
+		return 0
+	}
+	if cap(a) != 6 {
+		return 1
+	}
+	for i := 0; i < len(a); i++ {
+		if a[i] != 0 {
+			return 10 + i
+		}
+	}
+	return 21
+}
+
 func main() {
 	runTest := func(testName string, test func() int) {
 		println(testName+":", test())
@@ -300,4 +333,6 @@ func main() {
 	runTest("Test17", Test17)
 	runTest("Test18", Test18)
 	runTest("Test19", Test19)
+	runTest("Test20", Test20)
+	runTest("Test21", Test21)
 }

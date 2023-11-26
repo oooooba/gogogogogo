@@ -808,6 +808,16 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 			paramArgPair{param: "value_type", arg: fmt.Sprintf("(TypeId){ .info = &%s }", createTypeIdName(instr.Type().Underlying().(*types.Map).Elem()))},
 		)
 
+	case *ssa.MakeSlice:
+		result := createValueRelName(instr)
+		fmt.Fprintf(ctx.stream, "%s.typed.size = %s.raw;\n", result, createValueRelName(instr.Len))
+		fmt.Fprintf(ctx.stream, "%s.typed.capacity = %s.raw;\n", result, createValueRelName(instr.Cap))
+		ptr := fmt.Sprintf("%s.typed.ptr", result)
+		size := fmt.Sprintf("(%s.raw) * sizeof(%s)", createValueRelName(instr.Cap), createTypeName(instr.Type().(*types.Slice).Elem()))
+		ctx.switchFunctionToCallRuntimeApi("gox5_new", "StackFrameNew", createInstructionName(instr), &ptr, nil,
+			paramArgPair{param: "size", arg: size},
+		)
+
 	case *ssa.MapUpdate:
 		var keyId string
 		if key, ok := instr.Key.(*ssa.Const); ok {
@@ -1118,6 +1128,10 @@ func (ctx *Context) emitValueDeclaration(value ssa.Value) {
 			ctx.emitValueDeclaration(val.Reserve)
 		}
 
+	case *ssa.MakeSlice:
+		ctx.emitValueDeclaration(val.Len)
+		ctx.emitValueDeclaration(val.Cap)
+
 	case *ssa.Next:
 		ctx.emitValueDeclaration(val.Iter)
 
@@ -1177,7 +1191,7 @@ func requireSwitchFunction(instruction ssa.Instruction) bool {
 		return false
 	case *ssa.Call:
 		return t.Common().Value.Name() != "init"
-	case *ssa.Go, *ssa.MakeChan, *ssa.MakeClosure, *ssa.MakeInterface, *ssa.MakeMap, *ssa.MapUpdate, *ssa.Send:
+	case *ssa.Go, *ssa.MakeChan, *ssa.MakeClosure, *ssa.MakeInterface, *ssa.MakeMap, *ssa.MakeSlice, *ssa.MapUpdate, *ssa.Send:
 		return true
 	case *ssa.Convert:
 		if dstType, ok := t.Type().(*types.Basic); ok && dstType.Kind() == types.String {
