@@ -318,7 +318,7 @@ func (ctx *Context) switchFunction(nextFunction string, callCommon *ssa.CallComm
 	if signature.Recv() != nil {
 		var receiver string
 		if callCommon.IsInvoke() {
-			receiver = fmt.Sprintf("%s.receiver", createValueRelName(callCommon.Value))
+			receiver = fmt.Sprintf("*(void**)(%s.receiver)", createValueRelName(callCommon.Value))
 		} else {
 			receiver = fmt.Sprintf("%s", createValueRelName(callCommon.Args[argBase]))
 			argBase++
@@ -427,16 +427,7 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 		raw := ""
 		switch op := instr.Op; op {
 		case token.EQL, token.NEQ:
-			var equalFunc string
-			if t, ok := instr.X.Type().Underlying().(*types.Interface); ok {
-				if t.Empty() {
-					equalFunc = "equal_InterfaceEmpty"
-				} else {
-					equalFunc = "equal_InterfaceNonEmpty"
-				}
-			} else {
-				equalFunc = fmt.Sprintf("equal_%s", createTypeName(instr.X.Type()))
-			}
+			equalFunc := fmt.Sprintf("equal_%s", createTypeName(instr.X.Type()))
 			fmt.Fprintf(ctx.stream, "bool raw = %s(&%s, &%s) %s true;", equalFunc, createValueRelName(instr.X), createValueRelName(instr.Y), instr.Op)
 			raw = "raw"
 		case token.LSS, token.LEQ, token.GTR, token.GEQ:
@@ -789,12 +780,7 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 			receiverObject = fmt.Sprintf("%s", createValueRelName(instr.X))
 		}
 
-		var receiverPointer string
-		if instr.Type().Underlying().(*types.Interface).Empty() {
-			receiverPointer = fmt.Sprintf("&%s", receiverObject)
-		} else {
-			receiverPointer = fmt.Sprintf("%s.raw", receiverObject)
-		}
+		receiverPointer := fmt.Sprintf("&%s", receiverObject)
 
 		typeId := fmt.Sprintf("(TypeId){ .info = &%s }", createTypeIdName(instr.X.Type()))
 
@@ -956,12 +942,7 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 			if _, ok := instr.AssertedType.Underlying().(*types.Interface); ok {
 				return fmt.Sprintf("%s", createValueRelName(instr.X))
 			} else {
-				if instr.X.Type().Underlying().(*types.Interface).Empty() {
-					return fmt.Sprintf("*((%s*)%s.receiver)", createTypeName(instr.AssertedType), createValueRelName(instr.X))
-				} else {
-					raw := fmt.Sprintf("%s.receiver", createValueRelName(instr.X))
-					return wrapInObject(raw, instr.AssertedType)
-				}
+				return fmt.Sprintf("*((%s*)%s.receiver)", createTypeName(instr.AssertedType), createValueRelName(instr.X))
 			}
 		}()
 		dstObj := createValueRelName(instr)
@@ -1596,40 +1577,27 @@ bool equal_MapObject(MapObject* lhs, MapObject* rhs) {
 }
 
 bool equal_Interface(Interface* lhs, Interface* rhs) {
-	(void)lhs;
-	(void)rhs;
-	assert(false); // dummy
-	return false;
-}
-
-bool equal_InterfaceEmpty(Interface* lhs, Interface* rhs) {
 	assert(lhs!=NULL);
 	assert(rhs!=NULL);
+
+	if (lhs->type_id.info == NULL && rhs->type_id.info == NULL) {
+		return true;
+	}
+
+	if ((lhs->type_id.info == NULL) || (rhs->type_id.info == NULL)) {
+		return false;
+	}
 
 	if ((lhs->receiver == NULL) && (rhs->receiver == NULL)) {
 		return true;
 	}
+
 	if ((lhs->receiver == NULL) || (rhs->receiver == NULL)) {
 		return false;
 	}
 
 	bool (*f)(void*, void*) = lhs->type_id.info->is_equal;
 	return f(lhs->receiver, rhs->receiver);
-}
-
-bool equal_InterfaceNonEmpty(Interface* lhs, Interface* rhs) {
-	assert(lhs!=NULL);
-	assert(rhs!=NULL);
-
-	if ((lhs->receiver == NULL) && (rhs->receiver == NULL)) {
-		return true;
-	}
-	if ((lhs->receiver == NULL) || (rhs->receiver == NULL)) {
-		return false;
-	}
-
-	bool (*f)(void*, void*) = lhs->type_id.info->is_equal;
-	return f(lhs, rhs);
 }
 `)
 	ctx.visitAllTypes(ctx.program, func(typ types.Type) {
@@ -1663,15 +1631,7 @@ bool equal_InterfaceNonEmpty(Interface* lhs, Interface* rhs) {
 				body += "return memcmp(lhs, rhs, sizeof(*lhs)) == 0;"
 			}
 		} else {
-			if t, ok := underlyingType.(*types.Interface); ok {
-				if t.Empty() {
-					body = "return equal_InterfaceEmpty(lhs, rhs);\n"
-				} else {
-					body = "return equal_InterfaceNonEmpty(lhs, rhs);\n"
-				}
-			} else {
-				body += fmt.Sprintf("return equal_%s(lhs, rhs);\n", createTypeName(underlyingType))
-			}
+			body += fmt.Sprintf("return equal_%s(lhs, rhs);\n", createTypeName(underlyingType))
 		}
 		fmt.Fprintf(ctx.stream, "bool equal_%s(%s* lhs, %s* rhs) { // %s\n", typeName, typeName, typeName, typ)
 		fmt.Fprintf(ctx.stream, "%s", body)
@@ -1696,18 +1656,6 @@ uintptr_t hash_MapObject(MapObject* obj) {
 
 uintptr_t hash_Interface(Interface* obj) {
 	(void)obj;
-	assert(false); /// not implemented
-	return 0;
-}
-
-uintptr_t hash_InterfaceEmpty(Interface* obj) {
-	assert(obj!=NULL);
-	assert(false); /// not implemented
-	return 0;
-}
-
-uintptr_t hash_InterfaceNonEmpty(Interface* obj) {
-	assert(obj!=NULL);
 	assert(false); /// not implemented
 	return 0;
 }
@@ -1745,15 +1693,7 @@ uintptr_t hash_InterfaceNonEmpty(Interface* obj) {
 				body += "return 0;\n"
 			}
 		} else {
-			if t, ok := underlyingType.(*types.Interface); ok {
-				if t.Empty() {
-					body = "return hash_InterfaceEmpty(obj);\n"
-				} else {
-					body = "return hash_InterfaceNonEmpty(obj);\n"
-				}
-			} else {
-				body += fmt.Sprintf("return hash_%s(obj);\n", createTypeName(underlyingType))
-			}
+			body += fmt.Sprintf("return hash_%s(obj);\n", createTypeName(underlyingType))
 		}
 		fmt.Fprintf(ctx.stream, "uintptr_t hash_%s(%s* obj) { // %s\n", typeName, typeName, typ)
 		fmt.Fprintf(ctx.stream, "%s", body)
