@@ -634,6 +634,51 @@ func Test28() int {
 	return 28
 }
 
+func Test29() int {
+	s := S0{n: 42}
+
+	fa := func(i interface{}) interface{} {
+		return i
+	}
+
+	var ia I = &s
+	ia2 := fa(ia)
+	if ia2.(I).f() != 42 {
+		return 0
+	}
+	if ia2.(*S0) != &s {
+		return 1
+	}
+
+	fb := func(i interface{}) I {
+		return i.(I)
+	}
+
+	var ib I = &s
+	ib2 := fb(ib)
+	if ib2.f() != 42 {
+		return 2
+	}
+	if ib2.(*S0) != &s {
+		return 3
+	}
+
+	fc := func(i I) I1 {
+		return i.(I1)
+	}
+
+	var ic I = &s
+	ic2 := fc(ic)
+	if ic2.g(2) != 40 {
+		return 4
+	}
+	if ic2.(*S0) != &s {
+		return 5
+	}
+
+	return 29
+}
+
 func main() {
 	runTest := func(testName string, test func() int) {
 		println(testName+":", test())
@@ -666,4 +711,5 @@ func main() {
 	runTest("Test26", Test26)
 	runTest("Test27", Test27)
 	runTest("Test28", Test28)
+	runTest("Test29", Test29)
 }

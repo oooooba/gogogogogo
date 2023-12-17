@@ -576,6 +576,9 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 			}
 		}
 
+	case *ssa.ChangeInterface:
+		fmt.Fprintf(ctx.stream, "%s = %s;\n", createValueRelName(instr), createValueRelName(instr.X))
+
 	case *ssa.ChangeType:
 		fmt.Fprintf(ctx.stream, "%s = %s;\n", createValueRelName(instr), createValueRelName(instr.X))
 
@@ -1042,6 +1045,9 @@ func (ctx *Context) emitValueDeclaration(value ssa.Value) {
 
 	case *ssa.Call:
 		ctx.emitCallCommonDeclaration(val.Common())
+
+	case *ssa.ChangeInterface:
+		ctx.emitValueDeclaration(val.X)
 
 	case *ssa.ChangeType:
 		ctx.emitValueDeclaration(val.X)
