@@ -267,6 +267,8 @@ func createRawTypeName(typ types.Type) string {
 		return "uint32_t"
 	case types.Uint64:
 		return "uint64_t"
+	case types.Uintptr:
+		return "uintptr_t"
 	}
 	panic(typ)
 }
@@ -390,6 +392,8 @@ func (ctx *Context) emitPrint(value ssa.Value) {
 			specifier = "u"
 		case types.Uint64:
 			specifier = "lu"
+		case types.Uintptr:
+			specifier = "lu"
 		case types.Float32, types.Float64:
 			fmt.Fprintf(ctx.stream, "builtin_print_float(%s.raw);\n", createValueRelName(value))
 			return
@@ -448,7 +452,7 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 			switch instr.Type().(*types.Basic).Kind() {
 			case types.Int, types.Int8, types.Int16, types.Int32, types.Int64:
 				unsignedRawType = fmt.Sprintf("u%s", createRawTypeName(instr.X.Type()))
-			case types.Uint, types.Uint8, types.Uint16, types.Uint32, types.Uint64:
+			case types.Uint, types.Uint8, types.Uint16, types.Uint32, types.Uint64, types.Uintptr:
 				unsignedRawType = createRawTypeName(instr.X.Type())
 			default:
 				panic(fmt.Sprintf("%s", instr))
@@ -466,7 +470,7 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 				unsignedRawType = fmt.Sprintf("u%s", createRawTypeName(instr.X.Type()))
 				overflowExpr = fmt.Sprintf("%s.raw < 0 ? ((%s)(-1)) : 0", createValueRelName(instr.X), unsignedRawType)
 				calcExpr = fmt.Sprintf("rhs == 0 ? unsignedLhs : ((((%s) >> (%s - rhs)) << (%s - rhs)) | (unsignedLhs >> rhs))", overflowExpr, bitLen, bitLen)
-			case types.Uint, types.Uint8, types.Uint16, types.Uint32, types.Uint64:
+			case types.Uint, types.Uint8, types.Uint16, types.Uint32, types.Uint64, types.Uintptr:
 				unsignedRawType = createRawTypeName(instr.X.Type())
 				overflowExpr = "0"
 				calcExpr = "unsignedLhs >> rhs"

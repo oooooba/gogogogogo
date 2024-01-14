@@ -68,6 +68,8 @@ func Test8() int {
 	println(n_uint32)
 	var n_uint64 uint64 = 42
 	println(n_uint64)
+	var n_uintptr uintptr = 42
+	println(n_uintptr)
 	return 8
 }
 
