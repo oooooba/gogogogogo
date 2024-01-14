@@ -399,6 +399,8 @@ func (ctx *Context) emitPrint(value ssa.Value) {
 			return
 		case types.String:
 			specifier = "s"
+		case types.UnsafePointer:
+			specifier = "p"
 		default:
 			panic(fmt.Sprintf("%s, %s (%T)", value, t, t))
 		}
