@@ -240,7 +240,7 @@ func createTypeName(typ types.Type) string {
 }
 
 func createRawTypeName(typ types.Type) string {
-	switch typ.(*types.Basic).Kind() {
+	switch typ.Underlying().(*types.Basic).Kind() {
 	case types.Bool, types.UntypedBool:
 		return "bool"
 	case types.Float32:
@@ -451,7 +451,7 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 			}
 		case token.SHL:
 			var unsignedRawType string
-			switch instr.Type().(*types.Basic).Kind() {
+			switch instr.Type().Underlying().(*types.Basic).Kind() {
 			case types.Int, types.Int8, types.Int16, types.Int32, types.Int64:
 				unsignedRawType = fmt.Sprintf("u%s", createRawTypeName(instr.X.Type()))
 			case types.Uint, types.Uint8, types.Uint16, types.Uint32, types.Uint64, types.Uintptr:
@@ -467,7 +467,7 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 			var overflowExpr string
 			var calcExpr string
 			bitLen := "sizeof(unsignedLhs) * 8"
-			switch instr.Type().(*types.Basic).Kind() {
+			switch instr.Type().Underlying().(*types.Basic).Kind() {
 			case types.Int, types.Int8, types.Int16, types.Int32, types.Int64:
 				unsignedRawType = fmt.Sprintf("u%s", createRawTypeName(instr.X.Type()))
 				overflowExpr = fmt.Sprintf("%s.raw < 0 ? ((%s)(-1)) : 0", createValueRelName(instr.X), unsignedRawType)
