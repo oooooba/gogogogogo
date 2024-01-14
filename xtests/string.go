@@ -234,6 +234,16 @@ func Test20() int {
 	return 20
 }
 
+func Test21() int {
+	if "abcd"[1:3] != "bc" {
+		return 0
+	}
+	if "xyz"[1] != 'y' {
+		return 1
+	}
+	return 21
+}
+
 func main() {
 	runTest := func(testName string, test func() int) {
 		println(testName+":", test())
@@ -260,4 +270,5 @@ func main() {
 	runTest("Test18", Test18)
 	runTest("Test19", Test19)
 	runTest("Test20", Test20)
+	runTest("Test21", Test21)
 }

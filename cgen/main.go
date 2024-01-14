@@ -185,7 +185,7 @@ func createTypeName(typ types.Type) string {
 				return fmt.Sprintf("Int64Object")
 			case types.Invalid:
 				return fmt.Sprintf("InvalidObject")
-			case types.String:
+			case types.String, types.UntypedString:
 				return fmt.Sprintf("StringObject")
 			case types.UnsafePointer:
 				return fmt.Sprintf("UnsafePointerObject")
@@ -714,11 +714,11 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 	case *ssa.Lookup:
 		switch xt := instr.X.Type().Underlying().(type) {
 		case *types.Basic:
-			if xt.Kind() == types.String {
+			switch xt.Kind() {
+			case types.String, types.UntypedString:
 				raw := fmt.Sprintf("%s.raw[%s.raw]", createValueRelName(instr.X), createValueRelName(instr.Index))
 				fmt.Fprintf(ctx.stream, "%s = %s;\n", createValueRelName(instr), wrapInObject(raw, instr.Type()))
-
-			} else {
+			default:
 				panic(fmt.Sprintf("%s", instr))
 			}
 		case *types.Map:
