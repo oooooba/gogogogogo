@@ -106,6 +106,14 @@ func Test9() int {
 	if s+t != "abcdef" {
 		return 0
 	}
+
+	type myString string
+	var ms myString = "uvw"
+	var mt myString = "xyz"
+	if ms+mt != "uvwxyz" {
+		return 1
+	}
+
 	return 9
 }
 

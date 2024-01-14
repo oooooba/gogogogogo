@@ -439,7 +439,7 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 		case token.LSS, token.LEQ, token.GTR, token.GEQ:
 			raw = fmt.Sprintf("%s.raw %s %s.raw", createValueRelName(instr.X), instr.Op.String(), createValueRelName(instr.Y))
 		case token.ADD:
-			if t, ok := instr.Type().(*types.Basic); ok && t.Kind() == types.String {
+			if t, ok := instr.Type().Underlying().(*types.Basic); ok && t.Kind() == types.String {
 				result := createValueRelName(instr)
 				ctx.switchFunctionToCallRuntimeApi("gox5_concat", "StackFrameConcat", createInstructionName(instr), &result, nil,
 					paramArgPair{param: "lhs", arg: createValueRelName(instr.X)},
@@ -1178,7 +1178,7 @@ func requireSwitchFunction(instruction ssa.Instruction) bool {
 		return instruction.(*ssa.Alloc).Heap
 	case *ssa.BinOp:
 		if t.Op == token.ADD {
-			if tt, ok := t.Type().(*types.Basic); ok && tt.Kind() == types.String {
+			if tt, ok := t.Type().Underlying().(*types.Basic); ok && tt.Kind() == types.String {
 				return true
 			}
 		}
