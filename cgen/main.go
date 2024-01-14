@@ -1803,16 +1803,6 @@ func (ctx *Context) visitAllFunctions(program *ssa.Program, procedure func(funct
 		}
 	}
 
-	mainPkg := findMainPackage(program)
-	for symbol := range mainPkg.Members {
-		function, ok := mainPkg.Members[symbol].(*ssa.Function)
-		if !ok {
-			continue
-		}
-
-		f(function)
-	}
-
 	g := func(t types.Type) {
 		methodSet := program.MethodSets.MethodSet(t)
 		for i := 0; i < methodSet.Len(); i++ {
@@ -1823,13 +1813,19 @@ func (ctx *Context) visitAllFunctions(program *ssa.Program, procedure func(funct
 			f(function)
 		}
 	}
-	for member := range mainPkg.Members {
-		typ, ok := mainPkg.Members[member].(*ssa.Type)
-		if !ok {
-			continue
+
+	// Todo: replace `[]*ssa.Package{findMainPackage(program)}` to `program.AllPackages()`
+	for _, pkg := range []*ssa.Package{findMainPackage(program)} {
+		for member := range pkg.Members {
+			switch member := pkg.Members[member].(type) {
+			case *ssa.Function:
+				f(member)
+			case *ssa.Type:
+				t := member.Type()
+				g(t)
+				g(types.NewPointer(t))
+			}
 		}
-		g(typ.Type())
-		g(types.NewPointer(typ.Type()))
 	}
 }
 
