@@ -23,6 +23,7 @@ pub struct LightWeightThreadContext {
     current_func: FunctionObject,
     stack_pointer: *mut StackFrame,
     prev_func: UserFunction,
+    deferred_list: *const (),
     marker: isize,
 }
 
@@ -37,6 +38,7 @@ impl LightWeightThreadContext {
             current_func: FunctionObject::new_null(),
             stack_pointer,
             prev_func,
+            deferred_list: ptr::null(),
             marker: 0xdeadbeef,
         }
     }
@@ -103,6 +105,14 @@ impl LightWeightThreadContext {
 
     fn stack_frame_mut(&mut self) -> &mut StackFrame {
         unsafe { &mut *self.stack_pointer }
+    }
+
+    fn deferred_list(&self) -> *const () {
+        self.deferred_list
+    }
+
+    fn update_deferred_list(&mut self, deferred: *const ()) {
+        self.deferred_list = deferred
     }
 }
 
@@ -200,6 +210,11 @@ pub extern "C" fn gox5_concat(ctx: &mut LightWeightThreadContext) -> FunctionObj
 }
 
 #[no_mangle]
+pub extern "C" fn gox5_defer(ctx: &mut LightWeightThreadContext) -> FunctionObject {
+    api::defer(ctx)
+}
+
+#[no_mangle]
 pub extern "C" fn gox5_func_for_pc(ctx: &mut LightWeightThreadContext) -> FunctionObject {
     api::func_for_pc(ctx)
 }
@@ -276,6 +291,11 @@ pub extern "C" fn gox5_new(ctx: &mut LightWeightThreadContext) -> FunctionObject
 #[no_mangle]
 pub extern "C" fn gox5_recv(_ctx: &mut LightWeightThreadContext) -> FunctionObject {
     unreachable!()
+}
+
+#[no_mangle]
+pub extern "C" fn gox5_run_defers(ctx: &mut LightWeightThreadContext) -> FunctionObject {
+    api::run_defers(ctx)
 }
 
 #[no_mangle]

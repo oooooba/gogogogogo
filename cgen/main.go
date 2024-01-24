@@ -624,6 +624,36 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 			fmt.Fprintf(ctx.stream, "%s = %s;\n", createValueRelName(instr), wrapInObject(raw, instr.Type()))
 		}
 
+	case *ssa.Defer:
+		callCommon := instr.Common()
+		if callCommon.Method != nil {
+			panic("method not supported")
+		}
+
+		var functionObject string
+		var signature *types.Signature
+		switch callee := callCommon.Value.(type) {
+		case *ssa.Function:
+			functionObject = createValueName(callee)
+			signature = callee.Signature
+		case ssa.Value:
+			functionObject = createValueRelName(callee)
+			signature = callee.Type().(*types.Signature)
+		default:
+			panic(fmt.Sprintf("unknown callee: %s, %s, %T, %T", instr, callee, instr, callee))
+		}
+
+		if signature.Results().Len() != 0 {
+			panic("return values not supported")
+		}
+		if signature.Params().Len() != 0 {
+			panic("params not supported")
+		}
+
+		ctx.switchFunctionToCallRuntimeApi("gox5_defer", "StackFrameDefer", createInstructionName(instr), nil, nil,
+			paramArgPair{param: "function_object", arg: functionObject},
+		)
+
 	case *ssa.Extract:
 		fmt.Fprintf(ctx.stream, "%s = %s.raw.e%d;\n", createValueRelName(instr), createValueRelName(instr.Tuple), instr.Index)
 
@@ -886,6 +916,9 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 			}
 		}
 		fmt.Fprintf(ctx.stream, "return frame->common.resume_func;\n")
+
+	case *ssa.RunDefers:
+		ctx.switchFunctionToCallRuntimeApi("gox5_run_defers", "StackFrameRunDefers", createInstructionName(instr), nil, nil)
 
 	case *ssa.Send:
 		ctx.switchFunctionToCallRuntimeApi("gox5_send", "StackFrameSend", createInstructionName(instr), nil, nil,
@@ -1185,13 +1218,13 @@ func requireSwitchFunction(instruction ssa.Instruction) bool {
 		return false
 	case *ssa.Call:
 		return t.Common().Value.Name() != "init"
-	case *ssa.Go, *ssa.MakeChan, *ssa.MakeClosure, *ssa.MakeInterface, *ssa.MakeMap, *ssa.MakeSlice, *ssa.MapUpdate, *ssa.Send:
-		return true
 	case *ssa.Convert:
 		if dstType, ok := t.Type().(*types.Basic); ok && dstType.Kind() == types.String {
 			return true
 		}
 		return false
+	case *ssa.Defer, *ssa.Go, *ssa.MakeChan, *ssa.MakeClosure, *ssa.MakeInterface, *ssa.MakeMap, *ssa.MakeSlice, *ssa.MapUpdate, *ssa.RunDefers, *ssa.Send:
+		return true
 	case *ssa.Lookup:
 		_, ok := t.X.Type().Underlying().(*types.Map)
 		return ok
@@ -2024,6 +2057,7 @@ typedef struct {
 	FunctionObject current_func;
 	StackFrameCommon* stack_pointer;
 	UserFunction prev_func;
+	const void* deferred_list;
 	intptr_t marker;
 } LightWeightThreadContext;
 
@@ -2067,6 +2101,12 @@ typedef struct {
 	StringObject rhs;
 } StackFrameConcat;
 DECLARE_RUNTIME_API(concat, StackFrameConcat);
+
+typedef struct {
+	StackFrameCommon common;
+	FunctionObject function_object;
+} StackFrameDefer;
+DECLARE_RUNTIME_API(defer, StackFrameDefer);
 
 typedef struct {
 	StackFrameCommon common;
@@ -2168,6 +2208,11 @@ typedef struct {
 	ChannelObject channel;
 } StackFrameRecv;
 DECLARE_RUNTIME_API(recv, StackFrameRecv);
+
+typedef struct {
+	StackFrameCommon common;
+} StackFrameRunDefers;
+DECLARE_RUNTIME_API(run_defers, StackFrameRunDefers);
 
 typedef struct {
 	StackFrameCommon common;

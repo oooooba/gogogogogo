@@ -232,6 +232,43 @@ pub fn concat(ctx: &mut LightWeightThreadContext) -> FunctionObject {
     leave_runtime_api(ctx)
 }
 
+struct Deferred {
+    prev_deferred: *const (),
+    func: FunctionObject,
+}
+
+#[repr(C)]
+struct StackFrameDefer {
+    common: StackFrameCommon,
+    func: FunctionObject,
+}
+
+pub fn defer(ctx: &mut LightWeightThreadContext) -> FunctionObject {
+    let func = {
+        let stack_frame = unsafe { &mut ctx.stack_frame_mut().defer };
+        stack_frame.func.clone()
+    };
+
+    let ptr = ctx.global_context().process(|mut global_context| {
+        global_context
+            .allocator()
+            .allocate(mem::size_of::<Deferred>(), |_| {}) as *mut Deferred
+    });
+    let prev_deferred = ctx.deferred_list();
+    let deferred = Deferred {
+        prev_deferred,
+        func,
+    };
+    unsafe {
+        ptr::copy_nonoverlapping(&deferred, ptr, 1);
+    }
+    mem::forget(deferred);
+
+    ctx.update_deferred_list(ptr as *const ());
+
+    leave_runtime_api(ctx)
+}
+
 #[repr(C)]
 struct StackFrameFuncForPc {
     common: StackFrameCommon,
@@ -738,6 +775,23 @@ pub fn schedule(ctx: &mut LightWeightThreadContext) -> FunctionObject {
 }
 
 #[repr(C)]
+struct StackFrameRunDefers {
+    common: StackFrameCommon,
+}
+
+pub fn run_defers(ctx: &mut LightWeightThreadContext) -> FunctionObject {
+    if ctx.deferred_list().is_null() {
+        return leave_runtime_api(ctx);
+    }
+
+    let deferred = unsafe { &*(ctx.deferred_list() as *const Deferred) };
+
+    ctx.update_deferred_list(deferred.prev_deferred);
+
+    deferred.func.clone()
+}
+
+#[repr(C)]
 struct StackFrameSend {
     common: StackFrameCommon,
     channel: ObjectPtr,
@@ -978,6 +1032,7 @@ pub union StackFrame {
     common: ManuallyDrop<StackFrameCommon>,
     append: ManuallyDrop<StackFrameAppend>,
     concat: ManuallyDrop<StackFrameConcat>,
+    defer: ManuallyDrop<StackFrameDefer>,
     func_for_pc: ManuallyDrop<StackFrameFuncForPc>,
     func_name: ManuallyDrop<StackFrameFuncName>,
     make_chan: ManuallyDrop<StackFrameMakeChan>,
@@ -993,6 +1048,7 @@ pub union StackFrame {
     map_set: ManuallyDrop<StackFrameMapSet>,
     new: ManuallyDrop<StackFrameNew>,
     recv: ManuallyDrop<StackFrameRecv>,
+    run_defers: ManuallyDrop<StackFrameRunDefers>,
     send: ManuallyDrop<StackFrameSend>,
     split: ManuallyDrop<StackFrameSplit>,
     spawn: ManuallyDrop<StackFrameSpawn>,
