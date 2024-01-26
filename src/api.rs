@@ -4,6 +4,8 @@ use std::mem::ManuallyDrop;
 use std::ptr;
 use std::slice;
 
+use crate::gox5_run_defers;
+
 use super::channel::Channel;
 use super::create_light_weight_thread_context;
 use super::interface::Interface;
@@ -787,6 +789,14 @@ pub fn run_defers(ctx: &mut LightWeightThreadContext) -> FunctionObject {
     let deferred = unsafe { &*(ctx.deferred_list() as *const Deferred) };
 
     ctx.update_deferred_list(deferred.prev_deferred);
+
+    let current_stack_pointer = ctx.stack_pointer() as *mut StackFrame;
+    let next_stack_pointer = unsafe { (current_stack_pointer as *mut StackFrameRunDefers).add(1) };
+    let next_frame = unsafe { &mut (*next_stack_pointer).common };
+    next_frame.resume_func = FunctionObject::from_user_function(UserFunction::new(gox5_run_defers));
+    next_frame.prev_stack_pointer = current_stack_pointer;
+    next_frame.free_vars = ptr::null_mut();
+    ctx.update_stack_pointer(next_stack_pointer as *mut StackFrame);
 
     deferred.func.clone()
 }
