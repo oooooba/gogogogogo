@@ -237,19 +237,36 @@ pub fn concat(ctx: &mut LightWeightThreadContext) -> FunctionObject {
 struct Deferred {
     prev_deferred: *const (),
     func: FunctionObject,
+    num_arg_buffer_words: usize,
+    arg_buffer: *const *const (),
 }
 
 #[repr(C)]
 struct StackFrameDefer {
     common: StackFrameCommon,
     func: FunctionObject,
+    num_arg_buffer_words: usize,
+    arg_buffer: [(); 0],
 }
 
 pub fn defer(ctx: &mut LightWeightThreadContext) -> FunctionObject {
-    let func = {
+    let (func, num_arg_buffer_words) = {
         let stack_frame = unsafe { &mut ctx.stack_frame_mut().defer };
-        stack_frame.func.clone()
+        (stack_frame.func.clone(), stack_frame.num_arg_buffer_words)
     };
+
+    let dst_arg_buffer = ctx.global_context().process(|mut global_context| {
+        global_context
+            .allocator()
+            .allocate(mem::size_of::<*const ()>() * num_arg_buffer_words, |_| {})
+            as *mut *const ()
+    });
+
+    unsafe {
+        let stack_frame = &ctx.stack_frame().defer;
+        let src = stack_frame.arg_buffer.as_ptr() as *const *const ();
+        ptr::copy_nonoverlapping(src, dst_arg_buffer, num_arg_buffer_words);
+    }
 
     let ptr = ctx.global_context().process(|mut global_context| {
         global_context
@@ -260,6 +277,8 @@ pub fn defer(ctx: &mut LightWeightThreadContext) -> FunctionObject {
     let deferred = Deferred {
         prev_deferred,
         func,
+        num_arg_buffer_words,
+        arg_buffer: dst_arg_buffer,
     };
     unsafe {
         ptr::copy_nonoverlapping(&deferred, ptr, 1);
@@ -796,6 +815,14 @@ pub fn run_defers(ctx: &mut LightWeightThreadContext) -> FunctionObject {
     next_frame.resume_func = FunctionObject::from_user_function(UserFunction::new(gox5_run_defers));
     next_frame.prev_stack_pointer = current_stack_pointer;
     next_frame.free_vars = ptr::null_mut();
+
+    unsafe {
+        let src = deferred.arg_buffer;
+        let dst = (next_stack_pointer as *mut StackFrameCommon).add(1);
+        let dst = dst as *mut *const ();
+        ptr::copy_nonoverlapping(src, dst, deferred.num_arg_buffer_words);
+    }
+
     ctx.update_stack_pointer(next_stack_pointer as *mut StackFrame);
 
     deferred.func.clone()

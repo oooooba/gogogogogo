@@ -646,11 +646,19 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 		if signature.Results().Len() != 0 {
 			panic("return values not supported")
 		}
-		if signature.Params().Len() != 0 {
-			panic("params not supported")
-		}
-
-		ctx.switchFunctionToCallRuntimeApi("gox5_defer", "StackFrameDefer", createInstructionName(instr), nil, nil,
+		ctx.switchFunctionToCallRuntimeApi("gox5_defer", "StackFrameDefer", createInstructionName(instr), nil,
+			func() {
+				fmt.Fprintf(ctx.stream, "intptr_t num_arg_buffer_words = 0;\n")
+				for i, arg := range callCommon.Args {
+					argValue := createValueRelName(arg)
+					argType := createTypeName(arg.Type())
+					argPtr := fmt.Sprintf("ptr%d", i)
+					fmt.Fprintf(ctx.stream, "%s* %s = (void*)&next_frame->arg_buffer[num_arg_buffer_words]; // param[%d]\n", argType, argPtr, i)
+					fmt.Fprintf(ctx.stream, "*%s = %s;\n", argPtr, argValue)
+					fmt.Fprintf(ctx.stream, "num_arg_buffer_words += sizeof(%s) / sizeof(next_frame->arg_buffer[0]);\n", argType)
+				}
+				fmt.Fprintf(ctx.stream, "next_frame->num_arg_buffer_words = num_arg_buffer_words;\n")
+			},
 			paramArgPair{param: "function_object", arg: functionObject},
 		)
 
@@ -2105,6 +2113,8 @@ DECLARE_RUNTIME_API(concat, StackFrameConcat);
 typedef struct {
 	StackFrameCommon common;
 	FunctionObject function_object;
+	uintptr_t num_arg_buffer_words;
+	void* arg_buffer[0];
 } StackFrameDefer;
 DECLARE_RUNTIME_API(defer, StackFrameDefer);
 

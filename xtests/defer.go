@@ -28,10 +28,26 @@ func Test2() int {
 	return 2
 }
 
+func test3_f(p *int) {
+	*p = 3
+}
+
+func Test3() int {
+	a := 0
+	func() {
+		defer test3_f(&a)
+	}()
+	if a != 3 {
+		return 0
+	}
+	return 3
+}
+
 func main() {
 	runTest := func(testName string, test func() int) {
 		println(testName+":", test())
 	}
 	runTest("Test1", Test1)
 	runTest("Test2", Test2)
+	runTest("Test3", Test3)
 }
