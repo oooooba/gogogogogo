@@ -237,6 +237,7 @@ pub fn concat(ctx: &mut LightWeightThreadContext) -> FunctionObject {
 struct Deferred {
     prev_deferred: *const (),
     func: FunctionObject,
+    result_size: usize,
     num_arg_buffer_words: usize,
     arg_buffer: *const *const (),
 }
@@ -245,14 +246,19 @@ struct Deferred {
 struct StackFrameDefer {
     common: StackFrameCommon,
     func: FunctionObject,
+    result_size: usize,
     num_arg_buffer_words: usize,
     arg_buffer: [(); 0],
 }
 
 pub fn defer(ctx: &mut LightWeightThreadContext) -> FunctionObject {
-    let (func, num_arg_buffer_words) = {
+    let (func, result_size, num_arg_buffer_words) = {
         let stack_frame = unsafe { &mut ctx.stack_frame_mut().defer };
-        (stack_frame.func.clone(), stack_frame.num_arg_buffer_words)
+        (
+            stack_frame.func.clone(),
+            stack_frame.result_size,
+            stack_frame.num_arg_buffer_words,
+        )
     };
 
     let dst_arg_buffer = ctx.global_context().process(|mut global_context| {
@@ -277,6 +283,7 @@ pub fn defer(ctx: &mut LightWeightThreadContext) -> FunctionObject {
     let deferred = Deferred {
         prev_deferred,
         func,
+        result_size,
         num_arg_buffer_words,
         arg_buffer: dst_arg_buffer,
     };
@@ -811,15 +818,24 @@ pub fn run_defers(ctx: &mut LightWeightThreadContext) -> FunctionObject {
 
     let current_stack_pointer = ctx.stack_pointer() as *mut StackFrame;
     let next_stack_pointer = unsafe { (current_stack_pointer as *mut StackFrameRunDefers).add(1) };
-    let next_frame = unsafe { &mut (*next_stack_pointer).common };
+    let result_pointer = next_stack_pointer as *mut *const ();
+    let next_stack_pointer = unsafe { (next_stack_pointer as *mut u8).add(deferred.result_size) };
+    let next_stack_pointer = next_stack_pointer as *mut StackFrameCommon;
+    let next_frame = unsafe { &mut (*next_stack_pointer) };
     next_frame.resume_func = FunctionObject::from_user_function(UserFunction::new(gox5_run_defers));
     next_frame.prev_stack_pointer = current_stack_pointer;
     next_frame.free_vars = ptr::null_mut();
 
     unsafe {
         let src = deferred.arg_buffer;
-        let dst = (next_stack_pointer as *mut StackFrameCommon).add(1);
+        let dst = (next_stack_pointer).add(1);
         let dst = dst as *mut *const ();
+        let dst = if deferred.result_size > 0 {
+            *(dst as *mut *mut *const ()) = result_pointer;
+            dst.add(1)
+        } else {
+            dst
+        };
         ptr::copy_nonoverlapping(src, dst, deferred.num_arg_buffer_words);
     }
 

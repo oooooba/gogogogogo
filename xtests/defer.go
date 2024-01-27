@@ -43,6 +43,20 @@ func Test3() int {
 	return 3
 }
 
+func Test4() int {
+	a := 0
+	func() {
+		defer func() int {
+			a = 4
+			return 42
+		}()
+	}()
+	if a != 4 {
+		return 0
+	}
+	return 4
+}
+
 func main() {
 	runTest := func(testName string, test func() int) {
 		println(testName+":", test())
@@ -50,4 +64,5 @@ func main() {
 	runTest("Test1", Test1)
 	runTest("Test2", Test2)
 	runTest("Test3", Test3)
+	runTest("Test4", Test4)
 }

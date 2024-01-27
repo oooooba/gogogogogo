@@ -643,9 +643,16 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 			panic(fmt.Sprintf("unknown callee: %s, %s, %T, %T", instr, callee, instr, callee))
 		}
 
-		if signature.Results().Len() != 0 {
-			panic("return values not supported")
+		resultSize := "0"
+		switch signature.Results().Len() {
+		case 0:
+			// do nothing
+		case 1:
+			resultSize = fmt.Sprintf("sizeof(%s)", createTypeName(signature.Results().At(0).Type()))
+		default:
+			resultSize = fmt.Sprintf("sizeof(%s)", createTypeName(signature.Results()))
 		}
+
 		ctx.switchFunctionToCallRuntimeApi("gox5_defer", "StackFrameDefer", createInstructionName(instr), nil,
 			func() {
 				fmt.Fprintf(ctx.stream, "intptr_t num_arg_buffer_words = 0;\n")
@@ -660,6 +667,7 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 				fmt.Fprintf(ctx.stream, "next_frame->num_arg_buffer_words = num_arg_buffer_words;\n")
 			},
 			paramArgPair{param: "function_object", arg: functionObject},
+			paramArgPair{param: "result_size", arg: resultSize},
 		)
 
 	case *ssa.Extract:
@@ -2113,6 +2121,7 @@ DECLARE_RUNTIME_API(concat, StackFrameConcat);
 typedef struct {
 	StackFrameCommon common;
 	FunctionObject function_object;
+	uintptr_t result_size;
 	uintptr_t num_arg_buffer_words;
 	void* arg_buffer[0];
 } StackFrameDefer;
