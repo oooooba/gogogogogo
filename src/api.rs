@@ -236,6 +236,7 @@ pub fn concat(ctx: &mut LightWeightThreadContext) -> FunctionObject {
 
 struct Deferred {
     prev_deferred: *const (),
+    target_stack_pointer: *const (),
     func: FunctionObject,
     result_size: usize,
     num_arg_buffer_words: usize,
@@ -282,6 +283,7 @@ pub fn defer(ctx: &mut LightWeightThreadContext) -> FunctionObject {
     let prev_deferred = ctx.deferred_list();
     let deferred = Deferred {
         prev_deferred,
+        target_stack_pointer: ctx.stack_pointer(),
         func,
         result_size,
         num_arg_buffer_words,
@@ -813,6 +815,10 @@ pub fn run_defers(ctx: &mut LightWeightThreadContext) -> FunctionObject {
     }
 
     let deferred = unsafe { &*(ctx.deferred_list() as *const Deferred) };
+
+    if deferred.target_stack_pointer != ctx.stack_pointer() {
+        return leave_runtime_api(ctx);
+    }
 
     ctx.update_deferred_list(deferred.prev_deferred);
 
