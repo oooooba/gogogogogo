@@ -1,6 +1,6 @@
-use super::api::FunctionObject;
 use super::api::StringObject;
 use super::type_id::TypeId;
+use super::FunctionObject;
 use super::ObjectPtr;
 
 #[derive(Debug)]
@@ -20,10 +20,6 @@ pub(crate) struct Interface {
 impl Interface {
     pub fn new(receiver: ObjectPtr, type_id: TypeId) -> Self {
         Self { receiver, type_id }
-    }
-
-    pub fn receiver(&self) -> ObjectPtr {
-        self.receiver.clone()
     }
 
     pub fn search(&self, method_name: StringObject) -> Option<FunctionObject> {

@@ -13,9 +13,85 @@ use std::ptr;
 use std::slice;
 
 use api::StringObject;
-use api::{FunctionObject, StackFrame, UserFunction};
 use global_context::GlobalContextPtr;
 use interface::Interface;
+
+#[derive(Clone, PartialEq, Eq, Debug)]
+#[repr(C)]
+pub struct FunctionObject(*const ());
+
+#[repr(C)]
+struct ClosureLayout {
+    func: UserFunction,
+    object_ptrs: Vec<ObjectPtr>,
+}
+
+impl FunctionObject {
+    pub fn from_user_function(user_function: UserFunction) -> Self {
+        FunctionObject(user_function.0 as *const ())
+    }
+
+    pub fn from_closure_layout_ptr(closure_layout_ptr: *const ()) -> Self {
+        let addr = closure_layout_ptr as usize;
+        let flag = 1 << 63;
+        assert_eq!(addr & flag, 0);
+        FunctionObject((addr | flag) as *const ())
+    }
+
+    pub fn new_null() -> Self {
+        FunctionObject(ptr::null_mut())
+    }
+
+    pub fn extract_user_function(&self) -> (UserFunction, Option<*mut ()>) {
+        let addr = self.0 as usize;
+        let flag = 1 << 63;
+        if (addr & flag) == 0 {
+            let func = unsafe { mem::transmute::<*const (), UserFunction>(self.0) };
+            return (func, None);
+        }
+        let ptr = (addr & !flag) as *mut () as *mut ClosureLayout;
+        unsafe {
+            let closure_layout = &mut *ptr;
+            let func = closure_layout.func.clone();
+            let object_ptrs = closure_layout.object_ptrs.as_mut_ptr() as *mut ();
+            (func, Some(object_ptrs))
+        }
+    }
+}
+
+type UserFunctionInner = unsafe extern "C" fn(&mut LightWeightThreadContext) -> FunctionObject;
+
+#[derive(Clone)]
+#[repr(C)]
+pub struct UserFunction(UserFunctionInner);
+
+impl UserFunction {
+    pub fn new(user_function: UserFunctionInner) -> Self {
+        UserFunction(user_function)
+    }
+
+    pub fn invoke(&self, ctx: &mut LightWeightThreadContext) -> FunctionObject {
+        unsafe { self.0(ctx) }
+    }
+}
+
+impl PartialEq<UserFunctionInner> for UserFunction {
+    fn eq(&self, other: &UserFunctionInner) -> bool {
+        let lhs = self.0 as *const ();
+        let rhs = *other as *const ();
+        lhs == rhs
+    }
+}
+
+#[repr(C)]
+pub struct StackFrame(StackFrameCommon);
+
+#[repr(C)]
+struct StackFrameCommon {
+    resume_func: FunctionObject,
+    prev_stack_pointer: *mut StackFrame,
+    free_vars: *mut (),
+}
 
 #[repr(C)]
 pub struct LightWeightThreadContext {
@@ -56,7 +132,7 @@ impl LightWeightThreadContext {
             let next_stack_pointer =
                 (result_pointer as *mut u8).add(result_size) as *mut StackFrame;
             self.update_stack_pointer(next_stack_pointer);
-            let words = slice::from_raw_parts_mut(self.stack_frame_mut().words.as_mut_ptr(), 5);
+            let words = slice::from_raw_parts_mut(self.stack_pointer as *mut *mut (), 5);
             words[0] = terminate as *mut ();
             words[1] = ptr::null_mut();
             words[2] = ptr::null_mut();
@@ -75,7 +151,7 @@ impl LightWeightThreadContext {
         let (func, object_ptrs) = self.current_func.extract_user_function();
         if let Some(object_ptrs) = object_ptrs {
             unsafe {
-                let words = slice::from_raw_parts_mut(self.stack_frame_mut().words.as_mut_ptr(), 3);
+                let words = slice::from_raw_parts_mut(self.stack_pointer as *mut *mut (), 3);
                 words[2] = object_ptrs; // free_vars
             }
         }
@@ -99,12 +175,14 @@ impl LightWeightThreadContext {
         self.stack_pointer = new_stack_pointer
     }
 
-    fn stack_frame(&self) -> &StackFrame {
-        unsafe { &*self.stack_pointer }
+    fn stack_frame<T>(&self) -> &T {
+        let p = self.stack_pointer as *const T;
+        unsafe { &*p }
     }
 
-    fn stack_frame_mut(&mut self) -> &mut StackFrame {
-        unsafe { &mut *self.stack_pointer }
+    fn stack_frame_mut<T>(&mut self) -> &mut T {
+        let p = self.stack_pointer as *mut T;
+        unsafe { &mut *p }
     }
 
     fn deferred_list(&self) -> *const () {
@@ -113,6 +191,18 @@ impl LightWeightThreadContext {
 
     fn update_deferred_list(&mut self, deferred: *const ()) {
         self.deferred_list = deferred
+    }
+
+    fn leave(&mut self) -> FunctionObject {
+        let (prev_stack_pointer, resume_func) = {
+            let stack_frame = self.stack_frame::<StackFrameCommon>();
+            (
+                stack_frame.prev_stack_pointer,
+                stack_frame.resume_func.clone(),
+            )
+        };
+        self.stack_pointer = prev_stack_pointer;
+        resume_func
     }
 }
 
@@ -215,16 +305,6 @@ pub extern "C" fn gox5_defer(ctx: &mut LightWeightThreadContext) -> FunctionObje
 }
 
 #[no_mangle]
-pub extern "C" fn gox5_func_for_pc(ctx: &mut LightWeightThreadContext) -> FunctionObject {
-    api::func_for_pc(ctx)
-}
-
-#[no_mangle]
-pub extern "C" fn gox5_func_name(ctx: &mut LightWeightThreadContext) -> FunctionObject {
-    api::func_name(ctx)
-}
-
-#[no_mangle]
 pub extern "C" fn gox5_make_chan(ctx: &mut LightWeightThreadContext) -> FunctionObject {
     api::make_chan(ctx)
 }
@@ -314,23 +394,8 @@ pub extern "C" fn gox5_spawn(_ctx: &mut LightWeightThreadContext) -> FunctionObj
 }
 
 #[no_mangle]
-pub extern "C" fn gox5_split(ctx: &mut LightWeightThreadContext) -> FunctionObject {
-    api::split(ctx)
-}
-
-#[no_mangle]
 pub extern "C" fn gox5_strview(ctx: &mut LightWeightThreadContext) -> FunctionObject {
     api::strview(ctx)
-}
-
-#[no_mangle]
-pub extern "C" fn gox5_value_of(ctx: &mut LightWeightThreadContext) -> FunctionObject {
-    api::value_of(ctx)
-}
-
-#[no_mangle]
-pub extern "C" fn gox5_value_pointer(ctx: &mut LightWeightThreadContext) -> FunctionObject {
-    api::value_pointer(ctx)
 }
 
 #[no_mangle]
