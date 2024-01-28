@@ -163,7 +163,7 @@ pub extern "C" fn gox5_map_set(ctx: &mut LightWeightThreadContext) -> FunctionOb
     ctx.global_context().process(|mut global_context| {
         let map = map.as_mut::<MapObject>();
         let allocator = global_context.allocator();
-        map.set(key.clone(), value.clone(), allocator);
+        map.set(key, value, allocator);
     });
 
     ctx.leave()
