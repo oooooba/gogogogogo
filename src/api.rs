@@ -1,3 +1,5 @@
+pub(crate) mod map;
+
 use std::ffi;
 use std::mem;
 use std::ptr;
@@ -8,7 +10,6 @@ use crate::gox5_run_defers;
 use super::channel::Channel;
 use super::create_light_weight_thread_context;
 use super::interface::Interface;
-use super::map::Map;
 use super::type_id::TypeId;
 use super::ClosureLayout;
 use super::FunctionObject;
@@ -330,50 +331,6 @@ pub fn make_interface(ctx: &mut LightWeightThreadContext) -> FunctionObject {
 }
 
 #[repr(C)]
-struct StackFrameMakeMap {
-    common: StackFrameCommon,
-    result_ptr: *mut ObjectPtr,
-    key_type: TypeId,
-    value_type: TypeId,
-}
-
-fn allocate_map(
-    ctx: &mut LightWeightThreadContext,
-    key_type: TypeId,
-    value_type: TypeId,
-) -> *mut Map {
-    let object_size = mem::size_of::<Map>();
-    let ptr = ctx.global_context().process(|mut global_context| {
-        global_context
-            .allocator()
-            .allocate(object_size, |ptr| unsafe {
-                ptr::drop_in_place(ptr as *mut Map)
-            }) as *mut Map
-    });
-
-    let map = Map::new(key_type, value_type);
-    unsafe {
-        ptr::copy_nonoverlapping(&map, ptr, 1);
-    }
-    mem::forget(map);
-    ptr
-}
-
-pub fn make_map(ctx: &mut LightWeightThreadContext) -> FunctionObject {
-    let (key_type, value_type) = {
-        let stack_frame = &ctx.stack_frame::<StackFrameMakeMap>();
-        (stack_frame.key_type, stack_frame.value_type)
-    };
-    let ptr = allocate_map(ctx, key_type, value_type);
-    let ptr = ObjectPtr(ptr as *mut ());
-    unsafe {
-        let stack_frame = ctx.stack_frame_mut::<StackFrameMakeMap>();
-        *stack_frame.result_ptr = ptr;
-    };
-    ctx.leave()
-}
-
-#[repr(C)]
 struct StackFrameMakeStringFromByteSlice {
     common: StackFrameCommon,
     result_ptr: *mut StringObject,
@@ -484,126 +441,6 @@ pub fn make_string_from_rune_slice(ctx: &mut LightWeightThreadContext) -> Functi
     };
     *result = new_string_object;
 
-    ctx.leave()
-}
-
-#[repr(C)]
-struct StackFrameMapGet {
-    common: StackFrameCommon,
-    map: ObjectPtr,
-    key: ObjectPtr,
-    value: ObjectPtr,
-    found: ObjectPtr,
-}
-
-pub fn map_get(ctx: &mut LightWeightThreadContext) -> FunctionObject {
-    let (mut map, key, value, mut found_ptr) = {
-        let stack_frame = ctx.stack_frame::<StackFrameMapGet>();
-        (
-            stack_frame.map.clone(),
-            stack_frame.key.clone(),
-            stack_frame.value.clone(),
-            stack_frame.found.clone(),
-        )
-    };
-    if map.is_null() {
-        unimplemented!()
-    };
-    let map = map.as_mut::<Map>();
-    let found = map.get(key, value);
-    if found_ptr.is_null() {
-        assert!(found);
-    } else {
-        *found_ptr.as_mut() = found;
-    }
-    ctx.leave()
-}
-
-#[repr(C)]
-struct StackFrameMapLen {
-    common: StackFrameCommon,
-    result_ptr: *mut usize,
-    map: ObjectPtr,
-}
-
-pub fn map_len(ctx: &mut LightWeightThreadContext) -> FunctionObject {
-    let map_ptr = {
-        let stack_frame = ctx.stack_frame::<StackFrameMapLen>();
-        &stack_frame.map
-    };
-    let len = if map_ptr.is_null() {
-        0
-    } else {
-        let map = map_ptr.as_ref::<Map>();
-        map.len()
-    };
-    unsafe {
-        let stack_frame = ctx.stack_frame_mut::<StackFrameMapLen>();
-        *stack_frame.result_ptr = len;
-    };
-    ctx.leave()
-}
-
-#[repr(C)]
-struct StackFrameMapNext {
-    common: StackFrameCommon,
-    map: ObjectPtr,
-    key: ObjectPtr,
-    value: ObjectPtr,
-    found: ObjectPtr,
-    count: ObjectPtr,
-}
-
-pub fn map_next(ctx: &mut LightWeightThreadContext) -> FunctionObject {
-    let (map, key, value, mut found_ptr, mut count) = {
-        let stack_frame = ctx.stack_frame::<StackFrameMapNext>();
-        (
-            stack_frame.map.clone(),
-            stack_frame.key.clone(),
-            stack_frame.value.clone(),
-            stack_frame.found.clone(),
-            stack_frame.count.clone(),
-        )
-    };
-    if map.is_null() {
-        unimplemented!()
-    };
-    let map = map.as_ref::<Map>();
-    let nth = *count.as_ref::<usize>();
-    let found = map.nth(key, value, nth);
-    *found_ptr.as_mut() = found;
-    if found {
-        *count.as_mut() = nth + 1;
-    }
-    ctx.leave()
-}
-
-#[repr(C)]
-struct StackFrameMapSet {
-    common: StackFrameCommon,
-    map: ObjectPtr,
-    key: ObjectPtr,
-    value: ObjectPtr,
-}
-
-pub fn map_set(ctx: &mut LightWeightThreadContext) -> FunctionObject {
-    let (mut map, key, value) = {
-        let stack_frame = ctx.stack_frame::<StackFrameMapSet>();
-        (
-            stack_frame.map.clone(),
-            stack_frame.key.clone(),
-            stack_frame.value.clone(),
-        )
-    };
-    if map.is_null() {
-        unimplemented!()
-    } else {
-        ctx.global_context().process(|mut global_context| {
-            let map = map.as_mut::<Map>();
-            let allocator = global_context.allocator();
-            map.set(key.clone(), value.clone(), allocator);
-        });
-    };
     ctx.leave()
 }
 

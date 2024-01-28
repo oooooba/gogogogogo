@@ -2,7 +2,7 @@ mod api;
 mod channel;
 mod global_context;
 mod interface;
-mod map;
+mod object;
 mod type_id;
 
 use std::collections::VecDeque;
@@ -320,11 +320,6 @@ pub extern "C" fn gox5_make_interface(ctx: &mut LightWeightThreadContext) -> Fun
 }
 
 #[no_mangle]
-pub extern "C" fn gox5_make_map(ctx: &mut LightWeightThreadContext) -> FunctionObject {
-    api::make_map(ctx)
-}
-
-#[no_mangle]
 pub extern "C" fn gox5_make_string_from_byte_slice(
     ctx: &mut LightWeightThreadContext,
 ) -> FunctionObject {
@@ -341,26 +336,6 @@ pub extern "C" fn gox5_make_string_from_rune_slice(
     ctx: &mut LightWeightThreadContext,
 ) -> FunctionObject {
     api::make_string_from_rune_slice(ctx)
-}
-
-#[no_mangle]
-pub extern "C" fn gox5_map_get(ctx: &mut LightWeightThreadContext) -> FunctionObject {
-    api::map_get(ctx)
-}
-
-#[no_mangle]
-pub extern "C" fn gox5_map_len(ctx: &mut LightWeightThreadContext) -> FunctionObject {
-    api::map_len(ctx)
-}
-
-#[no_mangle]
-pub extern "C" fn gox5_map_next(ctx: &mut LightWeightThreadContext) -> FunctionObject {
-    api::map_next(ctx)
-}
-
-#[no_mangle]
-pub extern "C" fn gox5_map_set(ctx: &mut LightWeightThreadContext) -> FunctionObject {
-    api::map_set(ctx)
 }
 
 #[no_mangle]

@@ -2,8 +2,8 @@ use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::ptr;
 
-use super::type_id::TypeId;
-use super::{ObjectAllocator, ObjectPtr};
+use crate::type_id::TypeId;
+use crate::{ObjectAllocator, ObjectPtr};
 
 struct Key {
     ptr: ObjectPtr,
@@ -33,15 +33,15 @@ impl Hash for Key {
     }
 }
 
-pub(crate) struct Map {
+pub(crate) struct MapObject {
     map: HashMap<Key, ObjectPtr>,
     key_type: TypeId,
     value_type: TypeId,
 }
 
-impl Map {
+impl MapObject {
     pub fn new(key_type: TypeId, value_type: TypeId) -> Self {
-        Map {
+        MapObject {
             map: HashMap::new(),
             key_type,
             value_type,

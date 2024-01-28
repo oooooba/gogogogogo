@@ -847,7 +847,7 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 
 	case *ssa.MakeMap:
 		result := createValueRelName(instr)
-		ctx.switchFunctionToCallRuntimeApi("gox5_make_map", "StackFrameMakeMap", createInstructionName(instr), &result, nil,
+		ctx.switchFunctionToCallRuntimeApi("gox5_map_new", "StackFrameMapNew", createInstructionName(instr), &result, nil,
 			paramArgPair{param: "key_type", arg: fmt.Sprintf("(TypeId){ .info = &%s }", createTypeIdName(instr.Type().Underlying().(*types.Map).Key()))},
 			paramArgPair{param: "value_type", arg: fmt.Sprintf("(TypeId){ .info = &%s }", createTypeIdName(instr.Type().Underlying().(*types.Map).Elem()))},
 		)
@@ -2156,8 +2156,8 @@ typedef struct {
 	MapObject* result_ptr;
 	TypeId key_type;
 	TypeId value_type;
-} StackFrameMakeMap;
-DECLARE_RUNTIME_API(make_map, StackFrameMakeMap);
+} StackFrameMapNew;
+DECLARE_RUNTIME_API(map_new, StackFrameMapNew);
 
 typedef struct {
 	StackFrameCommon common;
