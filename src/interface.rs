@@ -1,7 +1,7 @@
-use super::api::StringObject;
 use super::type_id::TypeId;
 use super::FunctionObject;
 use super::ObjectPtr;
+use crate::object::string::StringObject;
 
 #[derive(Debug)]
 #[repr(C)]

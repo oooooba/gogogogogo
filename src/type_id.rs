@@ -1,8 +1,8 @@
 use std::slice;
 
-use super::api::StringObject;
 use super::interface::InterfaceTableEntry;
 use super::ObjectPtr;
+use crate::object::string::StringObject;
 
 #[repr(C)]
 struct TypeInfo {

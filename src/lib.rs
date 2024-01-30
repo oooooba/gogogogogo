@@ -12,9 +12,9 @@ use std::process;
 use std::ptr;
 use std::slice;
 
-use api::StringObject;
 use global_context::GlobalContextPtr;
 use interface::Interface;
+use object::string::StringObject;
 
 #[derive(Clone, PartialEq, Eq, Debug)]
 #[repr(C)]
@@ -295,11 +295,6 @@ pub extern "C" fn gox5_append(ctx: &mut LightWeightThreadContext) -> FunctionObj
 }
 
 #[no_mangle]
-pub extern "C" fn gox5_concat(ctx: &mut LightWeightThreadContext) -> FunctionObject {
-    api::concat(ctx)
-}
-
-#[no_mangle]
 pub extern "C" fn gox5_defer(ctx: &mut LightWeightThreadContext) -> FunctionObject {
     api::defer(ctx)
 }
@@ -317,25 +312,6 @@ pub extern "C" fn gox5_make_closure(ctx: &mut LightWeightThreadContext) -> Funct
 #[no_mangle]
 pub extern "C" fn gox5_make_interface(ctx: &mut LightWeightThreadContext) -> FunctionObject {
     api::make_interface(ctx)
-}
-
-#[no_mangle]
-pub extern "C" fn gox5_make_string_from_byte_slice(
-    ctx: &mut LightWeightThreadContext,
-) -> FunctionObject {
-    api::make_string_from_byte_slice(ctx)
-}
-
-#[no_mangle]
-pub extern "C" fn gox5_make_string_from_rune(ctx: &mut LightWeightThreadContext) -> FunctionObject {
-    api::make_string_from_rune(ctx)
-}
-
-#[no_mangle]
-pub extern "C" fn gox5_make_string_from_rune_slice(
-    ctx: &mut LightWeightThreadContext,
-) -> FunctionObject {
-    api::make_string_from_rune_slice(ctx)
 }
 
 #[no_mangle]
@@ -366,11 +342,6 @@ pub extern "C" fn gox5_send(_ctx: &mut LightWeightThreadContext) -> FunctionObje
 #[no_mangle]
 pub extern "C" fn gox5_spawn(_ctx: &mut LightWeightThreadContext) -> FunctionObject {
     unreachable!()
-}
-
-#[no_mangle]
-pub extern "C" fn gox5_strview(ctx: &mut LightWeightThreadContext) -> FunctionObject {
-    api::strview(ctx)
 }
 
 #[no_mangle]

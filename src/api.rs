@@ -1,6 +1,6 @@
 pub(crate) mod map;
+pub(crate) mod string;
 
-use std::ffi;
 use std::mem;
 use std::ptr;
 use std::slice;
@@ -18,10 +18,6 @@ use super::ObjectPtr;
 use super::StackFrame;
 use super::StackFrameCommon;
 use super::UserFunction;
-
-#[derive(Clone, PartialEq, Eq, Debug)]
-#[repr(C)]
-pub struct StringObject(*const libc::c_char);
 
 #[repr(C)]
 struct Slice {
@@ -111,46 +107,6 @@ pub fn append(ctx: &mut LightWeightThreadContext) -> FunctionObject {
         let p = stack_frame.result_ptr as *mut Slice;
         ptr::copy_nonoverlapping(&result, &mut *p, 1);
     }
-
-    ctx.leave()
-}
-
-#[repr(C)]
-struct StackFrameConcat {
-    common: StackFrameCommon,
-    result_ptr: *mut StringObject,
-    lhs: StringObject,
-    rhs: StringObject,
-}
-
-pub fn concat(ctx: &mut LightWeightThreadContext) -> FunctionObject {
-    let (lhs, rhs, result) = {
-        let stack_frame = &mut ctx.stack_frame::<StackFrameConcat>();
-        let lhs = stack_frame.lhs.clone();
-        let rhs = stack_frame.rhs.clone();
-        (lhs, rhs, unsafe { &mut (*stack_frame.result_ptr) })
-    };
-
-    let concat_string = unsafe {
-        let lhs = ffi::CStr::from_ptr(lhs.0).to_str().unwrap();
-        let rhs = ffi::CStr::from_ptr(rhs.0).to_str().unwrap();
-        format!("{lhs}{rhs}")
-    };
-
-    let len = concat_string.len();
-    let ptr = ctx.global_context().process(|mut global_context| {
-        global_context.allocator().allocate(len + 1, |_| {}) as *mut libc::c_char
-    });
-    let dst_bytes = unsafe { slice::from_raw_parts_mut(ptr, len + 1) };
-    let src_bytes = concat_string.as_bytes();
-
-    for i in 0..len {
-        dst_bytes[i] = src_bytes[i] as libc::c_char;
-    }
-    dst_bytes[len] = 0;
-
-    let new_string_object = StringObject(ptr);
-    *result = new_string_object;
 
     ctx.leave()
 }
@@ -331,120 +287,6 @@ pub fn make_interface(ctx: &mut LightWeightThreadContext) -> FunctionObject {
 }
 
 #[repr(C)]
-struct StackFrameMakeStringFromByteSlice {
-    common: StackFrameCommon,
-    result_ptr: *mut StringObject,
-    byte_slice: Slice,
-}
-
-pub fn make_string_from_byte_slice(ctx: &mut LightWeightThreadContext) -> FunctionObject {
-    let len = {
-        let stack_frame = ctx.stack_frame::<StackFrameMakeStringFromByteSlice>();
-        stack_frame.byte_slice.size
-    };
-
-    let ptr = ctx.global_context().process(|mut global_context| {
-        global_context.allocator().allocate(len + 1, |_| {}) as *mut libc::c_char
-    });
-
-    let byte_slice = {
-        let stack_frame = ctx.stack_frame::<StackFrameMakeStringFromByteSlice>();
-        &stack_frame.byte_slice
-    };
-
-    let dst_bytes = unsafe { slice::from_raw_parts_mut(ptr, len + 1) };
-    if let Some(src_bytes) = byte_slice.as_raw_slice::<libc::c_char>() {
-        dst_bytes[..len].clone_from_slice(&src_bytes[..len]);
-    }
-    dst_bytes[len] = 0;
-
-    let result = unsafe {
-        let stack_frame = ctx.stack_frame_mut::<StackFrameMakeStringFromByteSlice>();
-        &mut (*stack_frame.result_ptr)
-    };
-
-    let new_string_object = StringObject(ptr);
-    *result = new_string_object;
-
-    ctx.leave()
-}
-
-#[repr(C)]
-struct StackFrameMakeStringFromRune {
-    common: StackFrameCommon,
-    result_ptr: *mut StringObject,
-    rune: usize,
-}
-
-fn make_string(ctx: &mut LightWeightThreadContext, chars: &[char]) -> StringObject {
-    let len = chars.iter().fold(0, |acc, c| acc + c.len_utf8());
-    let ptr = ctx.global_context().process(|mut global_context| {
-        global_context.allocator().allocate(len + 1, |_| {}) as *mut libc::c_char
-    });
-    let dst_bytes = unsafe { slice::from_raw_parts_mut(ptr, len + 1) };
-
-    chars.iter().fold(0, |acc, c| {
-        let c_len = c.len_utf8();
-        let mut src_bytes = vec![0; c_len];
-        let _ = c.encode_utf8(&mut src_bytes);
-        for i in 0..c_len {
-            dst_bytes[acc + i] = src_bytes[i] as libc::c_char;
-        }
-        acc + c_len
-    });
-    dst_bytes[len] = 0;
-
-    StringObject(ptr)
-}
-
-pub fn make_string_from_rune(ctx: &mut LightWeightThreadContext) -> FunctionObject {
-    let (rune, result) = unsafe {
-        let stack_frame = ctx.stack_frame::<StackFrameMakeStringFromRune>();
-        (stack_frame.rune, &mut (*stack_frame.result_ptr))
-    };
-
-    assert!(rune <= std::u32::MAX as usize);
-    let chars = vec![char::from_u32(rune as u32).unwrap()];
-
-    let new_string_object = make_string(ctx, &chars);
-    *result = new_string_object;
-
-    ctx.leave()
-}
-
-#[repr(C)]
-struct StackFrameMakeStringFromRuneSlice {
-    common: StackFrameCommon,
-    result_ptr: *mut StringObject,
-    rune_slice: Slice,
-}
-
-pub fn make_string_from_rune_slice(ctx: &mut LightWeightThreadContext) -> FunctionObject {
-    let rune_slice = {
-        let stack_frame = ctx.stack_frame::<StackFrameMakeStringFromRuneSlice>();
-        &stack_frame.rune_slice
-    };
-
-    let chars = if let Some(src_runes) = rune_slice.as_raw_slice::<u32>() {
-        src_runes[..rune_slice.size]
-            .iter()
-            .map(|rune| char::from_u32(*rune).unwrap())
-            .collect()
-    } else {
-        Vec::new()
-    };
-
-    let new_string_object = make_string(ctx, &chars);
-    let result = unsafe {
-        let stack_frame = ctx.stack_frame_mut::<StackFrameMakeStringFromRuneSlice>();
-        &mut (*stack_frame.result_ptr)
-    };
-    *result = new_string_object;
-
-    ctx.leave()
-}
-
-#[repr(C)]
 struct StackFrameNew {
     common: StackFrameCommon,
     result_ptr: *mut ObjectPtr,
@@ -587,57 +429,4 @@ pub fn spawn(ctx: &mut LightWeightThreadContext) -> (FunctionObject, LightWeight
         new_ctx
     };
     (ctx.leave(), new_ctx)
-}
-
-#[repr(C)]
-struct StackFrameStrview {
-    common: StackFrameCommon,
-    result_ptr: *mut StringObject,
-    base: StringObject,
-    low: isize,
-    high: isize,
-}
-
-pub fn strview(ctx: &mut LightWeightThreadContext) -> FunctionObject {
-    let (base, low, high, result) = unsafe {
-        let stack_frame = ctx.stack_frame::<StackFrameStrview>();
-        let base = stack_frame.base.clone();
-        let low = stack_frame.low;
-        let high = stack_frame.high;
-        (base, low, high, &mut (*stack_frame.result_ptr))
-    };
-
-    let base_string = unsafe { ffi::CStr::from_ptr(base.0).to_str().unwrap() };
-
-    let low = if low < 0 {
-        assert_eq!(low, -1);
-        0
-    } else {
-        low as usize
-    };
-
-    let high = if high < 0 {
-        assert_eq!(high, -1);
-        base_string.len()
-    } else {
-        high as usize
-    };
-
-    assert!(low <= high);
-    let len = high - low;
-    let ptr = ctx.global_context().process(|mut global_context| {
-        global_context.allocator().allocate(len + 1, |_| {}) as *mut libc::c_char
-    });
-    let dst_bytes = unsafe { slice::from_raw_parts_mut(ptr, len + 1) };
-    let src_bytes = base_string.as_bytes();
-
-    for i in 0..len {
-        dst_bytes[i] = src_bytes[low + i] as libc::c_char;
-    }
-    dst_bytes[len] = 0;
-
-    let new_string_object = StringObject(ptr);
-    *result = new_string_object;
-
-    ctx.leave()
 }

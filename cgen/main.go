@@ -441,7 +441,7 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 		case token.ADD:
 			if t, ok := instr.Type().Underlying().(*types.Basic); ok && t.Kind() == types.String {
 				result := createValueRelName(instr)
-				ctx.switchFunctionToCallRuntimeApi("gox5_concat", "StackFrameConcat", createInstructionName(instr), &result, nil,
+				ctx.switchFunctionToCallRuntimeApi("gox5_string_append", "StackFrameStringAppend", createInstructionName(instr), &result, nil,
 					paramArgPair{param: "lhs", arg: createValueRelName(instr.X)},
 					paramArgPair{param: "rhs", arg: createValueRelName(instr.Y)},
 				)
@@ -594,7 +594,7 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 			switch srcType := instr.X.Type().(type) {
 			case *types.Basic:
 				arg := fmt.Sprintf("(IntObject){%s.raw}", createValueRelName(instr.X))
-				ctx.switchFunctionToCallRuntimeApi("gox5_make_string_from_rune", "StackFrameMakeStringFromRune", createInstructionName(instr), &result, nil,
+				ctx.switchFunctionToCallRuntimeApi("gox5_string_new_from_rune", "StackFrameStringNewFromRune", createInstructionName(instr), &result, nil,
 					paramArgPair{param: "rune", arg: arg},
 				)
 			case *types.Slice:
@@ -602,12 +602,12 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 					switch elemType.Kind() {
 					case types.Byte:
 						arg := fmt.Sprintf("%s.raw", createValueRelName(instr.X))
-						ctx.switchFunctionToCallRuntimeApi("gox5_make_string_from_byte_slice", "StackFrameMakeStringFromByteSlice", createInstructionName(instr), &result, nil,
+						ctx.switchFunctionToCallRuntimeApi("gox5_string_new_from_byte_slice", "StackFrameStringNewFromByteSlice", createInstructionName(instr), &result, nil,
 							paramArgPair{param: "byte_slice", arg: arg},
 						)
 					case types.Rune:
 						arg := fmt.Sprintf("%s.raw", createValueRelName(instr.X))
-						ctx.switchFunctionToCallRuntimeApi("gox5_make_string_from_rune_slice", "StackFrameMakeStringFromRuneSlice", createInstructionName(instr), &result, nil,
+						ctx.switchFunctionToCallRuntimeApi("gox5_string_new_from_rune_slice", "StackFrameStringNewFromRuneSlice", createInstructionName(instr), &result, nil,
 							paramArgPair{param: "rune_slice", arg: arg},
 						)
 					default:
@@ -956,7 +956,7 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 			if instr.High != nil {
 				high = fmt.Sprintf("%s.raw", createValueRelName(instr.High))
 			}
-			ctx.switchFunctionToCallRuntimeApi("gox5_strview", "StackFrameStrview", createInstructionName(instr), &result, nil,
+			ctx.switchFunctionToCallRuntimeApi("gox5_string_substr", "StackFrameStringSubstr", createInstructionName(instr), &result, nil,
 				paramArgPair{param: "base", arg: createValueRelName(instr.X)},
 				paramArgPair{param: "low", arg: low},
 				paramArgPair{param: "high", arg: high},
@@ -2115,8 +2115,8 @@ typedef struct {
 	StringObject* result_ptr;
 	StringObject lhs;
 	StringObject rhs;
-} StackFrameConcat;
-DECLARE_RUNTIME_API(concat, StackFrameConcat);
+} StackFrameStringAppend;
+DECLARE_RUNTIME_API(string_append, StackFrameStringAppend);
 
 typedef struct {
 	StackFrameCommon common;
@@ -2163,22 +2163,22 @@ typedef struct {
 	StackFrameCommon common;
 	StringObject* result_ptr;
 	SliceObject byte_slice;
-} StackFrameMakeStringFromByteSlice;
-DECLARE_RUNTIME_API(make_string_from_byte_slice, StackFrameMakeStringFromByteSlice);
+} StackFrameStringNewFromByteSlice;
+DECLARE_RUNTIME_API(string_new_from_byte_slice, StackFrameStringNewFromByteSlice);
 
 typedef struct {
 	StackFrameCommon common;
 	StringObject* result_ptr;
 	IntObject rune;
-} StackFrameMakeStringFromRune;
-DECLARE_RUNTIME_API(make_string_from_rune, StackFrameMakeStringFromRune);
+} StackFrameStringNewFromRune;
+DECLARE_RUNTIME_API(string_new_from_rune, StackFrameStringNewFromRune);
 
 typedef struct {
 	StackFrameCommon common;
 	StringObject* result_ptr;
 	SliceObject rune_slice;
-} StackFrameMakeStringFromRuneSlice;
-DECLARE_RUNTIME_API(make_string_from_rune_slice, StackFrameMakeStringFromRuneSlice);
+} StackFrameStringNewFromRuneSlice;
+DECLARE_RUNTIME_API(string_new_from_rune_slice, StackFrameStringNewFromRuneSlice);
 
 typedef struct {
 	StackFrameCommon common;
@@ -2262,8 +2262,8 @@ typedef struct {
 	StringObject base;
 	intptr_t low;
 	intptr_t high;
-} StackFrameStrview;
-DECLARE_RUNTIME_API(strview, StackFrameStrview);
+} StackFrameStringSubstr;
+DECLARE_RUNTIME_API(string_substr, StackFrameStringSubstr);
 
 typedef struct {
 	StringObject name;
