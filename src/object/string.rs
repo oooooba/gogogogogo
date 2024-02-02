@@ -44,16 +44,17 @@ impl StringObjectBuilder {
         }
     }
 
-    fn as_mut_slice(&self) -> &mut [u8] {
+    fn as_mut_slice(&mut self) -> &mut [u8] {
         unsafe { slice::from_raw_parts_mut(self.ptr, self.len_in_bytes + 1) }
     }
 
     pub fn append_bytes(&mut self, src: &[u8]) {
         assert!(self.cursor <= self.len_in_bytes);
 
+        let index = self.cursor;
         let bytes = self.as_mut_slice();
         let len = src.len();
-        bytes[self.cursor..(self.cursor + len)].clone_from_slice(&src[..len]);
+        bytes[index..(index + len)].clone_from_slice(&src[..len]);
         self.cursor += len;
 
         assert!(self.cursor <= self.len_in_bytes);
@@ -62,18 +63,20 @@ impl StringObjectBuilder {
     pub fn append_char(&mut self, src: char) {
         assert!(self.cursor < self.len_in_bytes);
 
+        let index = self.cursor;
         let bytes = self.as_mut_slice();
-        let len = src.encode_utf8(&mut bytes[self.cursor..]).len();
+        let len = src.encode_utf8(&mut bytes[index..]).len();
         self.cursor += len;
 
         assert!(self.cursor <= self.len_in_bytes);
     }
 
-    pub fn build(self) -> StringObject {
+    pub fn build(mut self) -> StringObject {
         assert!(self.cursor == self.len_in_bytes);
 
+        let index = self.cursor;
         let bytes = self.as_mut_slice();
-        bytes[self.cursor] = 0;
+        bytes[index] = 0;
         StringObject::new(self.ptr)
     }
 }

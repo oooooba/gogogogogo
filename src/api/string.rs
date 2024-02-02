@@ -23,7 +23,7 @@ pub extern "C" fn gox5_string_new_from_byte_slice(
         .process(|mut global_context| StringObject::builder(len, global_context.allocator()));
 
     let src_bytes = frame.byte_slice.as_raw_slice::<u8>();
-    builder.append_bytes(&src_bytes);
+    builder.append_bytes(src_bytes);
 
     let frame = ctx.stack_frame_mut::<StackFrameStringNewFromByteSlice>();
     *frame.result_ptr = builder.build();
