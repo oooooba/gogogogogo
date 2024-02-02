@@ -1,4 +1,4 @@
-use crate::api::Slice;
+use crate::object::slice::SliceObject;
 use crate::object::string::StringObject;
 use crate::FunctionObject;
 use crate::LightWeightThreadContext;
@@ -8,7 +8,7 @@ use crate::StackFrameCommon;
 struct StackFrameStringNewFromByteSlice<'a> {
     common: StackFrameCommon,
     result_ptr: &'a mut StringObject,
-    byte_slice: Slice,
+    byte_slice: SliceObject,
 }
 
 #[no_mangle]
@@ -16,16 +16,14 @@ pub extern "C" fn gox5_string_new_from_byte_slice(
     ctx: &mut LightWeightThreadContext,
 ) -> FunctionObject {
     let frame = ctx.stack_frame::<StackFrameStringNewFromByteSlice>();
-    let len = frame.byte_slice.size;
+    let len = frame.byte_slice.size();
 
     let mut builder = ctx
         .global_context()
         .process(|mut global_context| StringObject::builder(len, global_context.allocator()));
 
-    let byte_slice = &frame.byte_slice;
-    if let Some(src_bytes) = byte_slice.as_raw_slice::<u8>() {
-        builder.append_bytes(&src_bytes);
-    }
+    let src_bytes = frame.byte_slice.as_raw_slice::<u8>();
+    builder.append_bytes(&src_bytes);
 
     let frame = ctx.stack_frame_mut::<StackFrameStringNewFromByteSlice>();
     *frame.result_ptr = builder.build();
@@ -65,7 +63,7 @@ pub extern "C" fn gox5_string_new_from_rune(ctx: &mut LightWeightThreadContext) 
 struct StackFrameStringNewFromRuneSlice<'a> {
     common: StackFrameCommon,
     result_ptr: &'a mut StringObject,
-    rune_slice: Slice,
+    rune_slice: SliceObject,
 }
 
 #[no_mangle]
@@ -75,25 +73,23 @@ pub extern "C" fn gox5_string_new_from_rune_slice(
     let stack_frame = ctx.stack_frame::<StackFrameStringNewFromRuneSlice>();
     let rune_slice = &stack_frame.rune_slice;
 
-    let len = if let Some(src_runes) = rune_slice.as_raw_slice::<u32>() {
-        src_runes[..rune_slice.size].iter().fold(0, |acc, rune| {
+    let len = {
+        let src_runes = rune_slice.as_raw_slice::<u32>();
+        src_runes[..rune_slice.size()].iter().fold(0, |acc, rune| {
             let ch = char::from_u32(*rune).unwrap();
             acc + ch.len_utf8()
         })
-    } else {
-        0
     };
 
     let mut builder = ctx
         .global_context()
         .process(|mut global_context| StringObject::builder(len, global_context.allocator()));
 
-    if let Some(src_runes) = rune_slice.as_raw_slice::<u32>() {
-        src_runes[..rune_slice.size].iter().for_each(|rune| {
-            let ch = char::from_u32(*rune).unwrap();
-            builder.append_char(ch);
-        });
-    }
+    let src_runes = rune_slice.as_raw_slice::<u32>();
+    src_runes[..rune_slice.size()].iter().for_each(|rune| {
+        let ch = char::from_u32(*rune).unwrap();
+        builder.append_char(ch);
+    });
 
     let frame = ctx.stack_frame_mut::<StackFrameStringNewFromRuneSlice>();
     *frame.result_ptr = builder.build();

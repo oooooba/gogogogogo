@@ -507,9 +507,9 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 				case "append":
 					result := createValueRelName(instr)
 					result += ".raw"
-					ctx.switchFunctionToCallRuntimeApi("gox5_append", "StackFrameAppend", createInstructionName(instr), &result, nil,
-						paramArgPair{param: "base", arg: fmt.Sprintf("%s.raw", createValueRelName(callCommon.Args[0]))},
-						paramArgPair{param: "elements", arg: fmt.Sprintf("%s.raw", createValueRelName(callCommon.Args[1]))},
+					ctx.switchFunctionToCallRuntimeApi("gox5_slice_append", "StackFrameSliceAppend", createInstructionName(instr), &result, nil,
+						paramArgPair{param: "lhs", arg: fmt.Sprintf("%s.raw", createValueRelName(callCommon.Args[0]))},
+						paramArgPair{param: "rhs", arg: fmt.Sprintf("%s.raw", createValueRelName(callCommon.Args[1]))},
 					)
 					needToCallRuntimeApi = true
 				case "cap":
@@ -2105,10 +2105,10 @@ typedef struct {
 typedef struct {
 	StackFrameCommon common;
 	SliceObject* result_ptr;
-	SliceObject base;
-	SliceObject elements;
-} StackFrameAppend;
-DECLARE_RUNTIME_API(append, StackFrameAppend);
+	SliceObject lhs;
+	SliceObject rhs;
+} StackFrameSliceAppend;
+DECLARE_RUNTIME_API(slice_append, StackFrameSliceAppend);
 
 typedef struct {
 	StackFrameCommon common;

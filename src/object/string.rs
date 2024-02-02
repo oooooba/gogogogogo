@@ -49,7 +49,7 @@ impl StringObjectBuilder {
     }
 
     pub fn append_bytes(&mut self, src: &[u8]) {
-        assert!(self.cursor < self.len_in_bytes);
+        assert!(self.cursor <= self.len_in_bytes);
 
         let bytes = self.as_mut_slice();
         let len = src.len();

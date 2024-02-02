@@ -1,9 +1,9 @@
 pub(crate) mod map;
+pub(crate) mod slice;
 pub(crate) mod string;
 
 use std::mem;
 use std::ptr;
-use std::slice;
 
 use crate::gox5_run_defers;
 
@@ -18,98 +18,6 @@ use super::ObjectPtr;
 use super::StackFrame;
 use super::StackFrameCommon;
 use super::UserFunction;
-
-#[repr(C)]
-struct Slice {
-    addr: *mut (),
-    size: usize,
-    capacity: usize,
-}
-
-impl Slice {
-    fn new(addr: *mut (), size: usize, capacity: usize) -> Self {
-        Slice {
-            addr,
-            size,
-            capacity,
-        }
-    }
-
-    fn as_raw_slice<T>(&self) -> Option<&mut [T]> {
-        if self.capacity == 0 {
-            return None;
-        }
-        assert_ne!(self.addr, ptr::null_mut());
-        unsafe {
-            Some(slice::from_raw_parts_mut(
-                self.addr as *mut T,
-                self.capacity,
-            ))
-        }
-    }
-}
-
-#[repr(C)]
-struct StackFrameAppend {
-    common: StackFrameCommon,
-    result_ptr: *mut ObjectPtr,
-    base: Slice,
-    elements: Slice,
-}
-
-pub fn append(ctx: &mut LightWeightThreadContext) -> FunctionObject {
-    let (base, elements) = {
-        let stack_frame = ctx.stack_frame::<StackFrameAppend>();
-        (&stack_frame.base, &stack_frame.elements)
-    };
-
-    let mut result = Slice::new(ptr::null_mut(), 0, 0);
-
-    let new_size = base.size + elements.size;
-    let has_space = new_size < base.capacity;
-    if has_space {
-        unsafe {
-            ptr::copy_nonoverlapping(base, &mut result, 1);
-        }
-    } else {
-        let new_capacity = new_size * 2;
-        let buffer_size = new_capacity * mem::size_of::<isize>();
-        let ptr = ctx.global_context().process(|mut global_context| {
-            global_context
-                .allocator()
-                .allocate(buffer_size * mem::size_of::<isize>(), |_ptr| {})
-        });
-        unsafe {
-            ptr::write_bytes(ptr as *mut u8, 0, buffer_size);
-        }
-        result.addr = ptr;
-        result.size = new_size;
-        result.capacity = new_capacity;
-    }
-
-    if let Some(base_raw_slice) = base.as_raw_slice::<isize>() {
-        if !has_space {
-            let result_raw_slice = result.as_raw_slice().unwrap();
-            result_raw_slice[..base_raw_slice.len()]
-                .clone_from_slice(&base_raw_slice[..base_raw_slice.len()]);
-        }
-    }
-
-    if let Some(elements_raw_slice) = elements.as_raw_slice::<isize>() {
-        let result_raw_slice = result.as_raw_slice().unwrap();
-        for i in 0..elements_raw_slice.len() {
-            result_raw_slice[base.size + i] = elements_raw_slice[i];
-        }
-    }
-
-    let stack_frame = ctx.stack_frame_mut::<StackFrameAppend>();
-    unsafe {
-        let p = stack_frame.result_ptr as *mut Slice;
-        ptr::copy_nonoverlapping(&result, &mut *p, 1);
-    }
-
-    ctx.leave()
-}
 
 struct Deferred {
     prev_deferred: *const (),
@@ -242,7 +150,7 @@ pub fn make_closure(ctx: &mut LightWeightThreadContext) -> FunctionObject {
 
         let num_object_ptrs = stack_frame.num_object_ptrs;
         let object_ptrs = stack_frame.object_ptrs.as_ptr();
-        let object_ptrs = slice::from_raw_parts(object_ptrs, num_object_ptrs).to_vec();
+        let object_ptrs = std::slice::from_raw_parts(object_ptrs, num_object_ptrs).to_vec();
 
         let prev_object_ptrs = mem::replace(&mut closure_layout.object_ptrs, object_ptrs);
         mem::forget(prev_object_ptrs);

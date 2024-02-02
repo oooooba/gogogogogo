@@ -290,11 +290,6 @@ extern "C" {
 }
 
 #[no_mangle]
-pub extern "C" fn gox5_append(ctx: &mut LightWeightThreadContext) -> FunctionObject {
-    api::append(ctx)
-}
-
-#[no_mangle]
 pub extern "C" fn gox5_defer(ctx: &mut LightWeightThreadContext) -> FunctionObject {
     api::defer(ctx)
 }
