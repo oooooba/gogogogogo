@@ -28,11 +28,13 @@ impl SliceObject {
         self.capacity
     }
 
-    pub(crate) fn as_raw_slice<T>(&self) -> &[T] {
-        unsafe { slice::from_raw_parts(self.ptr as *const T, self.capacity) }
+    pub(crate) fn as_bytes(&self, elem_size_in_bytes: usize) -> &[u8] {
+        unsafe { slice::from_raw_parts(self.ptr as *const u8, self.capacity * elem_size_in_bytes) }
     }
 
-    pub(crate) fn as_raw_slice_mut<T>(&mut self) -> &mut [T] {
-        unsafe { slice::from_raw_parts_mut(self.ptr as *mut T, self.capacity) }
+    pub(crate) fn as_bytes_mut(&mut self, elem_size_in_bytes: usize) -> &mut [u8] {
+        unsafe {
+            slice::from_raw_parts_mut(self.ptr as *mut u8, self.capacity * elem_size_in_bytes)
+        }
     }
 }

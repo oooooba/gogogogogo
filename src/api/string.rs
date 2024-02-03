@@ -1,3 +1,5 @@
+use std::mem;
+
 use crate::object::slice::SliceObject;
 use crate::object::string::StringObject;
 use crate::FunctionObject;
@@ -22,7 +24,7 @@ pub extern "C" fn gox5_string_new_from_byte_slice(
         .global_context()
         .process(|mut global_context| StringObject::builder(len, global_context.allocator()));
 
-    let src_bytes = frame.byte_slice.as_raw_slice::<u8>();
+    let src_bytes = frame.byte_slice.as_bytes(mem::size_of::<u8>());
     builder.append_bytes(src_bytes);
 
     let frame = ctx.stack_frame_mut::<StackFrameStringNewFromByteSlice>();
@@ -74,22 +76,30 @@ pub extern "C" fn gox5_string_new_from_rune_slice(
     let rune_slice = &stack_frame.rune_slice;
 
     let len = {
-        let src_runes = rune_slice.as_raw_slice::<u32>();
-        src_runes[..rune_slice.size()].iter().fold(0, |acc, rune| {
-            let ch = char::from_u32(*rune).unwrap();
-            acc + ch.len_utf8()
-        })
+        let elem_size = mem::size_of::<u32>();
+        let src_bytes = rune_slice.as_bytes(elem_size);
+        src_bytes[..rune_slice.size() * elem_size]
+            .chunks(elem_size)
+            .fold(0, |acc, bytes| {
+                let rune = u32::from_le_bytes(bytes.try_into().unwrap());
+                let ch = char::from_u32(rune).unwrap();
+                acc + ch.len_utf8()
+            })
     };
 
     let mut builder = ctx
         .global_context()
         .process(|mut global_context| StringObject::builder(len, global_context.allocator()));
 
-    let src_runes = rune_slice.as_raw_slice::<u32>();
-    src_runes[..rune_slice.size()].iter().for_each(|rune| {
-        let ch = char::from_u32(*rune).unwrap();
-        builder.append_char(ch);
-    });
+    let elem_size = mem::size_of::<u32>();
+    let src_bytes = rune_slice.as_bytes(elem_size);
+    src_bytes[..rune_slice.size() * elem_size]
+        .chunks(elem_size)
+        .for_each(|bytes| {
+            let rune = u32::from_le_bytes(bytes.try_into().unwrap());
+            let ch = char::from_u32(rune).unwrap();
+            builder.append_char(ch);
+        });
 
     let frame = ctx.stack_frame_mut::<StackFrameStringNewFromRuneSlice>();
     *frame.result_ptr = builder.build();
