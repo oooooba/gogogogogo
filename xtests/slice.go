@@ -310,6 +310,42 @@ func Test21() int {
 	return 21
 }
 
+func Test22() int {
+	a8 := make([]uint8, 0)
+	if len(a8) != 0 {
+		return 0
+	}
+	a8 = append(a8, 1)
+	a8 = append(a8, 2)
+	if len(a8) != 2 {
+		return 1
+	}
+	if a8[0] != 1 {
+		return 3
+	}
+	if a8[1] != 2 {
+		return 4
+	}
+
+	a16 := make([]uint16, 0)
+	if len(a16) != 0 {
+		return 5
+	}
+	a16 = append(a16, 3)
+	a16 = append(a16, 4)
+	if len(a16) != 2 {
+		return 6
+	}
+	if a16[0] != 3 {
+		return 7
+	}
+	if a16[1] != 4 {
+		return 8
+	}
+
+	return 22
+}
+
 func main() {
 	runTest := func(testName string, test func() int) {
 		println(testName+":", test())
@@ -335,4 +371,5 @@ func main() {
 	runTest("Test19", Test19)
 	runTest("Test20", Test20)
 	runTest("Test21", Test21)
+	runTest("Test22", Test22)
 }

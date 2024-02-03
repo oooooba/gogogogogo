@@ -1,6 +1,5 @@
-use std::mem;
-
 use crate::object::slice::SliceObject;
+use crate::type_id::TypeId;
 use crate::FunctionObject;
 use crate::LightWeightThreadContext;
 use crate::StackFrameCommon;
@@ -9,6 +8,7 @@ use crate::StackFrameCommon;
 struct StackFrameSliceAppend<'a> {
     common: StackFrameCommon,
     result_ptr: &'a mut SliceObject,
+    type_id: TypeId,
     lhs: SliceObject,
     rhs: SliceObject,
 }
@@ -19,7 +19,7 @@ pub extern "C" fn gox5_slice_append(ctx: &mut LightWeightThreadContext) -> Funct
     let lhs = &stack_frame.lhs;
     let rhs = &stack_frame.rhs;
 
-    let elem_size = mem::size_of::<isize>();
+    let elem_size = stack_frame.type_id.size();
 
     let new_size = lhs.size() + rhs.size();
     let mut result = if new_size > lhs.capacity() {

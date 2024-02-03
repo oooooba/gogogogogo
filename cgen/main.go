@@ -507,7 +507,9 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 				case "append":
 					result := createValueRelName(instr)
 					result += ".raw"
+					typeId := fmt.Sprintf("(TypeId){ .info = &%s }", createTypeIdName(callCommon.Args[0].Type().Underlying().(*types.Slice).Elem()))
 					ctx.switchFunctionToCallRuntimeApi("gox5_slice_append", "StackFrameSliceAppend", createInstructionName(instr), &result, nil,
+						paramArgPair{param: "type_id", arg: typeId},
 						paramArgPair{param: "lhs", arg: fmt.Sprintf("%s.raw", createValueRelName(callCommon.Args[0]))},
 						paramArgPair{param: "rhs", arg: fmt.Sprintf("%s.raw", createValueRelName(callCommon.Args[1]))},
 					)
@@ -2105,6 +2107,7 @@ typedef struct {
 typedef struct {
 	StackFrameCommon common;
 	SliceObject* result_ptr;
+	TypeId type_id;
 	SliceObject lhs;
 	SliceObject rhs;
 } StackFrameSliceAppend;
