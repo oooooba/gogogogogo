@@ -16,8 +16,9 @@ impl SliceObject {
         }
     }
 
-    pub(crate) fn duplicate(&self) -> Self {
-        Self::new(self.ptr, self.size, self.capacity)
+    pub(crate) fn duplicate_extend(&self, addition: usize) -> Self {
+        assert!(self.size + addition <= self.capacity);
+        Self::new(self.ptr, self.size + addition, self.capacity)
     }
 
     pub(crate) fn size(&self) -> usize {

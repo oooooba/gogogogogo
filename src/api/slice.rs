@@ -22,7 +22,7 @@ pub extern "C" fn gox5_slice_append(ctx: &mut LightWeightThreadContext) -> Funct
     let elem_size = mem::size_of::<isize>();
 
     let new_size = lhs.size() + rhs.size();
-    let mut result = if new_size >= lhs.capacity() {
+    let mut result = if new_size > lhs.capacity() {
         let new_capacity = new_size * 2;
         let buffer_size = new_capacity * elem_size;
         let ptr = ctx.global_context().process(|mut global_context| {
@@ -39,7 +39,7 @@ pub extern "C" fn gox5_slice_append(ctx: &mut LightWeightThreadContext) -> Funct
 
         result
     } else {
-        lhs.duplicate()
+        lhs.duplicate_extend(lhs.size())
     };
 
     let rhs_slice = rhs.as_bytes(elem_size);
