@@ -801,8 +801,8 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 
 	case *ssa.MakeChan:
 		result := createValueRelName(instr)
-		ctx.switchFunctionToCallRuntimeApi("gox5_make_chan", "StackFrameMakeChan", createInstructionName(instr), &result, nil,
-			paramArgPair{param: "size", arg: createValueRelName(instr.Size)},
+		ctx.switchFunctionToCallRuntimeApi("gox5_channel_new", "StackFrameChannelNew", createInstructionName(instr), &result, nil,
+			paramArgPair{param: "capacity", arg: createValueRelName(instr.Size)},
 		)
 
 	case *ssa.MakeClosure:
@@ -939,7 +939,7 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 		ctx.switchFunctionToCallRuntimeApi("gox5_run_defers", "StackFrameRunDefers", createInstructionName(instr), nil, nil)
 
 	case *ssa.Send:
-		ctx.switchFunctionToCallRuntimeApi("gox5_send", "StackFrameSend", createInstructionName(instr), nil, nil,
+		ctx.switchFunctionToCallRuntimeApi("gox5_channel_send", "StackFrameChannelSend", createInstructionName(instr), nil, nil,
 			paramArgPair{param: "channel", arg: createValueRelName(instr.Chan)},
 			paramArgPair{param: "data", arg: createValueRelName(instr.X)},
 		)
@@ -1031,7 +1031,7 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 	case *ssa.UnOp:
 		if instr.Op == token.ARROW {
 			result := createValueRelName(instr)
-			ctx.switchFunctionToCallRuntimeApi("gox5_recv", "StackFrameRecv", createInstructionName(instr), &result, nil,
+			ctx.switchFunctionToCallRuntimeApi("gox5_channel_receive", "StackFrameChannelReceive", createInstructionName(instr), &result, nil,
 				paramArgPair{param: "channel", arg: createValueRelName(instr.X)},
 			)
 		} else {
@@ -2133,9 +2133,9 @@ DECLARE_RUNTIME_API(defer, StackFrameDefer);
 typedef struct {
 	StackFrameCommon common;
 	ChannelObject* result_ptr;
-	IntObject size; // ToDo: correct to proper type
-} StackFrameMakeChan;
-DECLARE_RUNTIME_API(make_chan, StackFrameMakeChan);
+	IntObject capacity; // ToDo: correct to proper type
+} StackFrameChannelNew;
+DECLARE_RUNTIME_API(channel_new, StackFrameChannelNew);
 
 typedef struct {
 	StackFrameCommon common;
@@ -2228,8 +2228,8 @@ typedef struct {
 	StackFrameCommon common;
 	IntObject* result_ptr;
 	ChannelObject channel;
-} StackFrameRecv;
-DECLARE_RUNTIME_API(recv, StackFrameRecv);
+} StackFrameChannelReceive;
+DECLARE_RUNTIME_API(channel_receive, StackFrameChannelReceive);
 
 typedef struct {
 	StackFrameCommon common;
@@ -2247,8 +2247,8 @@ typedef struct {
 	StackFrameCommon common;
 	ChannelObject channel;
 	IntObject data;
-} StackFrameSend;
-DECLARE_RUNTIME_API(send, StackFrameSend);
+} StackFrameChannelSend;
+DECLARE_RUNTIME_API(channel_send, StackFrameChannelSend);
 
 typedef struct {
 	StackFrameCommon common;

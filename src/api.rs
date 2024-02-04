@@ -1,3 +1,4 @@
+pub(crate) mod channel;
 pub(crate) mod map;
 pub(crate) mod slice;
 pub(crate) mod string;
@@ -7,7 +8,6 @@ use std::ptr;
 
 use crate::gox5_run_defers;
 
-use super::channel::Channel;
 use super::create_light_weight_thread_context;
 use super::interface::Interface;
 use super::type_id::TypeId;
@@ -81,47 +81,6 @@ pub fn defer(ctx: &mut LightWeightThreadContext) -> FunctionObject {
 
     ctx.update_deferred_list(ptr as *const ());
 
-    ctx.leave()
-}
-
-#[repr(C)]
-struct StackFrameMakeChan {
-    common: StackFrameCommon,
-    result_ptr: *mut ObjectPtr,
-    size: usize,
-}
-
-/// temporarily, exported for unit test
-pub fn allocate_channel(ctx: &mut LightWeightThreadContext, capacity: usize) -> *mut Channel {
-    let object_size = mem::size_of::<Channel>();
-    let ptr = ctx.global_context().process(|mut global_context| {
-        global_context
-            .allocator()
-            .allocate(object_size, |ptr| unsafe {
-                ptr::drop_in_place(ptr as *mut Channel)
-            }) as *mut Channel
-    });
-
-    let channel = Channel::new(capacity);
-    unsafe {
-        ptr::copy_nonoverlapping(&channel, ptr, 1);
-    }
-    mem::forget(channel);
-
-    ptr
-}
-
-pub fn make_chan(ctx: &mut LightWeightThreadContext) -> FunctionObject {
-    let size = {
-        let stack_frame = ctx.stack_frame::<StackFrameMakeChan>();
-        stack_frame.size
-    };
-    let ptr = allocate_channel(ctx, size);
-    let ptr = ObjectPtr(ptr as *mut ());
-    unsafe {
-        let stack_frame = ctx.stack_frame_mut::<StackFrameMakeChan>();
-        *stack_frame.result_ptr = ptr;
-    };
     ctx.leave()
 }
 
@@ -220,27 +179,6 @@ pub fn new(ctx: &mut LightWeightThreadContext) -> FunctionObject {
     ctx.leave()
 }
 
-#[repr(C)]
-struct StackFrameRecv {
-    common: StackFrameCommon,
-    result_ptr: *mut isize,
-    channel: ObjectPtr,
-}
-
-pub fn recv(ctx: &mut LightWeightThreadContext) -> Option<FunctionObject> {
-    let mut channel = {
-        let stack_frame = ctx.stack_frame::<StackFrameRecv>();
-        stack_frame.channel.clone()
-    };
-    let channel = channel.as_mut::<Channel>();
-    let data = channel.recv()?;
-    unsafe {
-        let stack_frame = ctx.stack_frame_mut::<StackFrameRecv>();
-        *stack_frame.result_ptr = data;
-    }
-    Some(ctx.leave())
-}
-
 pub fn schedule(ctx: &mut LightWeightThreadContext) -> FunctionObject {
     ctx.leave()
 }
@@ -289,23 +227,6 @@ pub fn run_defers(ctx: &mut LightWeightThreadContext) -> FunctionObject {
     ctx.update_stack_pointer(next_stack_pointer as *mut StackFrame);
 
     deferred.func.clone()
-}
-
-#[repr(C)]
-struct StackFrameSend {
-    common: StackFrameCommon,
-    channel: ObjectPtr,
-    data: isize,
-}
-
-pub fn send(ctx: &mut LightWeightThreadContext) -> Option<FunctionObject> {
-    let (mut channel, data) = {
-        let stack_frame = ctx.stack_frame::<StackFrameSend>();
-        (stack_frame.channel.clone(), stack_frame.data)
-    };
-    let channel = channel.as_mut::<Channel>();
-    channel.send(&data)?;
-    Some(ctx.leave())
 }
 
 #[repr(C)]

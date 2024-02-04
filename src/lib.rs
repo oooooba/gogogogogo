@@ -1,5 +1,4 @@
 mod api;
-mod channel;
 mod global_context;
 mod interface;
 mod object;
@@ -244,10 +243,10 @@ impl LightWeightThread {
             let func = self.context.prepare_user_function();
             let (next_func, suspends) = if func == gox5_schedule {
                 (api::schedule(&mut self.context), true)
-            } else if func == gox5_send {
-                (api::send(&mut self.context)?, false)
-            } else if func == gox5_recv {
-                (api::recv(&mut self.context)?, false)
+            } else if func == api::channel::gox5_channel_send {
+                (api::channel::send(&mut self.context)?, false)
+            } else if func == api::channel::gox5_channel_receive {
+                (api::channel::recv(&mut self.context)?, false)
             } else if func == gox5_spawn {
                 let (next_func, ctx) = api::spawn(&mut self.context);
                 new_ctx = Some(ctx);
@@ -295,11 +294,6 @@ pub extern "C" fn gox5_defer(ctx: &mut LightWeightThreadContext) -> FunctionObje
 }
 
 #[no_mangle]
-pub extern "C" fn gox5_make_chan(ctx: &mut LightWeightThreadContext) -> FunctionObject {
-    api::make_chan(ctx)
-}
-
-#[no_mangle]
 pub extern "C" fn gox5_make_closure(ctx: &mut LightWeightThreadContext) -> FunctionObject {
     api::make_closure(ctx)
 }
@@ -315,22 +309,12 @@ pub extern "C" fn gox5_new(ctx: &mut LightWeightThreadContext) -> FunctionObject
 }
 
 #[no_mangle]
-pub extern "C" fn gox5_recv(_ctx: &mut LightWeightThreadContext) -> FunctionObject {
-    unreachable!()
-}
-
-#[no_mangle]
 pub extern "C" fn gox5_run_defers(ctx: &mut LightWeightThreadContext) -> FunctionObject {
     api::run_defers(ctx)
 }
 
 #[no_mangle]
 pub extern "C" fn gox5_schedule(_ctx: &mut LightWeightThreadContext) -> FunctionObject {
-    unreachable!()
-}
-
-#[no_mangle]
-pub extern "C" fn gox5_send(_ctx: &mut LightWeightThreadContext) -> FunctionObject {
     unreachable!()
 }
 
@@ -473,7 +457,7 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-    use crate::api::allocate_channel;
+    use crate::api::channel::allocate_channel;
 
     use super::*;
 
