@@ -1,3 +1,4 @@
+use core::slice;
 use std::mem;
 use std::ptr;
 
@@ -5,6 +6,7 @@ use crate::object::channel::ChannelObject;
 use crate::FunctionObject;
 use crate::LightWeightThreadContext;
 use crate::StackFrameCommon;
+use crate::type_id::TypeId;
 
 use super::ObjectPtr;
 
@@ -51,10 +53,11 @@ pub extern "C" fn gox5_channel_new(ctx: &mut LightWeightThreadContext) -> Functi
 }
 
 #[repr(C)]
-struct StackFrameChannelReceive<'a> {
+struct StackFrameChannelReceive {
     common: StackFrameCommon,
-    result_ptr: &'a mut isize,
+    result_ptr: ObjectPtr,
     channel: ObjectPtr,
+    type_id: TypeId,
 }
 
 pub fn recv(ctx: &mut LightWeightThreadContext) -> Option<FunctionObject> {
@@ -64,10 +67,15 @@ pub fn recv(ctx: &mut LightWeightThreadContext) -> Option<FunctionObject> {
     let channel = channel.as_mut::<ChannelObject>();
     let id = ctx as *const _ as usize;
     let data = channel.receive(id)?;
-    let data = *data.as_ref::<isize>();
 
+    let data_size=frame.type_id.size();
     let frame = ctx.stack_frame_mut::<StackFrameChannelReceive>();
-    *frame.result_ptr = data;
+
+    unsafe {
+        let src= slice::from_raw_parts(data.as_ref::<u8>(), data_size);
+        let dst=slice::from_raw_parts_mut(frame.result_ptr.as_mut::<u8>() as *mut u8, data_size);
+        dst.copy_from_slice(src);
+    };
 
     Some(ctx.leave())
 }
@@ -81,19 +89,25 @@ pub extern "C" fn gox5_channel_receive(_ctx: &mut LightWeightThreadContext) -> F
 struct StackFrameChannelSend {
     common: StackFrameCommon,
     channel: ObjectPtr,
-    data: isize,
+    data: ObjectPtr,
+    type_id: TypeId,
 }
 
 pub fn send(ctx: &mut LightWeightThreadContext) -> Option<FunctionObject> {
     let frame = ctx.stack_frame::<StackFrameChannelSend>();
     let mut channel = frame.channel.clone();
 
+    let data_size=frame.type_id.size();
     let data = ctx.global_context().process(|mut global_context| {
         global_context
             .allocator()
-            .allocate(mem::size_of::<isize>(), |_| {})
+            .allocate(data_size, |_| {})
     });
-    unsafe { *(data as *mut isize) = frame.data };
+    unsafe {
+        let src= slice::from_raw_parts(frame.data.as_ref::<u8>(), data_size);
+        let dst=slice::from_raw_parts_mut(data as *mut u8, data_size);
+        dst.copy_from_slice(src);
+    };
     let data = ObjectPtr(data);
 
     let channel = channel.as_mut::<ChannelObject>();

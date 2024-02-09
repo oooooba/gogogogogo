@@ -939,9 +939,22 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 		ctx.switchFunctionToCallRuntimeApi("gox5_run_defers", "StackFrameRunDefers", createInstructionName(instr), nil, nil)
 
 	case *ssa.Send:
+		var sentObject string
+		switch instrX := instr.X.(type) {
+		case *ssa.Const:
+			id := fmt.Sprintf("tmp_%p", instr)
+			fmt.Fprintf(ctx.stream, "frame->%s = %s;\n", id, createValueRelName(instrX))
+			sentObject = fmt.Sprintf("frame->%s", id)
+
+		default:
+			sentObject = fmt.Sprintf("%s", createValueRelName(instr.X))
+		}
+		data := fmt.Sprintf("&%s", sentObject)
+		typeId := fmt.Sprintf("(TypeId){ .info = &%s }", createTypeIdName(instr.X.Type()))
 		ctx.switchFunctionToCallRuntimeApi("gox5_channel_send", "StackFrameChannelSend", createInstructionName(instr), nil, nil,
 			paramArgPair{param: "channel", arg: createValueRelName(instr.Chan)},
-			paramArgPair{param: "data", arg: createValueRelName(instr.X)},
+			paramArgPair{param: "data", arg: data},
+			paramArgPair{param: "type_id", arg: typeId},
 		)
 
 	case *ssa.Slice:
@@ -1030,9 +1043,11 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 
 	case *ssa.UnOp:
 		if instr.Op == token.ARROW {
+			typeId := fmt.Sprintf("(TypeId){ .info = &%s }", createTypeIdName(instr.X.Type()))
 			result := createValueRelName(instr)
 			ctx.switchFunctionToCallRuntimeApi("gox5_channel_receive", "StackFrameChannelReceive", createInstructionName(instr), &result, nil,
 				paramArgPair{param: "channel", arg: createValueRelName(instr.X)},
+				paramArgPair{param: "type_id", arg: typeId},
 			)
 		} else {
 			s := fmt.Sprintf("%s (%s.raw)", instr.Op.String(), createValueRelName(instr.X))
@@ -1382,6 +1397,11 @@ func (ctx *Context) emitFunctionDeclaration(function *ssa.Function) {
 					if value, ok := instr.Value.(*ssa.Const); ok {
 						id := fmt.Sprintf("tmp_%p", value)
 						fmt.Fprintf(ctx.stream, "\t%s %s; // %s : %s\n", createTypeName(value.Type()), id, value, value.Type())
+					}
+				case *ssa.Send:
+					if data, ok := instr.X.(*ssa.Const); ok {
+						id := fmt.Sprintf("tmp_%p", instr)
+						fmt.Fprintf(ctx.stream, "\t%s %s; // %s : %s\n", createTypeName(data.Type()), id, data, data.Type())
 					}
 				}
 			}
@@ -2226,8 +2246,9 @@ DECLARE_RUNTIME_API(new, StackFrameNew);
 
 typedef struct {
 	StackFrameCommon common;
-	IntObject* result_ptr;
+	void* result_ptr;
 	ChannelObject channel;
+	TypeId type_id;
 } StackFrameChannelReceive;
 DECLARE_RUNTIME_API(channel_receive, StackFrameChannelReceive);
 
@@ -2246,7 +2267,8 @@ DECLARE_RUNTIME_API(schedule, StackFrameSchedule);
 typedef struct {
 	StackFrameCommon common;
 	ChannelObject channel;
-	IntObject data;
+	void* data;
+	TypeId type_id;
 } StackFrameChannelSend;
 DECLARE_RUNTIME_API(channel_send, StackFrameChannelSend);
 

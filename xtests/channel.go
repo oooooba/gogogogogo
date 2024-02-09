@@ -19,6 +19,30 @@ func Test3() int {
 	return x
 }
 
+func Test4() int {
+	ch8 := make(chan uint8, 2)
+	ch8 <- 0
+	ch8 <- 1
+	if (<-ch8) != 0 {
+		return 0
+	}
+	if (<-ch8) != 1 {
+		return 1
+	}
+
+	ch16 := make(chan uint16, 2)
+	ch16 <- 2
+	ch16 <- 3
+	if (<-ch16) != 2 {
+		return 2
+	}
+	if (<-ch16) != 3 {
+		return 3
+	}
+
+	return 4
+}
+
 func main() {
 	runTest := func(testName string, test func() int) {
 		println(testName+":", test())
@@ -26,4 +50,5 @@ func main() {
 	runTest("Test1", Test1)
 	runTest("Test2", Test2)
 	runTest("Test3", Test3)
+	runTest("Test4", Test4)
 }
