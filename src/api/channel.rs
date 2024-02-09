@@ -1,7 +1,7 @@
 use std::mem;
 use std::ptr;
 
-use crate::object::channel::Channel;
+use crate::object::channel::ChannelObject;
 use crate::FunctionObject;
 use crate::LightWeightThreadContext;
 use crate::StackFrameCommon;
@@ -15,22 +15,23 @@ struct StackFrameChannelNew<'a> {
     capacity: usize,
 }
 
-/// temporarily, exported for unit test
-pub fn allocate_channel(ctx: &mut LightWeightThreadContext, capacity: usize) -> *mut Channel {
-    let object_size = mem::size_of::<Channel>();
+fn allocate_channel(ctx: &mut LightWeightThreadContext, capacity: usize) -> *mut ChannelObject {
+    let object_size = mem::size_of::<ChannelObject>();
     let ptr = ctx.global_context().process(|mut global_context| {
         global_context
             .allocator()
             .allocate(object_size, |ptr| unsafe {
-                ptr::drop_in_place(ptr as *mut Channel)
-            }) as *mut Channel
+                ptr::drop_in_place(ptr as *mut ChannelObject)
+            }) as *mut ChannelObject
     });
 
-    let channel = Channel::new(capacity);
+    let channel = ctx
+        .global_context()
+        .process(|mut global_context| ChannelObject::new(capacity, global_context.allocator()));
+
     unsafe {
         ptr::copy_nonoverlapping(&channel, ptr, 1);
     }
-    mem::forget(channel);
 
     ptr
 }
@@ -60,8 +61,10 @@ pub fn recv(ctx: &mut LightWeightThreadContext) -> Option<FunctionObject> {
     let frame = ctx.stack_frame::<StackFrameChannelReceive>();
     let mut channel = frame.channel.clone();
 
-    let channel = channel.as_mut::<Channel>();
-    let data = channel.recv()?;
+    let channel = channel.as_mut::<ChannelObject>();
+    let id = ctx as *const _ as usize;
+    let data = channel.receive(id)?;
+    let data = *data.as_ref::<isize>();
 
     let frame = ctx.stack_frame_mut::<StackFrameChannelReceive>();
     *frame.result_ptr = data;
@@ -85,8 +88,17 @@ pub fn send(ctx: &mut LightWeightThreadContext) -> Option<FunctionObject> {
     let frame = ctx.stack_frame::<StackFrameChannelSend>();
     let mut channel = frame.channel.clone();
 
-    let channel = channel.as_mut::<Channel>();
-    channel.send(&frame.data)?;
+    let data = ctx.global_context().process(|mut global_context| {
+        global_context
+            .allocator()
+            .allocate(mem::size_of::<isize>(), |_| {})
+    });
+    unsafe { *(data as *mut isize) = frame.data };
+    let data = ObjectPtr(data);
+
+    let channel = channel.as_mut::<ChannelObject>();
+    let id = ctx as *const _ as usize;
+    channel.send(id, data)?;
 
     Some(ctx.leave())
 }

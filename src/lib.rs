@@ -457,8 +457,6 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-    use crate::api::channel::allocate_channel;
-
     use super::*;
 
     struct AllocatedObject {
@@ -521,15 +519,6 @@ mod tests {
         let ctx = create_light_weight_thread_context(global_context.dupulicate());
         assert_eq!(ctx.global_context, global_context);
         assert!(ctx.prev_func == terminate);
-    }
-
-    #[test]
-    fn test_allocate_channel() {
-        let allocator = Box::new(MockObjectAllocator::new());
-        let global_context = global_context::create_global_context(allocator);
-        let mut ctx = create_light_weight_thread_context(global_context.dupulicate());
-        let channel = allocate_channel(&mut ctx, 1);
-        assert_ne!(channel, ptr::null_mut());
     }
 
     unsafe extern "C" fn user_function(ctx: &mut LightWeightThreadContext) -> FunctionObject {
