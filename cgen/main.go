@@ -1046,7 +1046,7 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 			result := createValueRelName(instr)
 			ctx.switchFunctionToCallRuntimeApi("gox5_channel_receive", "StackFrameChannelReceive", createInstructionName(instr), &result, nil,
 				paramArgPair{param: "channel", arg: createValueRelName(instr.X)},
-				paramArgPair{param: "type_id", arg: wrapInTypeId(instr.X.Type())},
+				paramArgPair{param: "type_id", arg: wrapInTypeId(instr.Type())},
 			)
 		} else {
 			s := fmt.Sprintf("%s (%s.raw)", instr.Op.String(), createValueRelName(instr.X))
