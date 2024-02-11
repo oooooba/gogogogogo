@@ -104,6 +104,10 @@ func wrapInObject(s string, t types.Type) string {
 	return fmt.Sprintf("(%s){.raw=%s}", createTypeName(t), s)
 }
 
+func wrapInTypeId(typ types.Type) string {
+	return fmt.Sprintf("(TypeId){ .info = &%s }", createTypeIdName(typ))
+}
+
 func createValueName(value ssa.Value) string {
 	if val, ok := value.(*ssa.Const); ok {
 		cst := "0"
@@ -507,9 +511,8 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 				case "append":
 					result := createValueRelName(instr)
 					result += ".raw"
-					typeId := fmt.Sprintf("(TypeId){ .info = &%s }", createTypeIdName(callCommon.Args[0].Type().Underlying().(*types.Slice).Elem()))
 					ctx.switchFunctionToCallRuntimeApi("gox5_slice_append", "StackFrameSliceAppend", createInstructionName(instr), &result, nil,
-						paramArgPair{param: "type_id", arg: typeId},
+						paramArgPair{param: "type_id", arg: wrapInTypeId(callCommon.Args[0].Type().Underlying().(*types.Slice).Elem())},
 						paramArgPair{param: "lhs", arg: fmt.Sprintf("%s.raw", createValueRelName(callCommon.Args[0]))},
 						paramArgPair{param: "rhs", arg: fmt.Sprintf("%s.raw", createValueRelName(callCommon.Args[1]))},
 					)
@@ -839,19 +842,17 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 
 		receiverPointer := fmt.Sprintf("&%s", receiverObject)
 
-		typeId := fmt.Sprintf("(TypeId){ .info = &%s }", createTypeIdName(instr.X.Type()))
-
 		result := createValueRelName(instr)
 		ctx.switchFunctionToCallRuntimeApi("gox5_make_interface", "StackFrameMakeInterface", createInstructionName(instr), &result, nil,
 			paramArgPair{param: "receiver", arg: receiverPointer},
-			paramArgPair{param: "type_id", arg: typeId},
+			paramArgPair{param: "type_id", arg: wrapInTypeId(instr.X.Type())},
 		)
 
 	case *ssa.MakeMap:
 		result := createValueRelName(instr)
 		ctx.switchFunctionToCallRuntimeApi("gox5_map_new", "StackFrameMapNew", createInstructionName(instr), &result, nil,
-			paramArgPair{param: "key_type", arg: fmt.Sprintf("(TypeId){ .info = &%s }", createTypeIdName(instr.Type().Underlying().(*types.Map).Key()))},
-			paramArgPair{param: "value_type", arg: fmt.Sprintf("(TypeId){ .info = &%s }", createTypeIdName(instr.Type().Underlying().(*types.Map).Elem()))},
+			paramArgPair{param: "key_type", arg: wrapInTypeId(instr.Type().Underlying().(*types.Map).Key())},
+			paramArgPair{param: "value_type", arg: wrapInTypeId(instr.Type().Underlying().(*types.Map).Elem())},
 		)
 
 	case *ssa.MakeSlice:
@@ -950,11 +951,10 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 			sentObject = fmt.Sprintf("%s", createValueRelName(instr.X))
 		}
 		data := fmt.Sprintf("&%s", sentObject)
-		typeId := fmt.Sprintf("(TypeId){ .info = &%s }", createTypeIdName(instr.X.Type()))
 		ctx.switchFunctionToCallRuntimeApi("gox5_channel_send", "StackFrameChannelSend", createInstructionName(instr), nil, nil,
 			paramArgPair{param: "channel", arg: createValueRelName(instr.Chan)},
 			paramArgPair{param: "data", arg: data},
-			paramArgPair{param: "type_id", arg: typeId},
+			paramArgPair{param: "type_id", arg: wrapInTypeId(instr.X.Type())},
 		)
 
 	case *ssa.Slice:
@@ -1029,7 +1029,7 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 						t.ExplicitMethod(i).Name())
 				}
 			} else {
-				fmt.Fprintf(ctx.stream, "TypeId type_id = (TypeId){ .info = &%s };\n", createTypeIdName(instr.AssertedType))
+				fmt.Fprintf(ctx.stream, "TypeId type_id = %s;\n", wrapInTypeId(instr.AssertedType))
 				fmt.Fprintf(ctx.stream, "bool can_convert = %s.type_id.id == type_id.id;\n", createValueRelName(instr.X))
 			}
 			fmt.Fprintf(ctx.stream, "%s = %s;\n", dstObj, wrapInObject("0", instr.Type()))
@@ -1043,11 +1043,10 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 
 	case *ssa.UnOp:
 		if instr.Op == token.ARROW {
-			typeId := fmt.Sprintf("(TypeId){ .info = &%s }", createTypeIdName(instr.X.Type()))
 			result := createValueRelName(instr)
 			ctx.switchFunctionToCallRuntimeApi("gox5_channel_receive", "StackFrameChannelReceive", createInstructionName(instr), &result, nil,
 				paramArgPair{param: "channel", arg: createValueRelName(instr.X)},
-				paramArgPair{param: "type_id", arg: typeId},
+				paramArgPair{param: "type_id", arg: wrapInTypeId(instr.X.Type())},
 			)
 		} else {
 			s := fmt.Sprintf("%s (%s.raw)", instr.Op.String(), createValueRelName(instr.X))
