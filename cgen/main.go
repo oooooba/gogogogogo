@@ -1639,13 +1639,13 @@ func (ctx *Context) emitTypeInfo() {
 func (ctx *Context) emitEqualFunctionDeclaration() {
 	ctx.visitAllTypes(ctx.program, func(typ types.Type) {
 		typeName := createTypeName(typ)
-		fmt.Fprintf(ctx.stream, "bool equal_%s(%s* lhs, %s* rhs); // %s\n", typeName, typeName, typeName, typ)
+		fmt.Fprintf(ctx.stream, "bool equal_%s(const %s* lhs, const %s* rhs); // %s\n", typeName, typeName, typeName, typ)
 	})
 }
 
 func (ctx *Context) emitEqualFunctionDefinition() {
 	fmt.Fprintf(ctx.stream, `
-bool equal_MapObject(MapObject* lhs, MapObject* rhs) {
+bool equal_MapObject(const MapObject* lhs, const MapObject* rhs) {
 	assert(lhs != NULL);
 	assert(rhs != NULL);
 	if(lhs->raw == rhs->raw) {
@@ -1658,7 +1658,7 @@ bool equal_MapObject(MapObject* lhs, MapObject* rhs) {
 	return false;
 }
 
-bool equal_Interface(Interface* lhs, Interface* rhs) {
+bool equal_Interface(const Interface* lhs, const Interface* rhs) {
 	assert(lhs!=NULL);
 	assert(rhs!=NULL);
 
@@ -1678,7 +1678,7 @@ bool equal_Interface(Interface* lhs, Interface* rhs) {
 		return false;
 	}
 
-	bool (*f)(void*, void*) = lhs->type_id.info->is_equal;
+	bool (*f)(const void*, const void*) = lhs->type_id.info->is_equal;
 	return f(lhs->receiver, rhs->receiver);
 }
 `)
@@ -1715,7 +1715,7 @@ bool equal_Interface(Interface* lhs, Interface* rhs) {
 		} else {
 			body += fmt.Sprintf("return equal_%s(lhs, rhs);\n", createTypeName(underlyingType))
 		}
-		fmt.Fprintf(ctx.stream, "bool equal_%s(%s* lhs, %s* rhs) { // %s\n", typeName, typeName, typeName, typ)
+		fmt.Fprintf(ctx.stream, "bool equal_%s(const %s* lhs, const %s* rhs) { // %s\n", typeName, typeName, typeName, typ)
 		fmt.Fprintf(ctx.stream, "%s", body)
 		fmt.Fprintf(ctx.stream, "}\n")
 	})
@@ -1724,19 +1724,19 @@ bool equal_Interface(Interface* lhs, Interface* rhs) {
 func (ctx *Context) emitHashFunctionDeclaration() {
 	ctx.visitAllTypes(ctx.program, func(typ types.Type) {
 		typeName := createTypeName(typ)
-		fmt.Fprintf(ctx.stream, "uintptr_t hash_%s(%s* obj); // %s\n", typeName, typeName, typ)
+		fmt.Fprintf(ctx.stream, "uintptr_t hash_%s(const %s* obj); // %s\n", typeName, typeName, typ)
 	})
 }
 
 func (ctx *Context) emitHashFunctionDefinition() {
 	fmt.Fprintf(ctx.stream, `
-uintptr_t hash_MapObject(MapObject* obj) {
+uintptr_t hash_MapObject(const MapObject* obj) {
 	assert(obj != NULL);
 	assert(false); /// not implemented
 	return 0;
 }
 
-uintptr_t hash_Interface(Interface* obj) {
+uintptr_t hash_Interface(const Interface* obj) {
 	(void)obj;
 	assert(false); /// not implemented
 	return 0;
@@ -1777,7 +1777,7 @@ uintptr_t hash_Interface(Interface* obj) {
 		} else {
 			body += fmt.Sprintf("return hash_%s(obj);\n", createTypeName(underlyingType))
 		}
-		fmt.Fprintf(ctx.stream, "uintptr_t hash_%s(%s* obj) { // %s\n", typeName, typeName, typ)
+		fmt.Fprintf(ctx.stream, "uintptr_t hash_%s(const %s* obj) { // %s\n", typeName, typeName, typ)
 		fmt.Fprintf(ctx.stream, "%s", body)
 		fmt.Fprintf(ctx.stream, "}\n")
 	})
@@ -2168,7 +2168,7 @@ DECLARE_RUNTIME_API(make_closure, StackFrameMakeClosure);
 typedef struct {
 	StackFrameCommon common;
 	Interface* result_ptr;
-	void* receiver;
+	const void* receiver;
 	TypeId type_id;
 } StackFrameMakeInterface;
 DECLARE_RUNTIME_API(make_interface, StackFrameMakeInterface);
@@ -2205,7 +2205,7 @@ DECLARE_RUNTIME_API(string_new_from_rune_slice, StackFrameStringNewFromRuneSlice
 typedef struct {
 	StackFrameCommon common;
 	MapObject map;
-	void* key;
+	const void* key;
 	void* value;
 	bool* found;
 } StackFrameMapGet;
@@ -2221,7 +2221,7 @@ DECLARE_RUNTIME_API(map_len, StackFrameMapLen);
 typedef struct {
 	StackFrameCommon common;
 	MapObject map;
-	void* key;
+	const void* key;
 	void* value;
 	bool* found;
 	uintptr_t* count;
@@ -2231,8 +2231,8 @@ DECLARE_RUNTIME_API(map_next, StackFrameMapNext);
 typedef struct {
 	StackFrameCommon common;
 	MapObject map;
-	void* key;
-	void* value;
+	const void* key;
+	const void* value;
 } StackFrameMapSet;
 DECLARE_RUNTIME_API(map_set, StackFrameMapSet);
 
@@ -2266,7 +2266,7 @@ DECLARE_RUNTIME_API(schedule, StackFrameSchedule);
 typedef struct {
 	StackFrameCommon common;
 	ChannelObject channel;
-	void* data;
+	const void* data;
 	TypeId type_id;
 } StackFrameChannelSend;
 DECLARE_RUNTIME_API(channel_send, StackFrameChannelSend);
