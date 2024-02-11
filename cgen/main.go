@@ -52,7 +52,6 @@ func main() {
 type Context struct {
 	stream           *os.File
 	program          *ssa.Program
-	foundValueSet    map[ssa.Value]struct{}
 	latestNameMap    map[*ssa.BasicBlock]string
 	signatureNameSet map[string]struct{}
 }
@@ -1034,140 +1033,6 @@ func createPackageName(pkg *ssa.Package) string {
 	return pkg.Pkg.Name()
 }
 
-func (ctx *Context) emitCallCommonDeclaration(callCommon *ssa.CallCommon) {
-	for _, arg := range callCommon.Args {
-		ctx.emitValueDeclaration(arg)
-	}
-}
-
-func (ctx *Context) emitValueDeclaration(value ssa.Value) {
-	_, ok := ctx.foundValueSet[value]
-	if ok {
-		return
-	}
-	ctx.foundValueSet[value] = struct{}{}
-
-	canEmit := true
-	switch val := value.(type) {
-	case *ssa.Alloc:
-		// do nothing
-
-	case *ssa.BinOp:
-		ctx.emitValueDeclaration(val.X)
-		ctx.emitValueDeclaration(val.Y)
-
-	case *ssa.Call:
-		ctx.emitCallCommonDeclaration(val.Common())
-
-	case *ssa.ChangeInterface:
-		ctx.emitValueDeclaration(val.X)
-
-	case *ssa.ChangeType:
-		ctx.emitValueDeclaration(val.X)
-
-	case *ssa.Const:
-		canEmit = false
-
-	case *ssa.Convert:
-		ctx.emitValueDeclaration(val.X)
-
-	case *ssa.Extract:
-		ctx.emitValueDeclaration(val.Tuple)
-
-	case *ssa.Field:
-		ctx.emitValueDeclaration(val.X)
-
-	case *ssa.FieldAddr:
-		ctx.emitValueDeclaration(val.X)
-
-	case *ssa.Global:
-		canEmit = false
-
-	case *ssa.FreeVar:
-		canEmit = false
-
-	case *ssa.Function:
-		canEmit = false
-
-	case *ssa.Index:
-		ctx.emitValueDeclaration(val.X)
-		ctx.emitValueDeclaration(val.Index)
-
-	case *ssa.IndexAddr:
-		ctx.emitValueDeclaration(val.X)
-		ctx.emitValueDeclaration(val.Index)
-
-	case *ssa.Lookup:
-		ctx.emitValueDeclaration(val.X)
-		ctx.emitValueDeclaration(val.Index)
-
-	case *ssa.MakeChan:
-		ctx.emitValueDeclaration(val.Size)
-
-	case *ssa.MakeClosure:
-		ctx.emitValueDeclaration(val.Fn)
-		for _, freeVar := range val.Bindings {
-			ctx.emitValueDeclaration(freeVar)
-		}
-
-	case *ssa.MakeInterface:
-		ctx.emitValueDeclaration(val.X)
-
-	case *ssa.MakeMap:
-		if val.Reserve != nil {
-			ctx.emitValueDeclaration(val.Reserve)
-		}
-
-	case *ssa.MakeSlice:
-		ctx.emitValueDeclaration(val.Len)
-		ctx.emitValueDeclaration(val.Cap)
-
-	case *ssa.Next:
-		ctx.emitValueDeclaration(val.Iter)
-
-	case *ssa.Parameter:
-		canEmit = false
-
-	case *ssa.Phi:
-		for _, edge := range val.Edges {
-			ctx.emitValueDeclaration(edge)
-		}
-
-	case *ssa.Range:
-		ctx.emitValueDeclaration(val.X)
-
-	case *ssa.Slice:
-		ctx.emitValueDeclaration(val.X)
-		if val.Low != nil {
-			ctx.emitValueDeclaration(val.Low)
-		}
-		if val.High != nil {
-			ctx.emitValueDeclaration(val.High)
-		}
-
-	case *ssa.TypeAssert:
-		ctx.emitValueDeclaration(val.X)
-
-	case *ssa.UnOp:
-		ctx.emitValueDeclaration(val.X)
-
-	default:
-		panic(fmt.Sprintf("unknown value: %s : %T", value.String(), value))
-	}
-
-	if t, ok := value.Type().(*types.Tuple); ok {
-		if t.Len() == 0 {
-			canEmit = false
-		}
-	}
-
-	fmt.Fprintf(ctx.stream, "\t// found %T: %s, %s\n", value, createValueName(value), value.String())
-	if canEmit {
-		id := fmt.Sprintf("%s", createValueName(value))
-		fmt.Fprintf(ctx.stream, "\t%s %s; // %s : %s\n", createTypeName(value.Type()), id, value.String(), value.Type())
-	}
-}
-
 func requireSwitchFunction(instruction ssa.Instruction) bool {
 	switch t := instruction.(type) {
 	case *ssa.Alloc:
@@ -1312,14 +1177,25 @@ func (ctx *Context) emitFunctionDeclaration(function *ssa.Function) {
 			fmt.Fprintf(ctx.stream, "\t%s %s;\n", createTypeName(local.Type().(*types.Pointer).Elem()), id)
 		}
 
-		ctx.foundValueSet = make(map[ssa.Value]struct{})
-		for _, basicBlock := range function.DomPreorder() {
-			for _, instr := range basicBlock.Instrs {
-				if value, ok := instr.(ssa.Value); ok {
-					ctx.emitValueDeclaration(value)
+		ctx.visitValue(function, func(value ssa.Value) {
+			switch value.(type) {
+			case *ssa.Builtin, *ssa.Const, *ssa.Global, *ssa.FreeVar, *ssa.Function, *ssa.Parameter:
+				return
+			}
+
+			if t, ok := value.Type().(*types.Tuple); ok {
+				if t.Len() == 0 {
+					return
 				}
 			}
-		}
+
+			if value.Parent() == nil {
+				panic(fmt.Sprintf("%s, %T", value, value))
+			}
+
+			id := createValueName(value)
+			fmt.Fprintf(ctx.stream, "\t%s %s; // %s : %s\n", createTypeName(value.Type()), id, value, value.Type())
+		})
 	}
 
 	fmt.Fprintf(ctx.stream, "} StackFrame_%s;\n", createFunctionName(function))
