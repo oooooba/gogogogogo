@@ -109,21 +109,8 @@ func wrapInTypeId(typ types.Type) string {
 }
 
 func createValueName(value ssa.Value) string {
-	if val, ok := value.(*ssa.Const); ok {
-		cst := "0"
-		if !val.IsNil() {
-			cst = val.Value.String()
-			if t, ok := val.Type().Underlying().(*types.Basic); ok {
-				switch t.Kind() {
-				case types.Complex64, types.Complex128, types.Float32, types.Float64:
-					cst = fmt.Sprintf("%g", val.Complex128())
-				}
-			}
-		}
-		if t, ok := val.Type().Underlying().(*types.Interface); ok {
-			return fmt.Sprintf("(%s){%s}", createTypeName(t), cst)
-		}
-		return wrapInObject(cst, val.Type())
+	if _, ok := value.(*ssa.Const); ok {
+		return encode(fmt.Sprintf("c$%p", value))
 	} else if val, ok := value.(*ssa.Function); ok {
 		return wrapInObject(createFunctionName(val), val.Type())
 	} else if val, ok := value.(*ssa.Parameter); ok {
@@ -776,14 +763,7 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 			}
 		case *types.Map:
 			result := createValueRelName(instr)
-			var keyId string
-			if key, ok := instr.Index.(*ssa.Const); ok {
-				keyId = fmt.Sprintf("frame->tmp_%p", key)
-				fmt.Fprintf(ctx.stream, "%s = %s;\n", keyId, createValueRelName(key))
-			} else {
-				keyId = createValueRelName(instr.Index)
-			}
-			key := fmt.Sprintf("&%s", keyId)
+			key := fmt.Sprintf("&%s", createValueRelName(instr.Index))
 			var value, found string
 			if instr.CommaOk {
 				value = fmt.Sprintf("&%s.raw.e0", result)
@@ -829,22 +809,9 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 		)
 
 	case *ssa.MakeInterface:
-		var receiverObject string
-		switch instrX := instr.X.(type) {
-		case *ssa.Const, *ssa.Function:
-			id := fmt.Sprintf("tmp_%s", createValueName(instr))
-			fmt.Fprintf(ctx.stream, "frame->%s = %s;\n", id, createValueRelName(instrX))
-			receiverObject = fmt.Sprintf("frame->%s", id)
-
-		default:
-			receiverObject = fmt.Sprintf("%s", createValueRelName(instr.X))
-		}
-
-		receiverPointer := fmt.Sprintf("&%s", receiverObject)
-
 		result := createValueRelName(instr)
 		ctx.switchFunctionToCallRuntimeApi("gox5_make_interface", "StackFrameMakeInterface", createInstructionName(instr), &result, nil,
-			paramArgPair{param: "receiver", arg: receiverPointer},
+			paramArgPair{param: "receiver", arg: fmt.Sprintf("&%s", createValueRelName(instr.X))},
 			paramArgPair{param: "type_id", arg: wrapInTypeId(instr.X.Type())},
 		)
 
@@ -866,24 +833,10 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 		)
 
 	case *ssa.MapUpdate:
-		var keyId string
-		if key, ok := instr.Key.(*ssa.Const); ok {
-			keyId = fmt.Sprintf("frame->tmp_%p", key)
-			fmt.Fprintf(ctx.stream, "%s = %s;\n", keyId, createValueRelName(key))
-		} else {
-			keyId = createValueRelName(instr.Key)
-		}
-		var valueId string
-		if value, ok := instr.Value.(*ssa.Const); ok {
-			valueId = fmt.Sprintf("frame->tmp_%p", value)
-			fmt.Fprintf(ctx.stream, "%s = %s;\n", valueId, createValueRelName(value))
-		} else {
-			valueId = createValueRelName(instr.Value)
-		}
 		ctx.switchFunctionToCallRuntimeApi("gox5_map_set", "StackFrameMapSet", createInstructionName(instr), nil, nil,
 			paramArgPair{param: "map", arg: createValueRelName(instr.Map)},
-			paramArgPair{param: "key", arg: fmt.Sprintf("&%s", keyId)},
-			paramArgPair{param: "value", arg: fmt.Sprintf("&%s", valueId)},
+			paramArgPair{param: "key", arg: fmt.Sprintf("&%s", createValueRelName(instr.Key))},
+			paramArgPair{param: "value", arg: fmt.Sprintf("&%s", createValueRelName(instr.Value))},
 		)
 
 	case *ssa.Next:
@@ -940,20 +893,9 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 		ctx.switchFunctionToCallRuntimeApi("gox5_run_defers", "StackFrameRunDefers", createInstructionName(instr), nil, nil)
 
 	case *ssa.Send:
-		var sentObject string
-		switch instrX := instr.X.(type) {
-		case *ssa.Const:
-			id := fmt.Sprintf("tmp_%p", instr)
-			fmt.Fprintf(ctx.stream, "frame->%s = %s;\n", id, createValueRelName(instrX))
-			sentObject = fmt.Sprintf("frame->%s", id)
-
-		default:
-			sentObject = fmt.Sprintf("%s", createValueRelName(instr.X))
-		}
-		data := fmt.Sprintf("&%s", sentObject)
 		ctx.switchFunctionToCallRuntimeApi("gox5_channel_send", "StackFrameChannelSend", createInstructionName(instr), nil, nil,
 			paramArgPair{param: "channel", arg: createValueRelName(instr.Chan)},
-			paramArgPair{param: "data", arg: data},
+			paramArgPair{param: "data", arg: fmt.Sprintf("&%s", createValueRelName(instr.X))},
 			paramArgPair{param: "type_id", arg: wrapInTypeId(instr.X.Type())},
 		)
 
@@ -1158,12 +1100,6 @@ func (ctx *Context) emitValueDeclaration(value ssa.Value) {
 	case *ssa.Lookup:
 		ctx.emitValueDeclaration(val.X)
 		ctx.emitValueDeclaration(val.Index)
-		if _, ok := val.X.Type().Underlying().(*types.Map); ok {
-			if key, ok := val.Index.(*ssa.Const); ok {
-				id := fmt.Sprintf("tmp_%p", key)
-				fmt.Fprintf(ctx.stream, "\t%s %s; // %s : %s\n", createTypeName(key.Type()), id, key, key.Type())
-			}
-		}
 
 	case *ssa.MakeChan:
 		ctx.emitValueDeclaration(val.Size)
@@ -1176,11 +1112,6 @@ func (ctx *Context) emitValueDeclaration(value ssa.Value) {
 
 	case *ssa.MakeInterface:
 		ctx.emitValueDeclaration(val.X)
-		switch valX := val.X.(type) {
-		case *ssa.Const, *ssa.Function:
-			id := fmt.Sprintf("tmp_%s", createValueName(val))
-			fmt.Fprintf(ctx.stream, "\t%s %s; // %s : %s\n", createTypeName(valX.Type()), id, valX.String(), valX.Type())
-		}
 
 	case *ssa.MakeMap:
 		if val.Reserve != nil {
@@ -1386,22 +1317,6 @@ func (ctx *Context) emitFunctionDeclaration(function *ssa.Function) {
 			for _, instr := range basicBlock.Instrs {
 				if value, ok := instr.(ssa.Value); ok {
 					ctx.emitValueDeclaration(value)
-				}
-				switch instr := instr.(type) {
-				case *ssa.MapUpdate:
-					if key, ok := instr.Key.(*ssa.Const); ok {
-						id := fmt.Sprintf("tmp_%p", key)
-						fmt.Fprintf(ctx.stream, "\t%s %s; // %s : %s\n", createTypeName(key.Type()), id, key, key.Type())
-					}
-					if value, ok := instr.Value.(*ssa.Const); ok {
-						id := fmt.Sprintf("tmp_%p", value)
-						fmt.Fprintf(ctx.stream, "\t%s %s; // %s : %s\n", createTypeName(value.Type()), id, value, value.Type())
-					}
-				case *ssa.Send:
-					if data, ok := instr.X.(*ssa.Const); ok {
-						id := fmt.Sprintf("tmp_%p", instr)
-						fmt.Fprintf(ctx.stream, "\t%s %s; // %s : %s\n", createTypeName(data.Type()), id, data, data.Type())
-					}
 				}
 			}
 		}
@@ -1633,6 +1548,42 @@ func (ctx *Context) emitTypeInfo() {
 		fmt.Fprintf(ctx.stream, ".hash = hash_%s,\n", createTypeName(typ))
 		fmt.Fprintf(ctx.stream, ".size = sizeof(%s),\n", createTypeName(typ))
 		fmt.Fprintf(ctx.stream, "};\n")
+	})
+}
+
+func (ctx *Context) emitConstant() {
+	foundConstValueSet := make(map[*ssa.Const]struct{})
+	ctx.visitAllFunctions(ctx.program, func(function *ssa.Function) {
+		ctx.visitValue(function, func(value ssa.Value) {
+			if cst, ok := value.(*ssa.Const); ok {
+				if _, ok := foundConstValueSet[cst]; ok {
+					return
+				}
+				foundConstValueSet[cst] = struct{}{}
+
+				inner := "0"
+				if !cst.IsNil() {
+					inner = cst.Value.String()
+					if t, ok := cst.Type().Underlying().(*types.Basic); ok {
+						switch t.Kind() {
+						case types.Complex64, types.Complex128, types.Float32, types.Float64:
+							inner = fmt.Sprintf("%g", cst.Complex128())
+						}
+					}
+				}
+
+				var value string
+				if t, ok := cst.Type().Underlying().(*types.Interface); ok {
+					value = fmt.Sprintf("(%s){%s}", createTypeName(t), inner)
+				} else {
+					value = wrapInObject(inner, cst.Type())
+				}
+
+				typeName := createTypeName(cst.Type())
+				valueName := createValueName(cst)
+				fmt.Fprintf(ctx.stream, "__attribute__((unused)) static const %s %s = %s;\n", typeName, valueName, value)
+			}
+		})
 	})
 }
 
@@ -2016,6 +1967,168 @@ func (ctx *Context) visitAllTypes(program *ssa.Program, procedure func(typ types
 	})
 }
 
+func (ctx *Context) visitValue(function *ssa.Function, procedure func(value ssa.Value)) {
+	foundValueSet := make(map[ssa.Value]struct{})
+	var f func(value ssa.Value)
+	g := func(callCommon *ssa.CallCommon) {
+		f(callCommon.Value)
+		for _, arg := range callCommon.Args {
+			f(arg)
+		}
+	}
+	f = func(value ssa.Value) {
+		_, ok := foundValueSet[value]
+		if ok {
+			return
+		}
+		foundValueSet[value] = struct{}{}
+
+		switch val := value.(type) {
+		case *ssa.Alloc, *ssa.Builtin, *ssa.Const, *ssa.FreeVar, *ssa.Function, *ssa.Global, *ssa.Parameter:
+			// do nothing
+
+		case *ssa.BinOp:
+			f(val.X)
+			f(val.Y)
+
+		case *ssa.Call:
+			g(val.Common())
+
+		case *ssa.ChangeInterface:
+			f(val.X)
+
+		case *ssa.ChangeType:
+			f(val.X)
+
+		case *ssa.Convert:
+			f(val.X)
+
+		case *ssa.Extract:
+			f(val.Tuple)
+
+		case *ssa.Field:
+			f(val.X)
+
+		case *ssa.FieldAddr:
+			f(val.X)
+
+		case *ssa.Index:
+			f(val.X)
+			f(val.Index)
+
+		case *ssa.IndexAddr:
+			f(val.X)
+			f(val.Index)
+
+		case *ssa.Lookup:
+			f(val.X)
+			f(val.Index)
+
+		case *ssa.MakeChan:
+			f(val.Size)
+
+		case *ssa.MakeClosure:
+			f(val.Fn)
+			for _, freeVar := range val.Bindings {
+				f(freeVar)
+			}
+
+		case *ssa.MakeInterface:
+			f(val.X)
+
+		case *ssa.MakeMap:
+			if val.Reserve != nil {
+				f(val.Reserve)
+			}
+
+		case *ssa.MakeSlice:
+			f(val.Len)
+			f(val.Cap)
+
+		case *ssa.Next:
+			f(val.Iter)
+
+		case *ssa.Phi:
+			for _, edge := range val.Edges {
+				f(edge)
+			}
+
+		case *ssa.Range:
+			f(val.X)
+
+		case *ssa.Slice:
+			f(val.X)
+			if val.Low != nil {
+				f(val.Low)
+			}
+			if val.High != nil {
+				f(val.High)
+			}
+			if val.Max != nil {
+				f(val.Max)
+			}
+
+		case *ssa.TypeAssert:
+			f(val.X)
+
+		case *ssa.UnOp:
+			f(val.X)
+
+		default:
+			value.Parent().WriteTo(os.Stderr)
+			panic(fmt.Sprintf("unknown value: %s : %T", value.String(), value))
+		}
+
+		procedure(value)
+	}
+
+	for _, basicBlock := range function.DomPreorder() {
+		for _, instruction := range basicBlock.Instrs {
+			switch instr := instruction.(type) {
+			case ssa.Value:
+				f(instr)
+
+			case *ssa.Defer:
+				g(instr.Common())
+
+			case *ssa.Go:
+				g(instr.Common())
+
+			case *ssa.If:
+				f(instr.Cond)
+
+			case *ssa.Jump, *ssa.RunDefers:
+				// do nothing
+
+			case *ssa.MapUpdate:
+				f(instr.Map)
+				f(instr.Key)
+				f(instr.Value)
+
+			case *ssa.Panic:
+				f(instr.X)
+
+			case *ssa.Return:
+				for _, result := range instr.Results {
+					f(result)
+				}
+
+			case *ssa.Send:
+				f(instr.Chan)
+				f(instr.X)
+
+			case *ssa.Store:
+				f(instr.Addr)
+				f(instr.Val)
+
+			default:
+				instr.Parent().WriteTo(os.Stderr)
+				panic(fmt.Sprintf("unknown value: %s : %T", instr.String(), instr))
+			}
+		}
+	}
+}
+
 func (ctx *Context) emitProgram(program *ssa.Program) {
 	fmt.Fprintf(ctx.stream, `
 #include <stdbool.h>
@@ -2330,6 +2443,7 @@ __attribute__((unused)) static void builtin_print_float(double val) {
 	ctx.emitHashFunctionDefinition()
 	ctx.emitInterfaceTable()
 	ctx.emitTypeInfo()
+	ctx.emitConstant()
 
 	for _, pkg := range program.AllPackages() {
 		for member := range pkg.Members {
