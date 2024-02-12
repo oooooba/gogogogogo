@@ -8,6 +8,7 @@ use crate::ObjectPtr;
 pub(crate) enum ReceiveStatus<T> {
     Value(T),
     Blocked,
+    Closed,
 }
 
 struct BufferedChannel {
@@ -110,6 +111,7 @@ enum ChannelType {
 
 pub(crate) struct ChannelObject {
     channel_type: ChannelType,
+    is_closed: bool,
 }
 
 impl ChannelObject {
@@ -119,7 +121,15 @@ impl ChannelObject {
         } else {
             ChannelType::Rendezvous(RendezvousChannel::new())
         };
-        Self { channel_type }
+        Self {
+            channel_type,
+            is_closed: false,
+        }
+    }
+
+    pub fn close(&mut self, _id: usize) {
+        assert!(!self.is_closed);
+        self.is_closed = true;
     }
 
     pub fn send(&mut self, id: usize, data: ObjectPtr) -> Option<()> {
@@ -136,6 +146,8 @@ impl ChannelObject {
         };
         if let Some(data) = result {
             ReceiveStatus::Value(data)
+        } else if self.is_closed {
+            ReceiveStatus::Closed
         } else {
             ReceiveStatus::Blocked
         }
@@ -155,6 +167,7 @@ mod tests {
             use ReceiveStatus::*;
             match (self, other) {
                 (Blocked, Blocked) => true,
+                (Closed, Closed) => true,
                 _ => false,
             }
         }
@@ -297,6 +310,33 @@ mod tests {
     }
 
     #[test]
+    fn test_buffered_channel_send_close_receive() {
+        let mut allocator = MockObjectAllocator::new();
+        let channel = Rc::new(RefCell::new(ChannelObject::new(1, &mut allocator)));
+        {
+            let data = allocator.allocate(mem::size_of::<isize>(), |_| {}) as *mut isize;
+            unsafe { *data = 42 };
+            let data = ObjectPtr(data as *mut ());
+            let result = channel.borrow_mut().send(1, data);
+            assert_eq!(result, Some(()));
+        }
+        {
+            channel.borrow_mut().close(1);
+        }
+        {
+            let result = channel.borrow_mut().receive(1);
+            let ReceiveStatus::Value(data) = result else {
+                panic!()
+            };
+            assert_eq!(*data.as_ref::<isize>(), 42);
+        }
+        {
+            let result = channel.borrow_mut().receive(1);
+            assert_eq!(result, ReceiveStatus::Closed);
+        }
+    }
+
+    #[test]
     fn test_rendezvous_channel_first_send_second_receive() {
         let mut allocator = MockObjectAllocator::new();
         let channel = Rc::new(RefCell::new(ChannelObject::new(0, &mut allocator)));
@@ -351,6 +391,35 @@ mod tests {
             let data = ObjectPtr(ptr::null_mut() as *mut ());
             let result = second.borrow_mut().send(2, data);
             assert_eq!(result, Some(()));
+        }
+    }
+
+    #[test]
+    fn test_rendezvous_channel_first_send_and_close_second_receive() {
+        let mut allocator = MockObjectAllocator::new();
+        let channel = Rc::new(RefCell::new(ChannelObject::new(0, &mut allocator)));
+        let first = channel.clone();
+        let second = channel;
+        {
+            let data = allocator.allocate(mem::size_of::<isize>(), |_| {}) as *mut isize;
+            unsafe { *data = 42 };
+            let data = ObjectPtr(data as *mut ());
+            let result = first.borrow_mut().send(1, data);
+            assert_eq!(result, None);
+        }
+        {
+            first.borrow_mut().close(1);
+        }
+        {
+            let result = second.borrow_mut().receive(2);
+            let ReceiveStatus::Value(data) = result else {
+                panic!()
+            };
+            assert_eq!(*data.as_ref::<isize>(), 42);
+        }
+        {
+            let result = second.borrow_mut().receive(2);
+            assert_eq!(result, ReceiveStatus::Closed);
         }
     }
 }

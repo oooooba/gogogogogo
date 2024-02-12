@@ -43,6 +43,40 @@ func Test4() int {
 	return 4
 }
 
+func Test5() int {
+	ch := make(chan int)
+	close(ch)
+	v, ok := <-ch
+	if ok {
+		return 0
+	}
+	if v != 0 {
+		return 1
+	}
+	return 5
+}
+
+func Test6() int {
+	ch := make(chan int, 1)
+	ch <- 42
+	close(ch)
+	v, ok := <-ch
+	if !ok {
+		return 0
+	}
+	if v != 42 {
+		return 1
+	}
+	v, ok = <-ch
+	if ok {
+		return 2
+	}
+	if v != 0 {
+		return 3
+	}
+	return 6
+}
+
 func main() {
 	runTest := func(testName string, test func() int) {
 		println(testName+":", test())
@@ -51,4 +85,6 @@ func main() {
 	runTest("Test2", Test2)
 	runTest("Test3", Test3)
 	runTest("Test4", Test4)
+	runTest("Test5", Test5)
+	runTest("Test6", Test6)
 }

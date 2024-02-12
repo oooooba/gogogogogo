@@ -511,6 +511,12 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 					)
 					needToCallRuntimeApi = true
 
+				case "close":
+					ctx.switchFunctionToCallRuntimeApi("gox5_channel_close", "StackFrameChannelClose", createInstructionName(instr), nil, nil,
+						paramArgPair{param: "channel", arg: fmt.Sprintf("%s", createValueRelName(callCommon.Args[0]))},
+					)
+					needToCallRuntimeApi = true
+
 				case "complex":
 					raw = fmt.Sprintf("%s.raw + %s.raw * I",
 						createValueRelName(callCommon.Args[0]), createValueRelName(callCommon.Args[1]))
@@ -996,9 +1002,21 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 	case *ssa.UnOp:
 		if instr.Op == token.ARROW {
 			result := createValueRelName(instr)
-			ctx.switchFunctionToCallRuntimeApi("gox5_channel_receive", "StackFrameChannelReceive", createInstructionName(instr), &result, nil,
+			var typeId, data, available string
+			if instr.CommaOk {
+				typeId = wrapInTypeId(instr.Type().(*types.Tuple).At(0).Type())
+				data = fmt.Sprintf("&%s.raw.e0", result)
+				available = fmt.Sprintf("&%s.raw.e1.raw", result)
+			} else {
+				typeId = wrapInTypeId(instr.Type())
+				data = fmt.Sprintf("&%s", result)
+				available = "NULL"
+			}
+			ctx.switchFunctionToCallRuntimeApi("gox5_channel_receive", "StackFrameChannelReceive", createInstructionName(instr), nil, nil,
 				paramArgPair{param: "channel", arg: createValueRelName(instr.X)},
-				paramArgPair{param: "type_id", arg: wrapInTypeId(instr.Type())},
+				paramArgPair{param: "type_id", arg: typeId},
+				paramArgPair{param: "data", arg: data},
+				paramArgPair{param: "available", arg: available},
 			)
 		} else {
 			s := fmt.Sprintf("%s (%s.raw)", instr.Op.String(), createValueRelName(instr.X))
@@ -2259,9 +2277,16 @@ DECLARE_RUNTIME_API(new, StackFrameNew);
 
 typedef struct {
 	StackFrameCommon common;
-	void* result_ptr;
+	ChannelObject channel;
+} StackFrameChannelClose;
+DECLARE_RUNTIME_API(channel_close, StackFrameChannelClose);
+
+typedef struct {
+	StackFrameCommon common;
 	ChannelObject channel;
 	TypeId type_id;
+	void* data;
+	bool* available;
 } StackFrameChannelReceive;
 DECLARE_RUNTIME_API(channel_receive, StackFrameChannelReceive);
 

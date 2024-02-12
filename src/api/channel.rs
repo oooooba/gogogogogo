@@ -54,11 +54,30 @@ pub extern "C" fn gox5_channel_new(ctx: &mut LightWeightThreadContext) -> Functi
 }
 
 #[repr(C)]
+struct StackFrameChannelClose {
+    common: StackFrameCommon,
+    channel: ObjectPtr,
+}
+
+#[no_mangle]
+pub extern "C" fn gox5_channel_close(ctx: &mut LightWeightThreadContext) -> FunctionObject {
+    let frame = ctx.stack_frame::<StackFrameChannelClose>();
+    let mut channel = frame.channel.clone();
+    let channel = channel.as_mut::<ChannelObject>();
+    let id = ctx as *const _ as usize;
+
+    channel.close(id);
+
+    ctx.leave()
+}
+
+#[repr(C)]
 struct StackFrameChannelReceive {
     common: StackFrameCommon,
-    result_ptr: ObjectPtr,
     channel: ObjectPtr,
     type_id: TypeId,
+    data: ObjectPtr,
+    available: ObjectPtr,
 }
 
 pub fn recv(ctx: &mut LightWeightThreadContext) -> Option<FunctionObject> {
@@ -68,18 +87,29 @@ pub fn recv(ctx: &mut LightWeightThreadContext) -> Option<FunctionObject> {
     let channel = channel.as_mut::<ChannelObject>();
     let id = ctx as *const _ as usize;
     let data = match channel.receive(id) {
-        ReceiveStatus::Value(data) => data,
+        ReceiveStatus::Value(data) => Some(data),
         ReceiveStatus::Blocked => return None,
+        ReceiveStatus::Closed => None,
     };
+
+    let frame = ctx.stack_frame_mut::<StackFrameChannelReceive>();
+    if !frame.available.is_null() {
+        *frame.available.as_mut::<bool>() = data.is_some();
+    }
 
     let data_size = frame.type_id.size();
-    let frame = ctx.stack_frame_mut::<StackFrameChannelReceive>();
-
-    unsafe {
-        let src = slice::from_raw_parts(data.as_ref::<u8>(), data_size);
-        let dst = slice::from_raw_parts_mut(frame.result_ptr.as_mut::<u8>() as *mut u8, data_size);
-        dst.copy_from_slice(src);
-    };
+    if let Some(data) = data {
+        unsafe {
+            let src = slice::from_raw_parts(data.as_ref::<u8>(), data_size);
+            let dst = slice::from_raw_parts_mut(frame.data.as_mut::<u8>(), data_size);
+            dst.copy_from_slice(src);
+        };
+    } else {
+        unsafe {
+            let dst = frame.data.as_mut::<u8>();
+            ptr::write_bytes(dst, 0, data_size);
+        }
+    }
 
     Some(ctx.leave())
 }
