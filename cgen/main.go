@@ -503,9 +503,13 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 						paramArgPair{param: "rhs", arg: fmt.Sprintf("%s.raw", createValueRelName(callCommon.Args[1]))},
 					)
 					needToCallRuntimeApi = true
+
 				case "cap":
-					fmt.Fprintf(ctx.stream, "uintptr_t raw = %s.typed.capacity;", createValueRelName(callCommon.Args[0]))
-					raw = "raw"
+					result := createValueRelName(instr)
+					ctx.switchFunctionToCallRuntimeApi("gox5_slice_capacity", "StackFrameSliceCapacity", createInstructionName(instr), &result, nil,
+						paramArgPair{param: "slice", arg: fmt.Sprintf("%s.raw", createValueRelName(callCommon.Args[0]))},
+					)
+					needToCallRuntimeApi = true
 
 				case "complex":
 					raw = fmt.Sprintf("%s.raw + %s.raw * I",
@@ -2120,6 +2124,13 @@ typedef struct {
 	SliceObject rhs;
 } StackFrameSliceAppend;
 DECLARE_RUNTIME_API(slice_append, StackFrameSliceAppend);
+
+typedef struct {
+	StackFrameCommon common;
+	IntObject* result_ptr;
+	SliceObject slice;
+} StackFrameSliceCapacity;
+DECLARE_RUNTIME_API(slice_capacity, StackFrameSliceCapacity);
 
 typedef struct {
 	StackFrameCommon common;
