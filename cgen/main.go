@@ -534,8 +534,11 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 						)
 						needToCallRuntimeApi = true
 					case *types.Slice:
-						fmt.Fprintf(ctx.stream, "uintptr_t raw = %s.typed.size;", createValueRelName(callCommon.Args[0]))
-						raw = "raw"
+						result := createValueRelName(instr)
+						ctx.switchFunctionToCallRuntimeApi("gox5_slice_size", "StackFrameSliceSize", createInstructionName(instr), &result, nil,
+							paramArgPair{param: "slice", arg: fmt.Sprintf("%s.raw", createValueRelName(callCommon.Args[0]))},
+						)
+						needToCallRuntimeApi = true
 					default:
 						panic(fmt.Sprintf("unsuported argument for len: %s", callCommon.Args[0]))
 					}
@@ -2131,6 +2134,13 @@ typedef struct {
 	SliceObject slice;
 } StackFrameSliceCapacity;
 DECLARE_RUNTIME_API(slice_capacity, StackFrameSliceCapacity);
+
+typedef struct {
+	StackFrameCommon common;
+	IntObject* result_ptr;
+	SliceObject slice;
+} StackFrameSliceSize;
+DECLARE_RUNTIME_API(slice_size, StackFrameSliceSize);
 
 typedef struct {
 	StackFrameCommon common;

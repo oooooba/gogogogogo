@@ -71,3 +71,21 @@ pub extern "C" fn gox5_slice_capacity(ctx: &mut LightWeightThreadContext) -> Fun
 
     ctx.leave()
 }
+
+#[repr(C)]
+struct StackFrameSliceSize<'a> {
+    common: StackFrameCommon,
+    result_ptr: &'a mut isize,
+    slice: SliceObject,
+}
+
+#[no_mangle]
+pub extern "C" fn gox5_slice_size(ctx: &mut LightWeightThreadContext) -> FunctionObject {
+    let stack_frame = ctx.stack_frame::<StackFrameSliceSize>();
+    let result = isize::try_from(stack_frame.slice.size()).unwrap();
+
+    let frame = ctx.stack_frame_mut::<StackFrameSliceSize>();
+    *frame.result_ptr = result;
+
+    ctx.leave()
+}
