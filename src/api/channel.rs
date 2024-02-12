@@ -3,6 +3,7 @@ use std::mem;
 use std::ptr;
 
 use crate::object::channel::ChannelObject;
+use crate::object::channel::ReceiveStatus;
 use crate::type_id::TypeId;
 use crate::FunctionObject;
 use crate::LightWeightThreadContext;
@@ -66,7 +67,10 @@ pub fn recv(ctx: &mut LightWeightThreadContext) -> Option<FunctionObject> {
 
     let channel = channel.as_mut::<ChannelObject>();
     let id = ctx as *const _ as usize;
-    let data = channel.receive(id)?;
+    let data = match channel.receive(id) {
+        ReceiveStatus::Value(data) => data,
+        ReceiveStatus::Blocked => return None,
+    };
 
     let data_size = frame.type_id.size();
     let frame = ctx.stack_frame_mut::<StackFrameChannelReceive>();

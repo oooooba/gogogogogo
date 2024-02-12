@@ -4,6 +4,12 @@ use std::slice;
 use crate::ObjectAllocator;
 use crate::ObjectPtr;
 
+#[derive(Debug)]
+pub(crate) enum ReceiveStatus<T> {
+    Value(T),
+    Blocked,
+}
+
 struct BufferedChannel {
     buffer: *mut ObjectPtr,
     capacity: usize,
@@ -123,10 +129,15 @@ impl ChannelObject {
         }
     }
 
-    pub fn receive(&mut self, _id: usize) -> Option<ObjectPtr> {
-        match self.channel_type {
+    pub fn receive(&mut self, _id: usize) -> ReceiveStatus<ObjectPtr> {
+        let result = match self.channel_type {
             ChannelType::Buffered(ref mut channel) => channel.receive(),
             ChannelType::Rendezvous(ref mut channel) => channel.receive(),
+        };
+        if let Some(data) = result {
+            ReceiveStatus::Value(data)
+        } else {
+            ReceiveStatus::Blocked
         }
     }
 }
@@ -138,6 +149,18 @@ mod tests {
     use std::cell::RefCell;
     use std::ptr;
     use std::rc::Rc;
+
+    impl<T> PartialEq for ReceiveStatus<T> {
+        fn eq(&self, other: &Self) -> bool {
+            use ReceiveStatus::*;
+            match (self, other) {
+                (Blocked, Blocked) => true,
+                _ => false,
+            }
+        }
+    }
+
+    impl<T> Eq for ReceiveStatus<T> {}
 
     struct AllocatedObject {
         ptr: *mut (),
@@ -204,9 +227,9 @@ mod tests {
         }
         {
             let result = channel.borrow_mut().receive(1);
-            assert!(result.is_some());
-
-            let data = result.unwrap();
+            let ReceiveStatus::Value(data) = result else {
+                panic!()
+            };
             assert_eq!(*data.as_ref::<isize>(), 42);
         }
     }
@@ -225,9 +248,9 @@ mod tests {
         }
         for i in 0..capacity {
             let result = channel.borrow_mut().receive(1);
-            assert!(result.is_some());
-
-            let data = result.unwrap();
+            let ReceiveStatus::Value(data) = result else {
+                panic!()
+            };
             assert_eq!(*data.as_ref::<usize>(), i);
         }
     }
@@ -247,9 +270,9 @@ mod tests {
         }
         {
             let result = second.borrow_mut().receive(2);
-            assert!(result.is_some());
-
-            let data = result.unwrap();
+            let ReceiveStatus::Value(data) = result else {
+                panic!()
+            };
             assert_eq!(*data.as_ref::<isize>(), 42);
         }
     }
@@ -262,7 +285,7 @@ mod tests {
         let second = channel;
         {
             let result = first.borrow_mut().receive(1);
-            assert!(result.is_none());
+            assert_eq!(result, ReceiveStatus::Blocked);
         }
         {
             let data = allocator.allocate(mem::size_of::<isize>(), |_| {}) as *mut isize;
@@ -288,9 +311,9 @@ mod tests {
         }
         {
             let result = second.borrow_mut().receive(2);
-            assert!(result.is_some());
-
-            let data = result.unwrap();
+            let ReceiveStatus::Value(data) = result else {
+                panic!()
+            };
             assert_eq!(*data.as_ref::<isize>(), 42);
         }
         {
@@ -308,7 +331,7 @@ mod tests {
         let second = channel;
         {
             let result = first.borrow_mut().receive(1);
-            assert!(result.is_none());
+            assert_eq!(result, ReceiveStatus::Blocked);
         }
         {
             let data = allocator.allocate(mem::size_of::<isize>(), |_| {}) as *mut isize;
@@ -319,9 +342,9 @@ mod tests {
         }
         {
             let result = first.borrow_mut().receive(1);
-            assert!(result.is_some());
-
-            let data = result.unwrap();
+            let ReceiveStatus::Value(data) = result else {
+                panic!()
+            };
             assert_eq!(*data.as_ref::<isize>(), 42);
         }
         {
