@@ -3,10 +3,10 @@ use std::mem;
 use std::ptr;
 
 use crate::object::channel::ChannelObject;
+use crate::type_id::TypeId;
 use crate::FunctionObject;
 use crate::LightWeightThreadContext;
 use crate::StackFrameCommon;
-use crate::type_id::TypeId;
 
 use super::ObjectPtr;
 
@@ -68,12 +68,12 @@ pub fn recv(ctx: &mut LightWeightThreadContext) -> Option<FunctionObject> {
     let id = ctx as *const _ as usize;
     let data = channel.receive(id)?;
 
-    let data_size=frame.type_id.size();
+    let data_size = frame.type_id.size();
     let frame = ctx.stack_frame_mut::<StackFrameChannelReceive>();
 
     unsafe {
-        let src= slice::from_raw_parts(data.as_ref::<u8>(), data_size);
-        let dst=slice::from_raw_parts_mut(frame.result_ptr.as_mut::<u8>() as *mut u8, data_size);
+        let src = slice::from_raw_parts(data.as_ref::<u8>(), data_size);
+        let dst = slice::from_raw_parts_mut(frame.result_ptr.as_mut::<u8>() as *mut u8, data_size);
         dst.copy_from_slice(src);
     };
 
@@ -97,15 +97,13 @@ pub fn send(ctx: &mut LightWeightThreadContext) -> Option<FunctionObject> {
     let frame = ctx.stack_frame::<StackFrameChannelSend>();
     let mut channel = frame.channel.clone();
 
-    let data_size=frame.type_id.size();
-    let data = ctx.global_context().process(|mut global_context| {
-        global_context
-            .allocator()
-            .allocate(data_size, |_| {})
-    });
+    let data_size = frame.type_id.size();
+    let data = ctx
+        .global_context()
+        .process(|mut global_context| global_context.allocator().allocate(data_size, |_| {}));
     unsafe {
-        let src= slice::from_raw_parts(frame.data.as_ref::<u8>(), data_size);
-        let dst=slice::from_raw_parts_mut(data as *mut u8, data_size);
+        let src = slice::from_raw_parts(frame.data.as_ref::<u8>(), data_size);
+        let dst = slice::from_raw_parts_mut(data as *mut u8, data_size);
         dst.copy_from_slice(src);
     };
     let data = ObjectPtr(data);
