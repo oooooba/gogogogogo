@@ -523,7 +523,11 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 					case *types.Basic:
 						switch t.Kind() {
 						case types.String:
-							raw = fmt.Sprintf("strlen(%s.raw)", createValueRelName(callCommon.Args[0]))
+							result := createValueRelName(instr)
+							ctx.switchFunctionToCallRuntimeApi("gox5_string_length", "StackFrameStringLength", createInstructionName(instr), &result, nil,
+								paramArgPair{param: "string", arg: createValueRelName(callCommon.Args[0])},
+							)
+							needToCallRuntimeApi = true
 						default:
 							panic(fmt.Sprintf("unsuported argument for len: %s (%s)", callCommon.Args[0], t))
 						}
@@ -2289,6 +2293,13 @@ typedef struct {
 	void* arg_buffer[0];
 } StackFrameSpawn;
 DECLARE_RUNTIME_API(spawn, StackFrameSpawn);
+
+typedef struct {
+	StackFrameCommon common;
+	IntObject* result_ptr;
+	StringObject string;
+} StackFrameStringLength;
+DECLARE_RUNTIME_API(string_length, StackFrameStringLength);
 
 typedef struct {
 	StackFrameCommon common;

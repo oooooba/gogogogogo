@@ -134,6 +134,24 @@ pub extern "C" fn gox5_string_append(ctx: &mut LightWeightThreadContext) -> Func
 }
 
 #[repr(C)]
+struct StackFrameStringLength<'a> {
+    common: StackFrameCommon,
+    result_ptr: &'a mut isize,
+    string: StringObject,
+}
+
+#[no_mangle]
+pub extern "C" fn gox5_string_length(ctx: &mut LightWeightThreadContext) -> FunctionObject {
+    let frame = ctx.stack_frame::<StackFrameStringLength>();
+    let result = isize::try_from(frame.string.len_in_bytes()).unwrap();
+
+    let frame = ctx.stack_frame_mut::<StackFrameStringLength>();
+    *frame.result_ptr = result;
+
+    ctx.leave()
+}
+
+#[repr(C)]
 struct StackFrameStringSubstr<'a> {
     common: StackFrameCommon,
     result_ptr: &'a mut StringObject,
