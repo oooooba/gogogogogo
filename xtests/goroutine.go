@@ -140,6 +140,24 @@ func Test11() int {
 	return 11
 }
 
+func Test12() int {
+	ch := make(chan int)
+	go func(ch chan int) {
+		for i := 0; i < 10; i++ {
+			ch <- i
+		}
+		close(ch)
+	}(ch)
+	i := 0
+	for v := range ch {
+		if v != i {
+			return i
+		}
+		i++
+	}
+	return 12
+}
+
 func main() {
 	runTest := func(testName string, test func() int) {
 		println(testName+":", test())
@@ -155,4 +173,5 @@ func main() {
 	runTest("Test9", Test9)
 	runTest("Test10", Test10)
 	runTest("Test11", Test11)
+	runTest("Test12", Test12)
 }
