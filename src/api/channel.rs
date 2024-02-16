@@ -54,6 +54,107 @@ pub extern "C" fn gox5_channel_new(ctx: &mut LightWeightThreadContext) -> Functi
 }
 
 #[repr(C)]
+struct SelectEntry {
+    channel: ObjectPtr,
+    type_id: TypeId,
+    send_data: ObjectPtr,
+    receive_data: ObjectPtr,
+}
+
+#[repr(C)]
+struct StackFrameChannelSelect<'a> {
+    common: StackFrameCommon,
+    selected_index: &'a mut isize,
+    receive_available: &'a mut bool,
+    entry_count: usize,
+    entry_buffer: [SelectEntry; 0],
+}
+
+#[no_mangle]
+pub extern "C" fn gox5_channel_select(ctx: &mut LightWeightThreadContext) -> FunctionObject {
+    let frame = ctx.stack_frame_mut::<StackFrameChannelSelect>();
+    let entry_buffer = unsafe {
+        std::slice::from_raw_parts_mut(frame.entry_buffer.as_mut_ptr(), frame.entry_count)
+    };
+    loop {
+        for (i, entry) in entry_buffer.iter_mut().enumerate() {
+            let mut channel = entry.channel.clone();
+            let channel = channel.as_mut::<ChannelObject>();
+            let id = ctx as *const _ as usize;
+            if !entry.send_data.is_null() {
+                let data_size = entry.type_id.size();
+                let data = ctx.global_context().process(|mut global_context| {
+                    global_context.allocator().allocate(data_size, |_| {})
+                });
+                unsafe {
+                    let src = slice::from_raw_parts(entry.send_data.as_ref::<u8>(), data_size);
+                    let dst = slice::from_raw_parts_mut(data as *mut u8, data_size);
+                    dst.copy_from_slice(src);
+                };
+                let data = ObjectPtr(data);
+                if let Some(()) = channel.send(id, data) {
+                    let frame = ctx.stack_frame_mut::<StackFrameChannelSelect>();
+                    *frame.selected_index = isize::try_from(i).unwrap();
+                    *frame.receive_available = false;
+                    return ctx.leave();
+                }
+            }
+            if !entry.receive_data.is_null() {
+                match channel.receive(id) {
+                    ReceiveStatus::Value(data) => {
+                        let frame = ctx.stack_frame_mut::<StackFrameChannelSelect>();
+                        *frame.selected_index = isize::try_from(i).unwrap();
+                        *frame.receive_available = true;
+
+                        let data_size = entry.type_id.size();
+                        unsafe {
+                            let src = slice::from_raw_parts(data.as_ref::<u8>(), data_size);
+                            let dst = slice::from_raw_parts_mut(
+                                entry.receive_data.as_mut::<u8>(),
+                                data_size,
+                            );
+                            dst.copy_from_slice(src);
+                        };
+
+                        return ctx.leave();
+                    }
+                    ReceiveStatus::Blocked => (),
+                    ReceiveStatus::Closed => (),
+                };
+            }
+        }
+
+        for (i, entry) in entry_buffer.iter_mut().enumerate() {
+            let mut channel = entry.channel.clone();
+            let channel = channel.as_mut::<ChannelObject>();
+            let id = ctx as *const _ as usize;
+            if !entry.send_data.is_null() {
+                unreachable!();
+            }
+            if !entry.receive_data.is_null() {
+                match channel.receive(id) {
+                    ReceiveStatus::Value(_) => break,
+                    ReceiveStatus::Blocked => (),
+                    ReceiveStatus::Closed => {
+                        let frame = ctx.stack_frame_mut::<StackFrameChannelSelect>();
+                        *frame.selected_index = isize::try_from(i).unwrap();
+                        *frame.receive_available = false;
+
+                        let data_size = entry.type_id.size();
+                        unsafe {
+                            let dst = entry.receive_data.as_mut::<u8>();
+                            ptr::write_bytes(dst, 0, data_size);
+                        }
+
+                        return ctx.leave();
+                    }
+                };
+            }
+        }
+    }
+}
+
+#[repr(C)]
 struct StackFrameChannelClose {
     common: StackFrameCommon,
     channel: ObjectPtr,

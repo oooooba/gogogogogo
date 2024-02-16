@@ -908,6 +908,32 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 	case *ssa.RunDefers:
 		ctx.switchFunctionToCallRuntimeApi("gox5_run_defers", "StackFrameRunDefers", createInstructionName(instr), nil, nil)
 
+	case *ssa.Select:
+		result := createValueRelName(instr)
+		ctx.switchFunctionToCallRuntimeApi("gox5_channel_select", "StackFrameChannelSelect", createInstructionName(instr), nil,
+			func() {
+				receive_count := 0
+				for i, state := range instr.States {
+					fmt.Fprintf(ctx.stream, "next_frame->entry_buffer[%d].channel = %s;\n", i, createValueRelName(state.Chan))
+					fmt.Fprintf(ctx.stream, "next_frame->entry_buffer[%d].type_id = %s;\n", i, wrapInTypeId(state.Chan.Type().(*types.Chan).Elem()))
+					switch state.Dir {
+					case types.SendRecv:
+						panic("not implemented")
+					case types.SendOnly:
+						fmt.Fprintf(ctx.stream, "next_frame->entry_buffer[%d].send_data = &%s;\n", i, createValueRelName(state.Send))
+						fmt.Fprintf(ctx.stream, "next_frame->entry_buffer[%d].receive_data = NULL;\n", i)
+					case types.RecvOnly:
+						fmt.Fprintf(ctx.stream, "next_frame->entry_buffer[%d].send_data = NULL;\n", i)
+						fmt.Fprintf(ctx.stream, "next_frame->entry_buffer[%d].receive_data = &%s.raw.e%d;\n", i, result, receive_count+2)
+						receive_count += 1
+					}
+				}
+			},
+			paramArgPair{param: "selected_index", arg: fmt.Sprintf("&%s.raw.e0", result)},
+			paramArgPair{param: "receive_available", arg: fmt.Sprintf("&%s.raw.e1", result)},
+			paramArgPair{param: "entry_count", arg: fmt.Sprintf("%d", len(instr.States))},
+		)
+
 	case *ssa.Send:
 		ctx.switchFunctionToCallRuntimeApi("gox5_channel_send", "StackFrameChannelSend", createInstructionName(instr), nil, nil,
 			paramArgPair{param: "channel", arg: createValueRelName(instr.Chan)},
@@ -1080,7 +1106,7 @@ func requireSwitchFunction(instruction ssa.Instruction) bool {
 			return true
 		}
 		return false
-	case *ssa.Defer, *ssa.Go, *ssa.MakeChan, *ssa.MakeClosure, *ssa.MakeInterface, *ssa.MakeMap, *ssa.MakeSlice, *ssa.MapUpdate, *ssa.RunDefers, *ssa.Send:
+	case *ssa.Defer, *ssa.Go, *ssa.MakeChan, *ssa.MakeClosure, *ssa.MakeInterface, *ssa.MakeMap, *ssa.MakeSlice, *ssa.MapUpdate, *ssa.RunDefers, *ssa.Select, *ssa.Send:
 		return true
 	case *ssa.Lookup:
 		_, ok := t.X.Type().Underlying().(*types.Map)
@@ -1961,6 +1987,14 @@ func (ctx *Context) visitValue(function *ssa.Function, procedure func(value ssa.
 		case *ssa.Range:
 			f(val.X)
 
+		case *ssa.Select:
+			for _, state := range val.States {
+				f(state.Chan)
+				if state.Send != nil {
+					f(state.Send)
+				}
+			}
+
 		case *ssa.Slice:
 			f(val.X)
 			if val.Low != nil {
@@ -2187,6 +2221,20 @@ typedef struct {
 	IntObject capacity; // ToDo: correct to proper type
 } StackFrameChannelNew;
 DECLARE_RUNTIME_API(channel_new, StackFrameChannelNew);
+
+typedef struct {
+	StackFrameCommon common;
+	IntObject* selected_index;
+	BoolObject* receive_available;
+	uintptr_t entry_count;
+	struct {
+		ChannelObject channel;
+		TypeId type_id;
+		const void* send_data;
+		void* receive_data;
+	} entry_buffer[0];
+} StackFrameChannelSelect;
+DECLARE_RUNTIME_API(channel_select, StackFrameChannelSelect);
 
 typedef struct {
 	StackFrameCommon common;

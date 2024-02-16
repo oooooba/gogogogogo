@@ -77,6 +77,82 @@ func Test6() int {
 	return 6
 }
 
+func Test7() int {
+	ch1 := make(chan int)
+	ch2 := make(chan int)
+	close(ch1)
+	close(ch2)
+	select {
+	case v, ok := <-ch1:
+		if ok {
+			return 0
+		}
+		if v != 0 {
+			return 1
+		}
+	case v, ok := <-ch2:
+		if ok {
+			return 2
+		}
+		if v != 0 {
+			return 3
+		}
+	}
+	return 7
+}
+
+func Test8() int {
+	ch1 := make(chan int, 1)
+	ch2 := make(chan int, 1)
+	ch1 <- 1
+	ch2 <- 2
+	close(ch1)
+	close(ch2)
+	reached1 := false
+	reached2 := false
+	for !(reached1 && reached2) {
+		select {
+		case v, ok := <-ch1:
+			if ok {
+				if reached1 {
+					return 0
+				}
+				if v != 1 {
+					return 1
+				}
+				reached1 = true
+			}
+		case v, ok := <-ch2:
+			if ok {
+				if reached2 {
+					return 2
+				}
+				if v != 2 {
+					return 3
+				}
+				reached2 = true
+			}
+		}
+	}
+	return 8
+}
+
+func Test9() int {
+	ch := make(chan int, 1)
+	for {
+		select {
+		case ch <- 42:
+		case v := <-ch:
+			if v != 42 {
+				return 0
+			}
+			goto L
+		}
+	}
+L:
+	return 9
+}
+
 func main() {
 	runTest := func(testName string, test func() int) {
 		println(testName+":", test())
@@ -87,4 +163,7 @@ func main() {
 	runTest("Test4", Test4)
 	runTest("Test5", Test5)
 	runTest("Test6", Test6)
+	runTest("Test7", Test7)
+	runTest("Test8", Test8)
+	runTest("Test9", Test9)
 }
