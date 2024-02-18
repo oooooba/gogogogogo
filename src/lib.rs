@@ -311,8 +311,13 @@ pub extern "C" fn gox5_search_method(
     method.unwrap_or_else(FunctionObject::new_null)
 }
 
-extern "C" fn terminate(_ctx: &mut LightWeightThreadContext) -> FunctionObject {
-    unreachable!()
+extern "C" fn terminate(ctx: &mut LightWeightThreadContext) -> FunctionObject {
+    ctx.request_suspend();
+    ctx.terminate();
+    if ctx.is_main() {
+        process::exit(0);
+    }
+    FunctionObject::from_user_function(UserFunction::new(terminate))
 }
 
 pub trait ObjectAllocator {
@@ -406,9 +411,6 @@ fn execute(ctx: &mut LightWeightThreadContext) {
             api::schedule(ctx)
         } else if func == gox5_spawn {
             api::spawn(ctx)
-        } else if func == terminate {
-            ctx.terminate();
-            return;
         } else {
             func.invoke(ctx)
         };
@@ -442,18 +444,14 @@ fn main() {
         global_context.process(|mut global_context| global_context.pop_light_weight_thread())
     {
         execute(&mut ctx);
-        if ctx.is_terminated() {
-            if ctx.is_main() {
-                break;
-            }
-        } else {
+        if !ctx.is_terminated() {
             global_context.process(|mut global_context| {
                 global_context.push_light_weight_thread(ctx);
             });
         }
     }
 
-    process::exit(0);
+    unreachable!()
 }
 
 #[cfg(test)]
