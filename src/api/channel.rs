@@ -192,7 +192,7 @@ pub extern "C" fn gox5_channel_receive(ctx: &mut LightWeightThreadContext) -> Fu
     let data = match channel.receive(id) {
         ReceiveStatus::Value(data) => Some(data),
         ReceiveStatus::Blocked => {
-            ctx.request_suspend();
+            ctx.suspend();
             return FunctionObject::from_user_function(UserFunction::new(gox5_channel_receive));
         }
         ReceiveStatus::Closed => None,
@@ -249,7 +249,7 @@ pub extern "C" fn gox5_channel_send(ctx: &mut LightWeightThreadContext) -> Funct
     if channel.send(id, data).is_some() {
         ctx.leave()
     } else {
-        ctx.request_suspend();
+        ctx.suspend();
         FunctionObject::from_user_function(UserFunction::new(gox5_channel_send))
     }
 }

@@ -218,25 +218,24 @@ impl LightWeightThreadContext {
         self.id == 0
     }
 
+    fn is_suspended(&self) -> bool {
+        self.control_flags & 0b1 > 0
+    }
+
+    fn suspend(&mut self) {
+        self.control_flags |= 0b1;
+    }
+
+    fn resume(&mut self) {
+        self.control_flags &= !0b1;
+    }
+
     fn is_terminated(&self) -> bool {
         self.control_flags & 0b10 > 0
     }
 
     fn terminate(&mut self) {
         self.control_flags |= 0b10;
-    }
-
-    fn is_suspend_requested(&self) -> bool {
-        self.control_flags & 0b100 > 0
-    }
-
-    fn request_suspend(&mut self) {
-        self.control_flags |= 0b100;
-    }
-
-    fn accept_suspend(&mut self) {
-        assert!(self.is_suspend_requested());
-        self.control_flags &= !0b100;
     }
 }
 
@@ -308,7 +307,7 @@ pub extern "C" fn gox5_search_method(
 }
 
 extern "C" fn terminate(ctx: &mut LightWeightThreadContext) -> FunctionObject {
-    ctx.request_suspend();
+    ctx.suspend();
     ctx.terminate();
     if ctx.is_main() {
         process::exit(0);
@@ -401,7 +400,8 @@ extern "C" fn enter_main(ctx: &mut LightWeightThreadContext) -> FunctionObject {
 
 fn execute(ctx: &mut LightWeightThreadContext) {
     assert!(!ctx.is_terminated());
-    while !ctx.is_suspend_requested() {
+    ctx.resume();
+    while !ctx.is_suspended() {
         let func = ctx.prepare_user_function();
         let next_func = if func == gox5_schedule {
             api::schedule(ctx)
@@ -412,7 +412,6 @@ fn execute(ctx: &mut LightWeightThreadContext) {
         };
         ctx.update_current_func(next_func);
     }
-    ctx.accept_suspend();
 }
 
 #[cfg_attr(not(test), no_mangle)]
