@@ -238,7 +238,7 @@ struct StackFrameSpawn {
     arg_buffer: [(); 0],
 }
 
-pub fn spawn(ctx: &mut LightWeightThreadContext) -> (FunctionObject, LightWeightThreadContext) {
+pub fn spawn(ctx: &mut LightWeightThreadContext) -> FunctionObject {
     let new_ctx = {
         let stack_frame = ctx.stack_frame_mut::<StackFrameSpawn>();
 
@@ -258,5 +258,8 @@ pub fn spawn(ctx: &mut LightWeightThreadContext) -> (FunctionObject, LightWeight
         );
         new_ctx
     };
-    (ctx.leave(), new_ctx)
+    ctx.global_context.process(|mut global_context| {
+        global_context.push_light_weight_thread(new_ctx);
+    });
+    ctx.leave()
 }

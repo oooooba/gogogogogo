@@ -385,21 +385,26 @@ extern "C" fn enter_main(ctx: &mut LightWeightThreadContext) -> FunctionObject {
     FunctionObject::from_user_function(unsafe { runtime_info_get_entry_point() })
 }
 
-fn execute(ctx: &mut LightWeightThreadContext) -> Option<LightWeightThreadContext> {
+fn execute(ctx: &mut LightWeightThreadContext) {
     assert!(!ctx.is_terminated());
-    let mut new_ctx: Option<LightWeightThreadContext> = None;
     loop {
         let func = ctx.prepare_user_function();
         let (next_func, suspends) = if func == gox5_schedule {
             (api::schedule(ctx), true)
         } else if func == api::channel::gox5_channel_send {
-            (api::channel::send(ctx)?, false)
+            if let Some(next_func) = api::channel::send(ctx) {
+                (next_func, false)
+            } else {
+                return;
+            }
         } else if func == api::channel::gox5_channel_receive {
-            (api::channel::recv(ctx)?, false)
+            if let Some(next_func) = api::channel::recv(ctx) {
+                (next_func, false)
+            } else {
+                return;
+            }
         } else if func == gox5_spawn {
-            let (next_func, ctx) = api::spawn(ctx);
-            new_ctx = Some(ctx);
-            (next_func, true)
+            (api::spawn(ctx), true)
         } else if func == terminate {
             ctx.terminate();
             (FunctionObject::new_null(), true)
@@ -411,7 +416,6 @@ fn execute(ctx: &mut LightWeightThreadContext) -> Option<LightWeightThreadContex
             break;
         }
     }
-    new_ctx
 }
 
 #[cfg_attr(not(test), no_mangle)]
@@ -438,13 +442,7 @@ fn main() {
     while let Some(mut ctx) =
         global_context.process(|mut global_context| global_context.pop_light_weight_thread())
     {
-        let new_ctx = execute(&mut ctx);
-        if let Some(new_ctx) = new_ctx {
-            global_context.process(|mut global_context| {
-                global_context.push_light_weight_thread(new_ctx);
-            });
-        }
-
+        execute(&mut ctx);
         if ctx.is_terminated() {
             if ctx.is_main() {
                 break;
