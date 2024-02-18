@@ -94,6 +94,7 @@ struct StackFrameCommon {
 
 #[repr(C)]
 pub struct LightWeightThreadContext {
+    id: usize,
     global_context: GlobalContextPtr,
     current_func: FunctionObject,
     stack_pointer: *mut StackFrame,
@@ -105,11 +106,13 @@ pub struct LightWeightThreadContext {
 
 impl LightWeightThreadContext {
     fn new(
+        id: usize,
         global_context: GlobalContextPtr,
         stack_pointer: *mut StackFrame,
         prev_func: UserFunction,
     ) -> Self {
         LightWeightThreadContext {
+            id,
             global_context,
             current_func: FunctionObject::new_null(),
             stack_pointer,
@@ -159,6 +162,10 @@ impl LightWeightThreadContext {
             }
         }
         func
+    }
+
+    fn id(&self) -> usize {
+        self.id
     }
 
     fn global_context(&self) -> &GlobalContextPtr {
@@ -352,10 +359,14 @@ impl ObjectAllocator for RuntimeObjectAllocator {
 fn create_light_weight_thread_context(
     global_context: GlobalContextPtr,
 ) -> LightWeightThreadContext {
-    let stack_start_addr = global_context
-        .process(|mut global_context| global_context.allocator().allocate_guarded_pages(10));
+    let (id, stack_start_addr) = global_context.process(|mut global_context| {
+        let id = global_context.issue_light_weight_thread_id();
+        let addr = global_context.allocator().allocate_guarded_pages(10);
+        (id, addr)
+    });
     let prev_func = UserFunction::new(terminate);
     LightWeightThreadContext::new(
+        id,
         global_context,
         stack_start_addr as *mut StackFrame,
         prev_func,

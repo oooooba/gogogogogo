@@ -80,7 +80,7 @@ pub extern "C" fn gox5_channel_select(ctx: &mut LightWeightThreadContext) -> Fun
         for (i, entry) in entry_buffer.iter_mut().enumerate() {
             let mut channel = entry.channel.clone();
             let channel = channel.as_mut::<ChannelObject>();
-            let id = ctx as *const _ as usize;
+            let id = ctx.id();
             if !entry.send_data.is_null() {
                 let data_size = entry.type_id.size();
                 let data = ctx.global_context().process(|mut global_context| {
@@ -127,7 +127,7 @@ pub extern "C" fn gox5_channel_select(ctx: &mut LightWeightThreadContext) -> Fun
         for (i, entry) in entry_buffer.iter_mut().enumerate() {
             let mut channel = entry.channel.clone();
             let channel = channel.as_mut::<ChannelObject>();
-            let id = ctx as *const _ as usize;
+            let id = ctx.id();
             if !entry.send_data.is_null() {
                 unreachable!();
             }
@@ -165,7 +165,7 @@ pub extern "C" fn gox5_channel_close(ctx: &mut LightWeightThreadContext) -> Func
     let frame = ctx.stack_frame::<StackFrameChannelClose>();
     let mut channel = frame.channel.clone();
     let channel = channel.as_mut::<ChannelObject>();
-    let id = ctx as *const _ as usize;
+    let id = ctx.id();
 
     channel.close(id);
 
@@ -186,7 +186,7 @@ pub fn recv(ctx: &mut LightWeightThreadContext) -> Option<FunctionObject> {
     let mut channel = frame.channel.clone();
 
     let channel = channel.as_mut::<ChannelObject>();
-    let id = ctx as *const _ as usize;
+    let id = ctx.id();
     let data = match channel.receive(id) {
         ReceiveStatus::Value(data) => Some(data),
         ReceiveStatus::Blocked => return None,
@@ -244,7 +244,7 @@ pub fn send(ctx: &mut LightWeightThreadContext) -> Option<FunctionObject> {
     let data = ObjectPtr(data);
 
     let channel = channel.as_mut::<ChannelObject>();
-    let id = ctx as *const _ as usize;
+    let id = ctx.id();
     channel.send(id, data)?;
 
     Some(ctx.leave())

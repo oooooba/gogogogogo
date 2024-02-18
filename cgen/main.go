@@ -2142,6 +2142,7 @@ typedef struct StackFrameCommon {
 } StackFrameCommon;
 
 typedef struct {
+	uintptr_t id;
 	GlobalContext* global_context;
 	FunctionObject current_func;
 	StackFrameCommon* stack_pointer;

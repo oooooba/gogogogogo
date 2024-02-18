@@ -3,12 +3,22 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use super::ObjectAllocator;
 
 pub struct GlobalContext {
+    created_light_weight_thread_count: usize,
     allocator: Box<dyn ObjectAllocator>,
 }
 
 impl GlobalContext {
     fn new(allocator: Box<dyn ObjectAllocator>) -> Self {
-        GlobalContext { allocator }
+        GlobalContext {
+            created_light_weight_thread_count: 0,
+            allocator,
+        }
+    }
+
+    pub fn issue_light_weight_thread_id(&mut self) -> usize {
+        let id = self.created_light_weight_thread_count;
+        self.created_light_weight_thread_count += 1;
+        id
     }
 
     pub fn allocator(&mut self) -> &mut dyn ObjectAllocator {
