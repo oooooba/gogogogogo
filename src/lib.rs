@@ -4,7 +4,6 @@ mod interface;
 mod object;
 mod type_id;
 
-use std::collections::VecDeque;
 use std::ffi;
 use std::mem;
 use std::process;
@@ -430,21 +429,30 @@ fn main() {
         0,
         FunctionObject::from_user_function(UserFunction::new(enter_main)),
     );
-
-    let mut run_queue = VecDeque::new();
     ctx.set_main();
-    run_queue.push_back(ctx);
-    while let Some(mut ctx) = run_queue.pop_front() {
+
+    global_context.process(|mut global_context| {
+        global_context.push_light_weight_thread(ctx);
+    });
+
+    while let Some(mut ctx) =
+        global_context.process(|mut global_context| global_context.pop_light_weight_thread())
+    {
         let new_ctx = execute(&mut ctx);
         if let Some(new_ctx) = new_ctx {
-            run_queue.push_back(new_ctx);
+            global_context.process(|mut global_context| {
+                global_context.push_light_weight_thread(new_ctx);
+            });
         }
+
         if ctx.is_terminated() {
             if ctx.is_main() {
                 break;
             }
         } else {
-            run_queue.push_back(ctx);
+            global_context.process(|mut global_context| {
+                global_context.push_light_weight_thread(ctx);
+            });
         }
     }
 

@@ -1,10 +1,13 @@
+use std::collections::VecDeque;
 use std::sync::{Arc, Mutex, MutexGuard};
 
-use super::ObjectAllocator;
+use crate::LightWeightThreadContext;
+use crate::ObjectAllocator;
 
 pub struct GlobalContext {
     created_light_weight_thread_count: usize,
     allocator: Box<dyn ObjectAllocator>,
+    run_queue: VecDeque<LightWeightThreadContext>,
 }
 
 impl GlobalContext {
@@ -12,6 +15,7 @@ impl GlobalContext {
         GlobalContext {
             created_light_weight_thread_count: 0,
             allocator,
+            run_queue: VecDeque::new(),
         }
     }
 
@@ -23,6 +27,14 @@ impl GlobalContext {
 
     pub fn allocator(&mut self) -> &mut dyn ObjectAllocator {
         &mut *self.allocator
+    }
+
+    pub fn push_light_weight_thread(&mut self, ctx: LightWeightThreadContext) {
+        self.run_queue.push_back(ctx)
+    }
+
+    pub fn pop_light_weight_thread(&mut self) -> Option<LightWeightThreadContext> {
+        self.run_queue.pop_front()
     }
 }
 
