@@ -124,16 +124,18 @@ impl LightWeightThreadContext {
         result_size: usize,
         arg_buffer_ptr: ObjectPtr,
         num_arg_buffer_words: usize,
+        resume_func: FunctionObject,
     ) {
         self.current_func = entry_func;
         unsafe {
+            let prev_stack_pointer = self.stack_pointer();
             let result_pointer = self.stack_pointer();
             let next_stack_pointer =
                 (result_pointer as *mut u8).add(result_size) as *mut StackFrame;
             self.update_stack_pointer(next_stack_pointer);
             let words = slice::from_raw_parts_mut(self.stack_pointer as *mut *mut (), 5);
-            words[0] = terminate as *mut ();
-            words[1] = ptr::null_mut();
+            words[0] = resume_func.0 as *mut ();
+            words[1] = prev_stack_pointer;
             words[2] = ptr::null_mut();
             let mut arg_base = 3;
             if result_size > 0 {
@@ -403,6 +405,19 @@ fn create_light_weight_thread_context(
     )
 }
 
+extern "C" fn enter_main(ctx: &mut LightWeightThreadContext) -> FunctionObject {
+    let current_stack_pointer = ctx.stack_pointer() as *mut StackFrameCommon;
+    let next_stack_pointer = unsafe { current_stack_pointer.add(1) };
+    let next_frame = unsafe { &mut (*next_stack_pointer) };
+    next_frame.resume_func = FunctionObject::from_user_function(UserFunction::new(terminate));
+    next_frame.prev_stack_pointer = ptr::null_mut();
+    next_frame.free_vars = ptr::null_mut();
+
+    ctx.update_stack_pointer(next_stack_pointer as *mut StackFrame);
+
+    FunctionObject::from_user_function(unsafe { runtime_info_get_entry_point() })
+}
+
 #[cfg_attr(not(test), no_mangle)]
 fn main() {
     let allocator = Box::new(RuntimeObjectAllocator::new());
@@ -413,24 +428,10 @@ fn main() {
     let mut ctx = create_light_weight_thread_context(global_context.dupulicate());
     ctx.set_up(
         init_func,
-        mem::size_of::<()>(),
-        ObjectPtr(ptr::NonNull::dangling().as_ptr()),
-        0,
-    );
-    let mut init_light_weight_thread = LightWeightThread::new(ctx);
-    init_light_weight_thread.start();
-    while init_light_weight_thread.is_running() {
-        let _ = init_light_weight_thread.execute();
-    }
-
-    let mut ctx = create_light_weight_thread_context(global_context);
-    let entry_func = unsafe { runtime_info_get_entry_point() };
-    let entry_func = FunctionObject::from_user_function(entry_func);
-    ctx.set_up(
-        entry_func,
         mem::size_of::<isize>(),
         ObjectPtr(ptr::NonNull::dangling().as_ptr()),
         0,
+        FunctionObject::from_user_function(UserFunction::new(enter_main)),
     );
 
     let mut run_queue = VecDeque::new();

@@ -254,6 +254,7 @@ pub fn spawn(ctx: &mut LightWeightThreadContext) -> (FunctionObject, LightWeight
             result_size,
             arg_buffer_ptr,
             num_arg_buffer_words,
+            FunctionObject::from_user_function(UserFunction::new(crate::terminate)),
         );
         new_ctx
     };
