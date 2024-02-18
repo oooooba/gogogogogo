@@ -215,11 +215,7 @@ impl LightWeightThreadContext {
     }
 
     fn is_main(&self) -> bool {
-        self.control_flags & 0b1 > 0
-    }
-
-    fn set_main(&mut self) {
-        self.control_flags |= 0b1;
+        self.id == 0
     }
 
     fn is_terminated(&self) -> bool {
@@ -434,7 +430,6 @@ fn main() {
         0,
         FunctionObject::from_user_function(UserFunction::new(enter_main)),
     );
-    ctx.set_main();
 
     global_context.process(|mut global_context| {
         global_context.push_light_weight_thread(ctx);
