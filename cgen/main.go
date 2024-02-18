@@ -2147,6 +2147,7 @@ typedef struct {
 	StackFrameCommon* stack_pointer;
 	UserFunction prev_func;
 	const void* deferred_list;
+	uintptr_t control_flags;
 	intptr_t marker;
 } LightWeightThreadContext;
 

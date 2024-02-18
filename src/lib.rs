@@ -99,6 +99,7 @@ pub struct LightWeightThreadContext {
     stack_pointer: *mut StackFrame,
     prev_func: UserFunction,
     deferred_list: *const (),
+    control_flags: usize,
     marker: isize,
 }
 
@@ -114,6 +115,7 @@ impl LightWeightThreadContext {
             stack_pointer,
             prev_func,
             deferred_list: ptr::null(),
+            control_flags: 0,
             marker: 0xdeadbeef,
         }
     }
@@ -205,66 +207,25 @@ impl LightWeightThreadContext {
         self.stack_pointer = prev_stack_pointer;
         resume_func
     }
-}
-
-struct LightWeightThread {
-    context: LightWeightThreadContext,
-    is_main: bool,
-    is_running: bool,
-}
-
-impl LightWeightThread {
-    fn new(context: LightWeightThreadContext) -> Self {
-        LightWeightThread {
-            context,
-            is_main: false,
-            is_running: false,
-        }
-    }
 
     fn is_main(&self) -> bool {
-        self.is_main
+        self.control_flags & 0b1 > 0
     }
 
     fn set_main(&mut self) {
-        self.is_main = true;
+        self.control_flags |= 0b1;
     }
 
     fn is_running(&self) -> bool {
-        self.is_running
+        self.control_flags & 0b10 > 0
     }
 
     fn start(&mut self) {
-        self.is_running = true;
+        self.control_flags |= 0b10;
     }
 
-    fn execute(&mut self) -> Option<LightWeightThreadContext> {
-        assert!(self.is_running);
-        let mut new_ctx: Option<LightWeightThreadContext> = None;
-        loop {
-            let func = self.context.prepare_user_function();
-            let (next_func, suspends) = if func == gox5_schedule {
-                (api::schedule(&mut self.context), true)
-            } else if func == api::channel::gox5_channel_send {
-                (api::channel::send(&mut self.context)?, false)
-            } else if func == api::channel::gox5_channel_receive {
-                (api::channel::recv(&mut self.context)?, false)
-            } else if func == gox5_spawn {
-                let (next_func, ctx) = api::spawn(&mut self.context);
-                new_ctx = Some(ctx);
-                (next_func, true)
-            } else if func == terminate {
-                self.is_running = false;
-                (FunctionObject::new_null(), true)
-            } else {
-                (func.invoke(&mut self.context), false)
-            };
-            self.context.update_current_func(next_func);
-            if suspends {
-                break;
-            }
-        }
-        new_ctx
+    fn stop(&mut self) {
+        self.control_flags &= !0b10;
     }
 }
 
@@ -418,6 +379,35 @@ extern "C" fn enter_main(ctx: &mut LightWeightThreadContext) -> FunctionObject {
     FunctionObject::from_user_function(unsafe { runtime_info_get_entry_point() })
 }
 
+fn execute(ctx: &mut LightWeightThreadContext) -> Option<LightWeightThreadContext> {
+    assert!(ctx.is_running());
+    let mut new_ctx: Option<LightWeightThreadContext> = None;
+    loop {
+        let func = ctx.prepare_user_function();
+        let (next_func, suspends) = if func == gox5_schedule {
+            (api::schedule(ctx), true)
+        } else if func == api::channel::gox5_channel_send {
+            (api::channel::send(ctx)?, false)
+        } else if func == api::channel::gox5_channel_receive {
+            (api::channel::recv(ctx)?, false)
+        } else if func == gox5_spawn {
+            let (next_func, ctx) = api::spawn(ctx);
+            new_ctx = Some(ctx);
+            (next_func, true)
+        } else if func == terminate {
+            ctx.stop();
+            (FunctionObject::new_null(), true)
+        } else {
+            (func.invoke(ctx), false)
+        };
+        ctx.update_current_func(next_func);
+        if suspends {
+            break;
+        }
+    }
+    new_ctx
+}
+
 #[cfg_attr(not(test), no_mangle)]
 fn main() {
     let allocator = Box::new(RuntimeObjectAllocator::new());
@@ -435,20 +425,18 @@ fn main() {
     );
 
     let mut run_queue = VecDeque::new();
-    let mut main_light_weight_thread = LightWeightThread::new(ctx);
-    main_light_weight_thread.set_main();
-    main_light_weight_thread.start();
-    run_queue.push_back(main_light_weight_thread);
-    while let Some(mut light_weight_thread) = run_queue.pop_front() {
-        let new_ctx = light_weight_thread.execute();
-        if let Some(new_ctx) = new_ctx {
-            let mut new_light_weight_thread = LightWeightThread::new(new_ctx);
-            new_light_weight_thread.start();
-            run_queue.push_back(new_light_weight_thread);
+    ctx.set_main();
+    ctx.start();
+    run_queue.push_back(ctx);
+    while let Some(mut ctx) = run_queue.pop_front() {
+        let new_ctx = execute(&mut ctx);
+        if let Some(mut new_ctx) = new_ctx {
+            new_ctx.start();
+            run_queue.push_back(new_ctx);
         }
-        if light_weight_thread.is_running() {
-            run_queue.push_back(light_weight_thread);
-        } else if light_weight_thread.is_main() {
+        if ctx.is_running() {
+            run_queue.push_back(ctx);
+        } else if ctx.is_main() {
             break;
         }
     }
