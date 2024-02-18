@@ -216,16 +216,12 @@ impl LightWeightThreadContext {
         self.control_flags |= 0b1;
     }
 
-    fn is_running(&self) -> bool {
+    fn is_terminated(&self) -> bool {
         self.control_flags & 0b10 > 0
     }
 
-    fn start(&mut self) {
+    fn terminate(&mut self) {
         self.control_flags |= 0b10;
-    }
-
-    fn stop(&mut self) {
-        self.control_flags &= !0b10;
     }
 }
 
@@ -380,7 +376,7 @@ extern "C" fn enter_main(ctx: &mut LightWeightThreadContext) -> FunctionObject {
 }
 
 fn execute(ctx: &mut LightWeightThreadContext) -> Option<LightWeightThreadContext> {
-    assert!(ctx.is_running());
+    assert!(!ctx.is_terminated());
     let mut new_ctx: Option<LightWeightThreadContext> = None;
     loop {
         let func = ctx.prepare_user_function();
@@ -395,7 +391,7 @@ fn execute(ctx: &mut LightWeightThreadContext) -> Option<LightWeightThreadContex
             new_ctx = Some(ctx);
             (next_func, true)
         } else if func == terminate {
-            ctx.stop();
+            ctx.terminate();
             (FunctionObject::new_null(), true)
         } else {
             (func.invoke(ctx), false)
@@ -426,18 +422,18 @@ fn main() {
 
     let mut run_queue = VecDeque::new();
     ctx.set_main();
-    ctx.start();
     run_queue.push_back(ctx);
     while let Some(mut ctx) = run_queue.pop_front() {
         let new_ctx = execute(&mut ctx);
-        if let Some(mut new_ctx) = new_ctx {
-            new_ctx.start();
+        if let Some(new_ctx) = new_ctx {
             run_queue.push_back(new_ctx);
         }
-        if ctx.is_running() {
+        if ctx.is_terminated() {
+            if ctx.is_main() {
+                break;
+            }
+        } else {
             run_queue.push_back(ctx);
-        } else if ctx.is_main() {
-            break;
         }
     }
 
