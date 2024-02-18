@@ -180,6 +180,7 @@ pub fn new(ctx: &mut LightWeightThreadContext) -> FunctionObject {
 }
 
 pub fn schedule(ctx: &mut LightWeightThreadContext) -> FunctionObject {
+    ctx.request_suspend();
     ctx.leave()
 }
 
@@ -261,5 +262,6 @@ pub fn spawn(ctx: &mut LightWeightThreadContext) -> FunctionObject {
     ctx.global_context.process(|mut global_context| {
         global_context.push_light_weight_thread(new_ctx);
     });
+    ctx.request_suspend();
     ctx.leave()
 }

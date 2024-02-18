@@ -8,6 +8,7 @@ use crate::type_id::TypeId;
 use crate::FunctionObject;
 use crate::LightWeightThreadContext;
 use crate::StackFrameCommon;
+use crate::UserFunction;
 
 use super::ObjectPtr;
 
@@ -181,7 +182,8 @@ struct StackFrameChannelReceive {
     available: ObjectPtr,
 }
 
-pub fn recv(ctx: &mut LightWeightThreadContext) -> Option<FunctionObject> {
+#[no_mangle]
+pub extern "C" fn gox5_channel_receive(ctx: &mut LightWeightThreadContext) -> FunctionObject {
     let frame = ctx.stack_frame::<StackFrameChannelReceive>();
     let mut channel = frame.channel.clone();
 
@@ -189,7 +191,10 @@ pub fn recv(ctx: &mut LightWeightThreadContext) -> Option<FunctionObject> {
     let id = ctx.id();
     let data = match channel.receive(id) {
         ReceiveStatus::Value(data) => Some(data),
-        ReceiveStatus::Blocked => return None,
+        ReceiveStatus::Blocked => {
+            ctx.request_suspend();
+            return FunctionObject::from_user_function(UserFunction::new(gox5_channel_receive));
+        }
         ReceiveStatus::Closed => None,
     };
 
@@ -212,12 +217,7 @@ pub fn recv(ctx: &mut LightWeightThreadContext) -> Option<FunctionObject> {
         }
     }
 
-    Some(ctx.leave())
-}
-
-#[no_mangle]
-pub extern "C" fn gox5_channel_receive(_ctx: &mut LightWeightThreadContext) -> FunctionObject {
-    unreachable!()
+    ctx.leave()
 }
 
 #[repr(C)]
@@ -228,7 +228,8 @@ struct StackFrameChannelSend {
     type_id: TypeId,
 }
 
-pub fn send(ctx: &mut LightWeightThreadContext) -> Option<FunctionObject> {
+#[no_mangle]
+pub extern "C" fn gox5_channel_send(ctx: &mut LightWeightThreadContext) -> FunctionObject {
     let frame = ctx.stack_frame::<StackFrameChannelSend>();
     let mut channel = frame.channel.clone();
 
@@ -245,12 +246,10 @@ pub fn send(ctx: &mut LightWeightThreadContext) -> Option<FunctionObject> {
 
     let channel = channel.as_mut::<ChannelObject>();
     let id = ctx.id();
-    channel.send(id, data)?;
-
-    Some(ctx.leave())
-}
-
-#[no_mangle]
-pub extern "C" fn gox5_channel_send(_ctx: &mut LightWeightThreadContext) -> FunctionObject {
-    unreachable!()
+    if channel.send(id, data).is_some() {
+        ctx.leave()
+    } else {
+        ctx.request_suspend();
+        FunctionObject::from_user_function(UserFunction::new(gox5_channel_send))
+    }
 }

@@ -229,6 +229,19 @@ impl LightWeightThreadContext {
     fn terminate(&mut self) {
         self.control_flags |= 0b10;
     }
+
+    fn is_suspend_requested(&self) -> bool {
+        self.control_flags & 0b100 > 0
+    }
+
+    fn request_suspend(&mut self) {
+        self.control_flags |= 0b100;
+    }
+
+    fn accept_suspend(&mut self) {
+        assert!(self.is_suspend_requested());
+        self.control_flags &= !0b100;
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -387,35 +400,21 @@ extern "C" fn enter_main(ctx: &mut LightWeightThreadContext) -> FunctionObject {
 
 fn execute(ctx: &mut LightWeightThreadContext) {
     assert!(!ctx.is_terminated());
-    loop {
+    while !ctx.is_suspend_requested() {
         let func = ctx.prepare_user_function();
-        let (next_func, suspends) = if func == gox5_schedule {
-            (api::schedule(ctx), true)
-        } else if func == api::channel::gox5_channel_send {
-            if let Some(next_func) = api::channel::send(ctx) {
-                (next_func, false)
-            } else {
-                return;
-            }
-        } else if func == api::channel::gox5_channel_receive {
-            if let Some(next_func) = api::channel::recv(ctx) {
-                (next_func, false)
-            } else {
-                return;
-            }
+        let next_func = if func == gox5_schedule {
+            api::schedule(ctx)
         } else if func == gox5_spawn {
-            (api::spawn(ctx), true)
+            api::spawn(ctx)
         } else if func == terminate {
             ctx.terminate();
-            (FunctionObject::new_null(), true)
+            return;
         } else {
-            (func.invoke(ctx), false)
+            func.invoke(ctx)
         };
         ctx.update_current_func(next_func);
-        if suspends {
-            break;
-        }
     }
+    ctx.accept_suspend();
 }
 
 #[cfg_attr(not(test), no_mangle)]
