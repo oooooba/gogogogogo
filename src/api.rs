@@ -15,7 +15,6 @@ use super::ClosureLayout;
 use super::FunctionObject;
 use super::LightWeightThreadContext;
 use super::ObjectPtr;
-use super::StackFrame;
 use super::StackFrameCommon;
 use super::UserFunction;
 
@@ -201,31 +200,13 @@ pub fn run_defers(ctx: &mut LightWeightThreadContext) -> FunctionObject {
     }
 
     ctx.update_deferred_list(deferred.prev_deferred);
-
-    let current_stack_pointer = ctx.stack_pointer() as *mut StackFrame;
-    let next_stack_pointer = unsafe { (current_stack_pointer as *mut StackFrameRunDefers).add(1) };
-    let result_pointer = next_stack_pointer as *mut *const ();
-    let next_stack_pointer = unsafe { (next_stack_pointer as *mut u8).add(deferred.result_size) };
-    let next_stack_pointer = next_stack_pointer as *mut StackFrameCommon;
-    let next_frame = unsafe { &mut (*next_stack_pointer) };
-    next_frame.resume_func = FunctionObject::from_user_function(UserFunction::new(gox5_run_defers));
-    next_frame.prev_stack_pointer = current_stack_pointer;
-    next_frame.free_vars = ptr::null_mut();
-
-    unsafe {
-        let src = deferred.arg_buffer;
-        let dst = (next_stack_pointer).add(1);
-        let dst = dst as *mut *const ();
-        let dst = if deferred.result_size > 0 {
-            *(dst as *mut *mut *const ()) = result_pointer;
-            dst.add(1)
-        } else {
-            dst
-        };
-        ptr::copy_nonoverlapping(src, dst, deferred.num_arg_buffer_words);
-    }
-
-    ctx.update_stack_pointer(next_stack_pointer as *mut StackFrame);
+    let args =
+        unsafe { std::slice::from_raw_parts(deferred.arg_buffer, deferred.num_arg_buffer_words) };
+    ctx.call::<StackFrameRunDefers>(
+        deferred.result_size,
+        args,
+        FunctionObject::from_user_function(UserFunction::new(gox5_run_defers)),
+    );
 
     deferred.func.clone()
 }
@@ -236,7 +217,7 @@ struct StackFrameSpawn {
     func: FunctionObject,
     result_size: usize,
     num_arg_buffer_words: usize,
-    arg_buffer: [(); 0],
+    arg_buffer: [*const (); 0],
 }
 
 pub fn spawn(ctx: &mut LightWeightThreadContext) -> FunctionObject {
@@ -245,16 +226,18 @@ pub fn spawn(ctx: &mut LightWeightThreadContext) -> FunctionObject {
 
         let entry_func = stack_frame.func.clone();
         let result_size = stack_frame.result_size;
-        let arg_buffer_ptr = ObjectPtr(stack_frame.arg_buffer.as_mut_ptr());
-        let num_arg_buffer_words = stack_frame.num_arg_buffer_words;
+        let args = unsafe {
+            std::slice::from_raw_parts(
+                stack_frame.arg_buffer.as_mut_ptr(),
+                stack_frame.num_arg_buffer_words,
+            )
+        };
         let global_context = ctx.global_context().dupulicate();
 
-        let mut new_ctx = create_light_weight_thread_context(global_context);
-        new_ctx.set_up(
-            entry_func,
+        let mut new_ctx = create_light_weight_thread_context(global_context, entry_func);
+        new_ctx.call::<StackFrameCommon>(
             result_size,
-            arg_buffer_ptr,
-            num_arg_buffer_words,
+            args,
             FunctionObject::from_user_function(UserFunction::new(crate::terminate)),
         );
         new_ctx

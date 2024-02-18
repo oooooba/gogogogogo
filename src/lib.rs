@@ -82,7 +82,10 @@ impl PartialEq<UserFunctionInner> for UserFunction {
 }
 
 #[repr(C)]
-pub struct StackFrame(StackFrameCommon);
+pub struct StackFrame {
+    common: StackFrameCommon,
+    additional_words: [*const (); 0],
+}
 
 #[repr(C)]
 struct StackFrameCommon {
@@ -108,12 +111,13 @@ impl LightWeightThreadContext {
         id: usize,
         global_context: GlobalContextPtr,
         stack_pointer: *mut StackFrame,
+        entry_func: FunctionObject,
         prev_func: UserFunction,
     ) -> Self {
         LightWeightThreadContext {
             id,
             global_context,
-            current_func: FunctionObject::new_null(),
+            current_func: entry_func,
             stack_pointer,
             prev_func,
             deferred_list: ptr::null(),
@@ -122,34 +126,40 @@ impl LightWeightThreadContext {
         }
     }
 
-    fn set_up(
-        &mut self,
-        entry_func: FunctionObject,
-        result_size: usize,
-        arg_buffer_ptr: ObjectPtr,
-        num_arg_buffer_words: usize,
-        resume_func: FunctionObject,
-    ) {
-        self.current_func = entry_func;
-        unsafe {
-            let prev_stack_pointer = self.stack_pointer();
-            let result_pointer = self.stack_pointer();
-            let next_stack_pointer =
-                (result_pointer as *mut u8).add(result_size) as *mut StackFrame;
-            self.update_stack_pointer(next_stack_pointer);
-            let words = slice::from_raw_parts_mut(self.stack_pointer as *mut *mut (), 5);
-            words[0] = resume_func.0 as *mut ();
-            words[1] = prev_stack_pointer;
-            words[2] = ptr::null_mut();
-            let mut arg_base = 3;
-            if result_size > 0 {
-                words[arg_base] = result_pointer;
-                arg_base += 1;
-            }
-            let src_arg_buffer_ptr = arg_buffer_ptr.as_ref::<usize>();
-            let dst_arg_buffer_ptr = &mut words[arg_base] as *mut *mut () as *mut usize;
-            ptr::copy_nonoverlapping(src_arg_buffer_ptr, dst_arg_buffer_ptr, num_arg_buffer_words);
+    fn call<T>(&mut self, result_size: usize, args: &[*const ()], resume_func: FunctionObject) {
+        let result_size = result_size.next_multiple_of(mem::size_of::<*const ()>());
+
+        let p = self.stack_pointer() as *mut u8;
+        let current_stack_pointer = p as *mut StackFrame;
+
+        let p = unsafe { p.add(mem::size_of::<T>()) };
+        let result_pointer = p as *const ();
+
+        let p = unsafe { p.add(result_size) };
+        let next_stack_pointer = p as *mut StackFrame;
+        let next_frame = unsafe { &mut (*next_stack_pointer) };
+
+        next_frame.common.resume_func = resume_func;
+        next_frame.common.prev_stack_pointer = current_stack_pointer;
+        next_frame.common.free_vars = ptr::null_mut();
+
+        let has_result = result_size > 0;
+        let params_offset = usize::from(has_result);
+        let additional_words = unsafe {
+            slice::from_raw_parts_mut(
+                next_frame.additional_words.as_mut_ptr(),
+                params_offset + args.len(),
+            )
+        };
+
+        if has_result {
+            additional_words[0] = result_pointer;
         }
+
+        let params = &mut additional_words[params_offset..];
+        params.copy_from_slice(args);
+
+        self.update_stack_pointer(next_stack_pointer);
     }
 
     fn prepare_user_function(&mut self) -> UserFunction {
@@ -370,6 +380,7 @@ impl ObjectAllocator for RuntimeObjectAllocator {
 
 fn create_light_weight_thread_context(
     global_context: GlobalContextPtr,
+    entry_func: FunctionObject,
 ) -> LightWeightThreadContext {
     let (id, stack_start_addr) = global_context.process(|mut global_context| {
         let id = global_context.issue_light_weight_thread_id();
@@ -381,20 +392,17 @@ fn create_light_weight_thread_context(
         id,
         global_context,
         stack_start_addr as *mut StackFrame,
+        entry_func,
         prev_func,
     )
 }
 
 extern "C" fn enter_main(ctx: &mut LightWeightThreadContext) -> FunctionObject {
-    let current_stack_pointer = ctx.stack_pointer() as *mut StackFrameCommon;
-    let next_stack_pointer = unsafe { current_stack_pointer.add(1) };
-    let next_frame = unsafe { &mut (*next_stack_pointer) };
-    next_frame.resume_func = FunctionObject::from_user_function(UserFunction::new(terminate));
-    next_frame.prev_stack_pointer = ptr::null_mut();
-    next_frame.free_vars = ptr::null_mut();
-
-    ctx.update_stack_pointer(next_stack_pointer as *mut StackFrame);
-
+    ctx.call::<StackFrameCommon>(
+        0,
+        &[],
+        FunctionObject::from_user_function(UserFunction::new(terminate)),
+    );
     FunctionObject::from_user_function(unsafe { runtime_info_get_entry_point() })
 }
 
@@ -421,12 +429,10 @@ fn main() {
 
     let init_func = unsafe { runtime_info_get_init_point() };
     let init_func = FunctionObject::from_user_function(init_func);
-    let mut ctx = create_light_weight_thread_context(global_context.dupulicate());
-    ctx.set_up(
-        init_func,
+    let mut ctx = create_light_weight_thread_context(global_context.dupulicate(), init_func);
+    ctx.call::<StackFrameCommon>(
         mem::size_of::<isize>(),
-        ObjectPtr(ptr::NonNull::dangling().as_ptr()),
-        0,
+        &[],
         FunctionObject::from_user_function(UserFunction::new(enter_main)),
     );
 
@@ -509,8 +515,13 @@ mod tests {
     fn test_create_light_weight_thread_context() {
         let allocator = Box::new(MockObjectAllocator::new());
         let global_context = global_context::create_global_context(allocator);
-        let ctx = create_light_weight_thread_context(global_context.dupulicate());
+        let func = FunctionObject::from_user_function(UserFunction::new(user_function));
+        let ctx = create_light_weight_thread_context(global_context.dupulicate(), func);
         assert_eq!(ctx.global_context, global_context);
+        assert!(
+            ctx.current_func
+                == FunctionObject::from_user_function(UserFunction::new(user_function))
+        );
         assert!(ctx.prev_func == terminate);
     }
 
@@ -523,7 +534,10 @@ mod tests {
     fn test_invoke_user_function() {
         let allocator = Box::new(MockObjectAllocator::new());
         let global_context = global_context::create_global_context(allocator);
-        let mut ctx = create_light_weight_thread_context(global_context.dupulicate());
+        let mut ctx = create_light_weight_thread_context(
+            global_context.dupulicate(),
+            FunctionObject::new_null(),
+        );
         let func = UserFunction::new(user_function);
         func.invoke(&mut ctx);
         assert_eq!(ctx.marker, 0x12345678);
