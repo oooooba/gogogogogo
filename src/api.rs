@@ -15,12 +15,12 @@ use super::ClosureLayout;
 use super::FunctionObject;
 use super::LightWeightThreadContext;
 use super::ObjectPtr;
+use super::StackFrame;
 use super::StackFrameCommon;
 use super::UserFunction;
 
 struct Deferred {
     prev_deferred: *const (),
-    target_stack_pointer: *const (),
     func: FunctionObject,
     result_size: usize,
     num_arg_buffer_words: usize,
@@ -64,10 +64,15 @@ pub fn defer(ctx: &mut LightWeightThreadContext) -> FunctionObject {
             .allocator()
             .allocate(mem::size_of::<Deferred>(), |_| {}) as *mut Deferred
     });
-    let prev_deferred = ctx.deferred_list();
+
+    let current_stack_frame = ctx.stack_frame_mut::<StackFrameDefer>();
+    let prev_stack_frame = current_stack_frame
+        .common
+        .prev_stack_frame_mut::<StackFrame>();
+
+    let prev_deferred = prev_stack_frame.common.deferred_list;
     let deferred = Deferred {
         prev_deferred,
-        target_stack_pointer: ctx.stack_pointer(),
         func,
         result_size,
         num_arg_buffer_words,
@@ -78,7 +83,7 @@ pub fn defer(ctx: &mut LightWeightThreadContext) -> FunctionObject {
     }
     mem::forget(deferred);
 
-    ctx.update_deferred_list(ptr as *const ());
+    prev_stack_frame.common.deferred_list = ptr as *const ();
 
     ctx.leave()
 }
@@ -189,17 +194,19 @@ struct StackFrameRunDefers {
 }
 
 pub fn run_defers(ctx: &mut LightWeightThreadContext) -> FunctionObject {
-    if ctx.deferred_list().is_null() {
+    let current_stack_frame = ctx.stack_frame_mut::<StackFrameRunDefers>();
+    let prev_stack_frame = current_stack_frame
+        .common
+        .prev_stack_frame_mut::<StackFrame>();
+
+    if prev_stack_frame.common.deferred_list.is_null() {
         return ctx.leave();
     }
 
-    let deferred = unsafe { &*(ctx.deferred_list() as *const Deferred) };
+    let deferred = unsafe { &*(prev_stack_frame.common.deferred_list as *const Deferred) };
 
-    if deferred.target_stack_pointer != ctx.stack_pointer() {
-        return ctx.leave();
-    }
+    prev_stack_frame.common.deferred_list = deferred.prev_deferred;
 
-    ctx.update_deferred_list(deferred.prev_deferred);
     let args =
         unsafe { std::slice::from_raw_parts(deferred.arg_buffer, deferred.num_arg_buffer_words) };
     ctx.call::<StackFrameRunDefers>(

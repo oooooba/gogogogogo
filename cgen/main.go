@@ -338,6 +338,7 @@ func (ctx *Context) switchFunctionToCallRuntimeApi(nextFunction string, nextFunc
 	resultPtr *string, variableSizeFrameHandler func(), paramArgPairs ...paramArgPair) {
 	fmt.Fprintf(ctx.stream, "%s* next_frame = (%s*)(frame + 1);\n", nextFunctionFrame, nextFunctionFrame)
 	fmt.Fprintf(ctx.stream, "assert(((uintptr_t)next_frame) %% sizeof(uintptr_t) == 0);\n")
+	fmt.Fprintf(ctx.stream, "*next_frame = (%s){ 0 };\n", nextFunctionFrame)
 	fmt.Fprintf(ctx.stream, "next_frame->common.resume_func = %s;\n", wrapInFunctionObject(resumeFunction))
 	fmt.Fprintf(ctx.stream, "next_frame->common.prev_stack_pointer = ctx->stack_pointer;\n")
 
@@ -2139,6 +2140,7 @@ typedef struct StackFrameCommon {
 	FunctionObject resume_func;
 	struct StackFrameCommon* prev_stack_pointer;
 	void* free_vars;
+	const void* deferred_list;
 } StackFrameCommon;
 
 typedef struct {
@@ -2147,7 +2149,6 @@ typedef struct {
 	FunctionObject current_func;
 	StackFrameCommon* stack_pointer;
 	UserFunction prev_func;
-	const void* deferred_list;
 	uintptr_t control_flags;
 	intptr_t marker;
 } LightWeightThreadContext;

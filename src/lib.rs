@@ -92,6 +92,14 @@ struct StackFrameCommon {
     resume_func: FunctionObject,
     prev_stack_pointer: *mut StackFrame,
     free_vars: *mut (),
+    deferred_list: *const (),
+}
+
+impl StackFrameCommon {
+    fn prev_stack_frame_mut<T>(&mut self) -> &mut T {
+        let p = self.prev_stack_pointer as *mut T;
+        unsafe { &mut *p }
+    }
 }
 
 #[repr(C)]
@@ -101,7 +109,6 @@ pub struct LightWeightThreadContext {
     current_func: FunctionObject,
     stack_pointer: *mut StackFrame,
     prev_func: UserFunction,
-    deferred_list: *const (),
     control_flags: usize,
     marker: isize,
 }
@@ -120,7 +127,6 @@ impl LightWeightThreadContext {
             current_func: entry_func,
             stack_pointer,
             prev_func,
-            deferred_list: ptr::null(),
             control_flags: 0,
             marker: 0xdeadbeef,
         }
@@ -142,6 +148,7 @@ impl LightWeightThreadContext {
         next_frame.common.resume_func = resume_func;
         next_frame.common.prev_stack_pointer = current_stack_pointer;
         next_frame.common.free_vars = ptr::null_mut();
+        next_frame.common.deferred_list = ptr::null_mut();
 
         let has_result = result_size > 0;
         let params_offset = usize::from(has_result);
@@ -202,14 +209,6 @@ impl LightWeightThreadContext {
     fn stack_frame_mut<T>(&mut self) -> &mut T {
         let p = self.stack_pointer as *mut T;
         unsafe { &mut *p }
-    }
-
-    fn deferred_list(&self) -> *const () {
-        self.deferred_list
-    }
-
-    fn update_deferred_list(&mut self, deferred: *const ()) {
-        self.deferred_list = deferred
     }
 
     fn leave(&mut self) -> FunctionObject {
