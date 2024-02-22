@@ -92,13 +92,17 @@ struct StackFrameCommon {
     resume_func: FunctionObject,
     prev_stack_pointer: *mut StackFrame,
     free_vars: *mut (),
-    deferred_list: *const (),
+    defer_stack: api::DeferStack,
 }
 
 impl StackFrameCommon {
     fn prev_stack_frame_mut<T>(&mut self) -> &mut T {
         let p = self.prev_stack_pointer as *mut T;
         unsafe { &mut *p }
+    }
+
+    fn defer_stack_mut(&mut self) -> &mut api::DeferStack {
+        &mut self.defer_stack
     }
 }
 
@@ -148,7 +152,7 @@ impl LightWeightThreadContext {
         next_frame.common.resume_func = resume_func;
         next_frame.common.prev_stack_pointer = current_stack_pointer;
         next_frame.common.free_vars = ptr::null_mut();
-        next_frame.common.deferred_list = ptr::null_mut();
+        next_frame.common.defer_stack = api::DeferStack::new();
 
         let has_result = result_size > 0;
         let params_offset = usize::from(has_result);
