@@ -77,87 +77,91 @@ pub extern "C" fn gox5_channel_select(ctx: &mut LightWeightThreadContext) -> Fun
     let frame = ctx.stack_frame::<StackFrameChannelSelect>();
     let entry_buffer =
         unsafe { std::slice::from_raw_parts(frame.entry_buffer.as_ptr(), frame.entry_count) };
-    loop {
-        for (i, entry) in entry_buffer.iter().enumerate() {
-            let mut channel = entry.channel.clone();
-            let channel = channel.as_mut::<ChannelObject>();
-            let id = ctx.id();
-            if !entry.send_data.is_null() {
-                let data_size = entry.type_id.size();
-                let data = ctx.global_context().process(|mut global_context| {
-                    global_context.allocator().allocate(data_size, |_| {})
-                });
-                unsafe {
-                    let src = slice::from_raw_parts(entry.send_data.as_ref::<u8>(), data_size);
-                    let dst = slice::from_raw_parts_mut(data as *mut u8, data_size);
-                    dst.copy_from_slice(src);
-                };
-                let data = ObjectPtr(data);
-                if let Some(()) = channel.send(id, data) {
+
+    for (i, entry) in entry_buffer.iter().enumerate() {
+        let mut channel = entry.channel.clone();
+        let channel = channel.as_mut::<ChannelObject>();
+        let id = ctx.id();
+        if !entry.send_data.is_null() {
+            let data_size = entry.type_id.size();
+            let data = ctx.global_context().process(|mut global_context| {
+                global_context.allocator().allocate(data_size, |_| {})
+            });
+            unsafe {
+                let src = slice::from_raw_parts(entry.send_data.as_ref::<u8>(), data_size);
+                let dst = slice::from_raw_parts_mut(data as *mut u8, data_size);
+                dst.copy_from_slice(src);
+            };
+            let data = ObjectPtr(data);
+            if let Some(()) = channel.send(id, data) {
+                let frame = ctx.stack_frame_mut::<StackFrameChannelSelect>();
+                *frame.selected_index = isize::try_from(i).unwrap();
+                *frame.receive_available = false;
+                return ctx.leave();
+            }
+        }
+        if !entry.receive_data.is_null() {
+            match channel.receive(id) {
+                ReceiveStatus::Value(data) => {
+                    let frame = ctx.stack_frame_mut::<StackFrameChannelSelect>();
+                    *frame.selected_index = isize::try_from(i).unwrap();
+                    *frame.receive_available = true;
+
+                    let data_size = entry.type_id.size();
+                    unsafe {
+                        let src = slice::from_raw_parts(data.as_ref::<u8>(), data_size);
+                        let mut dst = entry.receive_data.clone();
+                        let dst = slice::from_raw_parts_mut(dst.as_mut::<u8>(), data_size);
+                        dst.copy_from_slice(src);
+                    };
+
+                    return ctx.leave();
+                }
+                ReceiveStatus::Blocked => (),
+                ReceiveStatus::Closed => (),
+            };
+        }
+    }
+
+    for (i, entry) in entry_buffer.iter().enumerate() {
+        let mut channel = entry.channel.clone();
+        let channel = channel.as_mut::<ChannelObject>();
+        let id = ctx.id();
+        if !entry.receive_data.is_null() {
+            match channel.receive(id) {
+                ReceiveStatus::Value(_) => break,
+                ReceiveStatus::Blocked => {
+                    ctx.suspend();
+                    return FunctionObject::from_user_function(UserFunction::new(
+                        gox5_channel_select,
+                    ));
+                }
+                ReceiveStatus::Closed => {
                     let frame = ctx.stack_frame_mut::<StackFrameChannelSelect>();
                     *frame.selected_index = isize::try_from(i).unwrap();
                     *frame.receive_available = false;
+
+                    let data_size = entry.type_id.size();
+                    unsafe {
+                        let mut dst = entry.receive_data.clone();
+                        let dst = dst.as_mut::<u8>();
+                        ptr::write_bytes(dst, 0, data_size);
+                    }
+
                     return ctx.leave();
                 }
-            }
-            if !entry.receive_data.is_null() {
-                match channel.receive(id) {
-                    ReceiveStatus::Value(data) => {
-                        let frame = ctx.stack_frame_mut::<StackFrameChannelSelect>();
-                        *frame.selected_index = isize::try_from(i).unwrap();
-                        *frame.receive_available = true;
-
-                        let data_size = entry.type_id.size();
-                        unsafe {
-                            let src = slice::from_raw_parts(data.as_ref::<u8>(), data_size);
-                            let mut dst = entry.receive_data.clone();
-                            let dst = slice::from_raw_parts_mut(dst.as_mut::<u8>(), data_size);
-                            dst.copy_from_slice(src);
-                        };
-
-                        return ctx.leave();
-                    }
-                    ReceiveStatus::Blocked => (),
-                    ReceiveStatus::Closed => (),
-                };
-            }
+            };
         }
+    }
 
-        for (i, entry) in entry_buffer.iter().enumerate() {
-            let mut channel = entry.channel.clone();
-            let channel = channel.as_mut::<ChannelObject>();
-            let id = ctx.id();
-            if !entry.send_data.is_null() {
-                unreachable!();
-            }
-            if !entry.receive_data.is_null() {
-                match channel.receive(id) {
-                    ReceiveStatus::Value(_) => break,
-                    ReceiveStatus::Blocked => (),
-                    ReceiveStatus::Closed => {
-                        let frame = ctx.stack_frame_mut::<StackFrameChannelSelect>();
-                        *frame.selected_index = isize::try_from(i).unwrap();
-                        *frame.receive_available = false;
-
-                        let data_size = entry.type_id.size();
-                        unsafe {
-                            let mut dst = entry.receive_data.clone();
-                            let dst = dst.as_mut::<u8>();
-                            ptr::write_bytes(dst, 0, data_size);
-                        }
-
-                        return ctx.leave();
-                    }
-                };
-            }
-        }
-
-        if frame.need_block == 0 {
-            let frame = ctx.stack_frame_mut::<StackFrameChannelSelect>();
-            *frame.selected_index = -1;
-            *frame.receive_available = false;
-            return ctx.leave();
-        }
+    if frame.need_block == 0 {
+        let frame = ctx.stack_frame_mut::<StackFrameChannelSelect>();
+        *frame.selected_index = -1;
+        *frame.receive_available = false;
+        ctx.leave()
+    } else {
+        ctx.suspend();
+        FunctionObject::from_user_function(UserFunction::new(gox5_channel_select))
     }
 }
 

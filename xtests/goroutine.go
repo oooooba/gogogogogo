@@ -158,6 +158,31 @@ func Test12() int {
 	return 12
 }
 
+func Test13() int {
+	ch := make(chan int)
+	quit := make(chan int)
+	go func() {
+		for i := 0; i < 10; i++ {
+			v := <-ch
+			if v != i {
+				return
+			}
+		}
+		quit <- 0
+	}()
+	i := 0
+	for {
+		select {
+		case ch <- i:
+			i++
+		case <-quit:
+			goto L
+		}
+	}
+L:
+	return 13
+}
+
 func main() {
 	runTest := func(testName string, test func() int) {
 		println(testName+":", test())
@@ -174,4 +199,5 @@ func main() {
 	runTest("Test10", Test10)
 	runTest("Test11", Test11)
 	runTest("Test12", Test12)
+	runTest("Test13", Test13)
 }
