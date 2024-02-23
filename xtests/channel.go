@@ -153,6 +153,29 @@ L:
 	return 9
 }
 
+func Test10() int {
+	ch0 := make(chan int)
+	ch1 := make(chan int, 1)
+	ch2 := make(chan int, 1)
+	ch2 <- 2
+	for {
+		select {
+		case <-ch0:
+			return 0
+		case <-ch1:
+			return 1
+		case ch0 <- 20:
+			return 2
+		case ch2 <- 30:
+			return 3
+		default:
+			goto L
+		}
+	}
+L:
+	return 10
+}
+
 func main() {
 	runTest := func(testName string, test func() int) {
 		println(testName+":", test())
@@ -166,4 +189,5 @@ func main() {
 	runTest("Test7", Test7)
 	runTest("Test8", Test8)
 	runTest("Test9", Test9)
+	runTest("Test10", Test10)
 }

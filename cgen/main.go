@@ -919,7 +919,7 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 					fmt.Fprintf(ctx.stream, "next_frame->entry_buffer[%d].type_id = %s;\n", i, wrapInTypeId(state.Chan.Type().(*types.Chan).Elem()))
 					switch state.Dir {
 					case types.SendRecv:
-						panic("not implemented")
+						panic("unreachable")
 					case types.SendOnly:
 						fmt.Fprintf(ctx.stream, "next_frame->entry_buffer[%d].send_data = &%s;\n", i, createValueRelName(state.Send))
 						fmt.Fprintf(ctx.stream, "next_frame->entry_buffer[%d].receive_data = NULL;\n", i)
@@ -932,6 +932,7 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 			},
 			paramArgPair{param: "selected_index", arg: fmt.Sprintf("&%s.raw.e0", result)},
 			paramArgPair{param: "receive_available", arg: fmt.Sprintf("&%s.raw.e1", result)},
+			paramArgPair{param: "need_block", arg: fmt.Sprintf("%t", instr.Blocking)},
 			paramArgPair{param: "entry_count", arg: fmt.Sprintf("%d", len(instr.States))},
 		)
 
@@ -2229,6 +2230,7 @@ typedef struct {
 	StackFrameCommon common;
 	IntObject* selected_index;
 	BoolObject* receive_available;
+	uintptr_t need_block;
 	uintptr_t entry_count;
 	struct {
 		ChannelObject channel;
