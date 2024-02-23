@@ -139,9 +139,7 @@ impl LightWeightThreadContext {
     fn call<T>(&mut self, result_size: usize, args: &[*const ()], resume_func: FunctionObject) {
         let result_size = result_size.next_multiple_of(mem::size_of::<*const ()>());
 
-        let p = self.stack_pointer() as *mut u8;
-        let current_stack_pointer = p as *mut StackFrame;
-
+        let p = self.stack_pointer as *mut u8;
         let p = unsafe { p.add(mem::size_of::<T>()) };
         let result_pointer = p as *const ();
 
@@ -150,7 +148,7 @@ impl LightWeightThreadContext {
         let next_frame = unsafe { &mut (*next_stack_pointer) };
 
         next_frame.common.resume_func = resume_func;
-        next_frame.common.prev_stack_pointer = current_stack_pointer;
+        next_frame.common.prev_stack_pointer = self.stack_pointer;
         next_frame.common.free_vars = ptr::null_mut();
         next_frame.common.defer_stack = api::DeferStack::new();
 
@@ -170,7 +168,7 @@ impl LightWeightThreadContext {
         let params = &mut additional_words[params_offset..];
         params.copy_from_slice(args);
 
-        self.update_stack_pointer(next_stack_pointer);
+        self.stack_pointer = next_stack_pointer;
     }
 
     fn prepare_user_function(&mut self) -> UserFunction {
@@ -195,14 +193,6 @@ impl LightWeightThreadContext {
     fn update_current_func(&mut self, func: FunctionObject) {
         self.prev_func = self.current_func.extract_user_function().0;
         self.current_func = func
-    }
-
-    fn stack_pointer(&self) -> *mut () {
-        self.stack_pointer as *mut ()
-    }
-
-    fn update_stack_pointer(&mut self, new_stack_pointer: *mut StackFrame) {
-        self.stack_pointer = new_stack_pointer
     }
 
     fn stack_frame<T>(&self) -> &T {
