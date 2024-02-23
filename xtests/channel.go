@@ -210,6 +210,82 @@ L:
 	return 12
 }
 
+func Test13() int {
+	ch0 := make(chan int)
+	ch1 := make(chan int)
+	close(ch1)
+	for {
+		select {
+		case ch0 <- 42:
+			return 0
+		case <-ch0:
+			return 1
+		case <-ch1:
+			goto L
+		}
+	}
+L:
+	return 13
+}
+
+func Test14() int {
+	ch0 := make(chan int)
+	ch1 := make(chan int)
+	close(ch1)
+	for {
+		select {
+		case <-ch0:
+			return 0
+		case ch0 <- 42:
+			return 2
+		case <-ch1:
+			goto L
+		}
+	}
+L:
+	return 14
+}
+
+func Test15() int {
+	ch0 := make(chan int)
+	ch1 := make(chan int)
+	close(ch1)
+	for {
+		select {
+		case ch0 <- 42:
+			return 0
+		case <-ch0:
+			return 1
+		case <-ch1:
+			goto L
+		default:
+			return 2
+		}
+	}
+L:
+	return 15
+}
+
+func Test16() int {
+	ch0 := make(chan int)
+	ch1 := make(chan int)
+	close(ch1)
+	for {
+		select {
+		case <-ch0:
+			return 0
+		case ch0 <- 42:
+			return 2
+		case <-ch1:
+			goto L
+		default:
+			return 3
+		}
+	}
+L:
+	return 16
+}
+
 func main() {
 	runTest := func(testName string, test func() int) {
 		println(testName+":", test())
@@ -223,7 +299,11 @@ func main() {
 	runTest("Test7", Test7)
 	runTest("Test8", Test8)
 	runTest("Test9", Test9)
-	//runTest("Test10", Test10)
+	runTest("Test10", Test10)
 	runTest("Test11", Test11)
 	runTest("Test12", Test12)
+	runTest("Test13", Test13)
+	runTest("Test14", Test14)
+	runTest("Test15", Test15)
+	runTest("Test16", Test16)
 }

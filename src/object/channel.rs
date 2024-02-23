@@ -41,9 +41,25 @@ impl BufferedChannel {
         &mut buffer[index]
     }
 
-    pub fn send(&mut self, data: ObjectPtr) -> Option<()> {
+    fn can_send(&self) -> bool {
         assert!(self.size <= self.capacity);
-        if self.size >= self.capacity {
+        self.size < self.capacity
+    }
+
+    fn can_receive(&self) -> bool {
+        self.size > 0
+    }
+
+    pub fn can_complete_send(&self) -> bool {
+        self.can_send()
+    }
+
+    pub fn can_complete_receive(&self) -> bool {
+        self.can_receive()
+    }
+
+    pub fn send(&mut self, data: ObjectPtr) -> Option<()> {
+        if !self.can_send() {
             return None;
         }
 
@@ -55,7 +71,7 @@ impl BufferedChannel {
     }
 
     pub fn receive(&mut self) -> Option<ObjectPtr> {
-        if self.size == 0 {
+        if !self.can_receive() {
             return None;
         }
 
@@ -83,6 +99,26 @@ impl RendezvousChannel {
     pub fn new() -> Self {
         Self {
             state: RendezvousState::Initial,
+        }
+    }
+
+    pub fn can_complete_send(&self, id: usize) -> bool {
+        match self.state {
+            RendezvousState::SenderReachedReceiverAccepted { sender_id } if id == sender_id => true,
+            RendezvousState::ReceiverReached { .. } => true,
+            _ => false,
+        }
+    }
+
+    pub fn can_complete_receive(&self, id: usize) -> bool {
+        match self.state {
+            RendezvousState::SenderReached { .. } => true,
+            RendezvousState::ReceiverReachedSenderAccepted { receiver_id, .. }
+                if id == receiver_id =>
+            {
+                true
+            }
+            _ => false,
         }
     }
 
@@ -158,6 +194,20 @@ impl ChannelObject {
     pub fn close(&mut self, _id: usize) {
         assert!(!self.is_closed);
         self.is_closed = true;
+    }
+
+    pub fn can_complete_send(&self, id: usize) -> bool {
+        match self.channel_type {
+            ChannelType::Buffered(ref channel) => channel.can_complete_send(),
+            ChannelType::Rendezvous(ref channel) => channel.can_complete_send(id),
+        }
+    }
+
+    pub fn can_complete_receive(&self, id: usize) -> bool {
+        match self.channel_type {
+            ChannelType::Buffered(ref channel) => channel.can_complete_receive(),
+            ChannelType::Rendezvous(ref channel) => channel.can_complete_receive(id),
+        }
     }
 
     pub fn send(&mut self, id: usize, data: ObjectPtr) -> Option<()> {
