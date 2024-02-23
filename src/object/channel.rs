@@ -67,40 +67,68 @@ impl BufferedChannel {
     }
 }
 
+enum RendezvousState {
+    Initial,
+    SenderReached { sender_id: usize, data: ObjectPtr },
+    SenderReachedReceiverAccepted { sender_id: usize },
+    ReceiverReached { receiver_id: usize },
+    ReceiverReachedSenderAccepted { receiver_id: usize, data: ObjectPtr },
+}
+
 struct RendezvousChannel {
-    sender_id: Option<usize>,
-    data: Option<ObjectPtr>,
+    state: RendezvousState,
 }
 
 impl RendezvousChannel {
     pub fn new() -> Self {
         Self {
-            sender_id: None,
-            data: None,
+            state: RendezvousState::Initial,
         }
     }
 
     pub fn send(&mut self, id: usize, data: ObjectPtr) -> Option<()> {
-        if self.data.is_some() {
-            return None;
-        }
-
-        match self.sender_id {
-            Some(sender_id) if sender_id == id => {
-                self.sender_id = None;
-                Some(())
-            }
-            Some(_) => None,
-            None => {
-                self.data = Some(data);
-                self.sender_id = Some(id);
+        match self.state {
+            RendezvousState::Initial => {
+                self.state = RendezvousState::SenderReached {
+                    sender_id: id,
+                    data,
+                };
                 None
             }
+            RendezvousState::SenderReachedReceiverAccepted { sender_id } if id == sender_id => {
+                self.state = RendezvousState::Initial;
+                Some(())
+            }
+            RendezvousState::ReceiverReached { receiver_id } => {
+                self.state = RendezvousState::ReceiverReachedSenderAccepted { receiver_id, data };
+                Some(())
+            }
+            _ => None,
         }
     }
 
-    pub fn receive(&mut self) -> Option<ObjectPtr> {
-        self.data.take()
+    pub fn receive(&mut self, id: usize) -> Option<ObjectPtr> {
+        match &self.state {
+            RendezvousState::SenderReached { sender_id, data } => {
+                let data = data.clone();
+                self.state = RendezvousState::SenderReachedReceiverAccepted {
+                    sender_id: *sender_id,
+                };
+                Some(data)
+            }
+            RendezvousState::Initial => {
+                self.state = RendezvousState::ReceiverReached { receiver_id: id };
+                None
+            }
+            RendezvousState::ReceiverReachedSenderAccepted { receiver_id, data }
+                if id == *receiver_id =>
+            {
+                let data = data.clone();
+                self.state = RendezvousState::Initial;
+                Some(data)
+            }
+            _ => None,
+        }
     }
 }
 
@@ -139,10 +167,10 @@ impl ChannelObject {
         }
     }
 
-    pub fn receive(&mut self, _id: usize) -> ReceiveStatus<ObjectPtr> {
+    pub fn receive(&mut self, id: usize) -> ReceiveStatus<ObjectPtr> {
         let result = match self.channel_type {
             ChannelType::Buffered(ref mut channel) => channel.receive(),
-            ChannelType::Rendezvous(ref mut channel) => channel.receive(),
+            ChannelType::Rendezvous(ref mut channel) => channel.receive(id),
         };
         if let Some(data) = result {
             ReceiveStatus::Value(data)
@@ -378,7 +406,7 @@ mod tests {
             unsafe { *data = 42 };
             let data = ObjectPtr(data as *mut ());
             let result = second.borrow_mut().send(2, data);
-            assert_eq!(result, None);
+            assert_eq!(result, Some(()));
         }
         {
             let result = first.borrow_mut().receive(1);
@@ -386,11 +414,6 @@ mod tests {
                 panic!()
             };
             assert_eq!(*data.as_ref::<isize>(), 42);
-        }
-        {
-            let data = ObjectPtr(ptr::null_mut() as *mut ());
-            let result = second.borrow_mut().send(2, data);
-            assert_eq!(result, Some(()));
         }
     }
 

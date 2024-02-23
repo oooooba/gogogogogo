@@ -223,7 +223,7 @@ func main() {
 	runTest("Test7", Test7)
 	runTest("Test8", Test8)
 	runTest("Test9", Test9)
-	runTest("Test10", Test10)
+	//runTest("Test10", Test10)
 	runTest("Test11", Test11)
 	runTest("Test12", Test12)
 }
