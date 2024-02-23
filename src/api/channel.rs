@@ -54,6 +54,33 @@ pub extern "C" fn gox5_channel_new(ctx: &mut LightWeightThreadContext) -> Functi
     ctx.leave()
 }
 
+fn load_send_data(src: ObjectPtr, size: usize, ctx: &mut LightWeightThreadContext) -> ObjectPtr {
+    let dst = ctx
+        .global_context()
+        .process(|mut global_context| global_context.allocator().allocate(size, |_| {}));
+    unsafe {
+        let src = slice::from_raw_parts(src.as_ref::<u8>(), size);
+        let dst = slice::from_raw_parts_mut(dst as *mut u8, size);
+        dst.copy_from_slice(src);
+    };
+    ObjectPtr(dst)
+}
+
+fn store_receive_data(mut dst: ObjectPtr, data: Option<ObjectPtr>, size: usize) {
+    if let Some(src) = data {
+        unsafe {
+            let src = slice::from_raw_parts(src.as_ref::<u8>(), size);
+            let dst = slice::from_raw_parts_mut(dst.as_mut::<u8>(), size);
+            dst.copy_from_slice(src);
+        };
+    } else {
+        unsafe {
+            let dst = dst.as_mut::<u8>();
+            ptr::write_bytes(dst, 0, size);
+        }
+    }
+}
+
 #[repr(C)]
 struct SelectEntry {
     channel: ObjectPtr,
@@ -74,6 +101,19 @@ struct StackFrameChannelSelect<'a> {
 
 #[no_mangle]
 pub extern "C" fn gox5_channel_select(ctx: &mut LightWeightThreadContext) -> FunctionObject {
+    fn set_result(
+        ctx: &mut LightWeightThreadContext,
+        selected_index: Option<usize>,
+        receive_available: bool,
+    ) {
+        let frame = ctx.stack_frame_mut::<StackFrameChannelSelect>();
+        *frame.selected_index = match selected_index {
+            Some(index) => isize::try_from(index).unwrap(),
+            None => -1,
+        };
+        *frame.receive_available = receive_available;
+    }
+
     let frame = ctx.stack_frame::<StackFrameChannelSelect>();
     let entry_buffer =
         unsafe { std::slice::from_raw_parts(frame.entry_buffer.as_ptr(), frame.entry_count) };
@@ -83,37 +123,20 @@ pub extern "C" fn gox5_channel_select(ctx: &mut LightWeightThreadContext) -> Fun
         let channel = channel.as_mut::<ChannelObject>();
         let id = ctx.id();
         if !entry.send_data.is_null() && channel.can_complete_send(id) {
-            let data_size = entry.type_id.size();
-            let data = ctx.global_context().process(|mut global_context| {
-                global_context.allocator().allocate(data_size, |_| {})
-            });
-            unsafe {
-                let src = slice::from_raw_parts(entry.send_data.as_ref::<u8>(), data_size);
-                let dst = slice::from_raw_parts_mut(data as *mut u8, data_size);
-                dst.copy_from_slice(src);
-            };
-            let data = ObjectPtr(data);
+            let data = load_send_data(entry.send_data.clone(), entry.type_id.size(), ctx);
             channel.send(id, data).unwrap();
-            let frame = ctx.stack_frame_mut::<StackFrameChannelSelect>();
-            *frame.selected_index = isize::try_from(i).unwrap();
-            *frame.receive_available = false;
+            set_result(ctx, Some(i), false);
             return ctx.leave();
         }
         if !entry.receive_data.is_null() && channel.can_complete_receive(id) {
             match channel.receive(id) {
                 ReceiveStatus::Value(data) => {
-                    let frame = ctx.stack_frame_mut::<StackFrameChannelSelect>();
-                    *frame.selected_index = isize::try_from(i).unwrap();
-                    *frame.receive_available = true;
-
-                    let data_size = entry.type_id.size();
-                    unsafe {
-                        let src = slice::from_raw_parts(data.as_ref::<u8>(), data_size);
-                        let mut dst = entry.receive_data.clone();
-                        let dst = slice::from_raw_parts_mut(dst.as_mut::<u8>(), data_size);
-                        dst.copy_from_slice(src);
-                    };
-
+                    store_receive_data(
+                        entry.receive_data.clone(),
+                        Some(data),
+                        entry.type_id.size(),
+                    );
+                    set_result(ctx, Some(i), true);
                     return ctx.leave();
                 }
                 _ => unreachable!(),
@@ -130,17 +153,8 @@ pub extern "C" fn gox5_channel_select(ctx: &mut LightWeightThreadContext) -> Fun
                 ReceiveStatus::Value(_) => (),
                 ReceiveStatus::Blocked => (),
                 ReceiveStatus::Closed => {
-                    let frame = ctx.stack_frame_mut::<StackFrameChannelSelect>();
-                    *frame.selected_index = isize::try_from(i).unwrap();
-                    *frame.receive_available = false;
-
-                    let data_size = entry.type_id.size();
-                    unsafe {
-                        let mut dst = entry.receive_data.clone();
-                        let dst = dst.as_mut::<u8>();
-                        ptr::write_bytes(dst, 0, data_size);
-                    }
-
+                    store_receive_data(entry.receive_data.clone(), None, entry.type_id.size());
+                    set_result(ctx, Some(i), false);
                     return ctx.leave();
                 }
             };
@@ -148,9 +162,7 @@ pub extern "C" fn gox5_channel_select(ctx: &mut LightWeightThreadContext) -> Fun
     }
 
     if frame.need_block == 0 {
-        let frame = ctx.stack_frame_mut::<StackFrameChannelSelect>();
-        *frame.selected_index = -1;
-        *frame.receive_available = false;
+        set_result(ctx, None, false);
         ctx.leave()
     } else {
         ctx.suspend();
@@ -205,20 +217,7 @@ pub extern "C" fn gox5_channel_receive(ctx: &mut LightWeightThreadContext) -> Fu
     if !frame.available.is_null() {
         *frame.available.as_mut::<bool>() = data.is_some();
     }
-
-    let data_size = frame.type_id.size();
-    if let Some(data) = data {
-        unsafe {
-            let src = slice::from_raw_parts(data.as_ref::<u8>(), data_size);
-            let dst = slice::from_raw_parts_mut(frame.data.as_mut::<u8>(), data_size);
-            dst.copy_from_slice(src);
-        };
-    } else {
-        unsafe {
-            let dst = frame.data.as_mut::<u8>();
-            ptr::write_bytes(dst, 0, data_size);
-        }
-    }
+    store_receive_data(frame.data.clone(), data, frame.type_id.size());
 
     ctx.leave()
 }
@@ -234,21 +233,13 @@ struct StackFrameChannelSend {
 #[no_mangle]
 pub extern "C" fn gox5_channel_send(ctx: &mut LightWeightThreadContext) -> FunctionObject {
     let frame = ctx.stack_frame::<StackFrameChannelSend>();
+
     let mut channel = frame.channel.clone();
-
-    let data_size = frame.type_id.size();
-    let data = ctx
-        .global_context()
-        .process(|mut global_context| global_context.allocator().allocate(data_size, |_| {}));
-    unsafe {
-        let src = slice::from_raw_parts(frame.data.as_ref::<u8>(), data_size);
-        let dst = slice::from_raw_parts_mut(data as *mut u8, data_size);
-        dst.copy_from_slice(src);
-    };
-    let data = ObjectPtr(data);
-
     let channel = channel.as_mut::<ChannelObject>();
+
     let id = ctx.id();
+    let data = load_send_data(frame.data.clone(), frame.type_id.size(), ctx);
+
     if channel.send(id, data).is_some() {
         ctx.leave()
     } else {
