@@ -129,13 +129,8 @@ pub extern "C" fn gox5_channel_select(ctx: &mut LightWeightThreadContext) -> Fun
         let id = ctx.id();
         if !entry.receive_data.is_null() {
             match channel.receive(id) {
-                ReceiveStatus::Value(_) => break,
-                ReceiveStatus::Blocked => {
-                    ctx.suspend();
-                    return FunctionObject::from_user_function(UserFunction::new(
-                        gox5_channel_select,
-                    ));
-                }
+                ReceiveStatus::Value(_) => (),
+                ReceiveStatus::Blocked => (),
                 ReceiveStatus::Closed => {
                     let frame = ctx.stack_frame_mut::<StackFrameChannelSelect>();
                     *frame.selected_index = isize::try_from(i).unwrap();
