@@ -662,7 +662,7 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 			resultSize = fmt.Sprintf("sizeof(%s)", createTypeName(signature.Results()))
 		}
 
-		ctx.switchFunctionToCallRuntimeApi("gox5_defer", "StackFrameDefer", createInstructionName(instr), nil,
+		ctx.switchFunctionToCallRuntimeApi("gox5_defer_register", "StackFrameDeferRegister", createInstructionName(instr), nil,
 			func() {
 				fmt.Fprintf(ctx.stream, "intptr_t num_arg_buffer_words = 0;\n")
 				for i, arg := range callCommon.Args {
@@ -907,7 +907,7 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 		fmt.Fprintf(ctx.stream, "return frame->common.resume_func;\n")
 
 	case *ssa.RunDefers:
-		ctx.switchFunctionToCallRuntimeApi("gox5_run_defers", "StackFrameRunDefers", createInstructionName(instr), nil, nil)
+		ctx.switchFunctionToCallRuntimeApi("gox5_defer_execute", "StackFrameDeferExecute", createInstructionName(instr), nil, nil)
 
 	case *ssa.Select:
 		result := createValueRelName(instr)
@@ -2215,8 +2215,8 @@ typedef struct {
 	uintptr_t result_size;
 	uintptr_t num_arg_buffer_words;
 	void* arg_buffer[0];
-} StackFrameDefer;
-DECLARE_RUNTIME_API(defer, StackFrameDefer);
+} StackFrameDeferRegister;
+DECLARE_RUNTIME_API(defer_register, StackFrameDeferRegister);
 
 typedef struct {
 	StackFrameCommon common;
@@ -2343,8 +2343,8 @@ DECLARE_RUNTIME_API(channel_receive, StackFrameChannelReceive);
 
 typedef struct {
 	StackFrameCommon common;
-} StackFrameRunDefers;
-DECLARE_RUNTIME_API(run_defers, StackFrameRunDefers);
+} StackFrameDeferExecute;
+DECLARE_RUNTIME_API(defer_execute, StackFrameDeferExecute);
 
 typedef struct {
 	StackFrameCommon common;

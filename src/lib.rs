@@ -1,4 +1,5 @@
 mod api;
+mod defer;
 mod global_context;
 mod interface;
 mod object;
@@ -10,6 +11,7 @@ use std::process;
 use std::ptr;
 use std::slice;
 
+use defer::DeferStack;
 use global_context::GlobalContextPtr;
 use interface::Interface;
 use object::string::StringObject;
@@ -92,7 +94,7 @@ struct StackFrameCommon {
     resume_func: FunctionObject,
     prev_stack_pointer: *mut StackFrame,
     free_vars: *mut (),
-    defer_stack: api::DeferStack,
+    defer_stack: DeferStack,
 }
 
 impl StackFrameCommon {
@@ -101,7 +103,7 @@ impl StackFrameCommon {
         unsafe { &mut *p }
     }
 
-    fn defer_stack_mut(&mut self) -> &mut api::DeferStack {
+    fn defer_stack_mut(&mut self) -> &mut DeferStack {
         &mut self.defer_stack
     }
 }
@@ -150,7 +152,7 @@ impl LightWeightThreadContext {
         next_frame.common.resume_func = resume_func;
         next_frame.common.prev_stack_pointer = self.stack_pointer;
         next_frame.common.free_vars = ptr::null_mut();
-        next_frame.common.defer_stack = api::DeferStack::new();
+        next_frame.common.defer_stack = DeferStack::new();
 
         let has_result = result_size > 0;
         let params_offset = usize::from(has_result);
@@ -265,11 +267,6 @@ extern "C" {
 }
 
 #[no_mangle]
-pub extern "C" fn gox5_defer(ctx: &mut LightWeightThreadContext) -> FunctionObject {
-    api::defer(ctx)
-}
-
-#[no_mangle]
 pub extern "C" fn gox5_make_closure(ctx: &mut LightWeightThreadContext) -> FunctionObject {
     api::make_closure(ctx)
 }
@@ -282,11 +279,6 @@ pub extern "C" fn gox5_make_interface(ctx: &mut LightWeightThreadContext) -> Fun
 #[no_mangle]
 pub extern "C" fn gox5_new(ctx: &mut LightWeightThreadContext) -> FunctionObject {
     api::new(ctx)
-}
-
-#[no_mangle]
-pub extern "C" fn gox5_run_defers(ctx: &mut LightWeightThreadContext) -> FunctionObject {
-    api::run_defers(ctx)
 }
 
 #[no_mangle]
