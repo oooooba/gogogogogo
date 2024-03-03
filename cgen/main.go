@@ -529,6 +529,15 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 					)
 					needToCallRuntimeApi = true
 
+				case "copy":
+					result := createValueRelName(instr)
+					ctx.switchFunctionToCallRuntimeApi("gox5_slice_copy", "StackFrameSliceCopy", createInstructionName(instr), &result, nil,
+						paramArgPair{param: "type_id", arg: wrapInTypeId(callCommon.Args[0].Type().(*types.Slice).Elem())},
+						paramArgPair{param: "src", arg: fmt.Sprintf("%s.raw", createValueRelName(callCommon.Args[1]))},
+						paramArgPair{param: "dst", arg: fmt.Sprintf("%s.raw", createValueRelName(callCommon.Args[0]))},
+					)
+					needToCallRuntimeApi = true
+
 				case "complex":
 					bitLength := complexNumberBitLength(instr)
 					result := createValueRelName(instr)
@@ -2284,6 +2293,15 @@ typedef struct {
 	SliceObject slice;
 } StackFrameSliceCapacity;
 DECLARE_RUNTIME_API(slice_capacity, StackFrameSliceCapacity);
+
+typedef struct {
+	StackFrameCommon common;
+	IntObject* result_ptr;
+	TypeId type_id;
+	SliceObject src;
+	SliceObject dst;
+} StackFrameSliceCopy;
+DECLARE_RUNTIME_API(slice_copy, StackFrameSliceCopy);
 
 typedef struct {
 	StackFrameCommon common;

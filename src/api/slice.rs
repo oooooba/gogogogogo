@@ -1,3 +1,6 @@
+use std::cmp;
+use std::ptr;
+
 use crate::object::slice::SliceObject;
 use crate::type_id::TypeId;
 use crate::FunctionObject;
@@ -59,6 +62,36 @@ struct StackFrameSliceCapacity<'a> {
     common: StackFrameCommon,
     result_ptr: &'a mut isize,
     slice: SliceObject,
+}
+
+#[repr(C)]
+struct StackFrameSliceCopy<'a> {
+    common: StackFrameCommon,
+    result_ptr: &'a mut isize,
+    type_id: TypeId,
+    src: SliceObject,
+    dst: SliceObject,
+}
+
+#[no_mangle]
+pub extern "C" fn gox5_slice_copy(ctx: &mut LightWeightThreadContext) -> FunctionObject {
+    let frame = ctx.stack_frame::<StackFrameSliceCopy>();
+
+    let elem_size = frame.type_id.size();
+    let copy_count = cmp::min(frame.src.size(), frame.dst.size());
+
+    let src = frame.src.as_bytes(elem_size).as_ptr();
+
+    let frame = ctx.stack_frame_mut::<StackFrameSliceCopy>();
+    let dst = frame.dst.as_bytes_mut(elem_size).as_mut_ptr();
+
+    unsafe {
+        ptr::copy(src, dst, elem_size * copy_count);
+    }
+
+    *frame.result_ptr = isize::try_from(copy_count).unwrap();
+
+    ctx.leave()
 }
 
 #[no_mangle]

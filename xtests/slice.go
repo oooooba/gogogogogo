@@ -346,6 +346,74 @@ func Test22() int {
 	return 22
 }
 
+func Test23() int {
+	src := make([]int, 3)
+	for i := 0; i < 3; i++ {
+		src[i] = i
+	}
+	dst := make([]int, 2)
+	n := copy(dst, src)
+	if n != 2 {
+		return 0
+	}
+	if dst[0] != 0 {
+		return 1
+	}
+	if dst[1] != 1 {
+		return 2
+	}
+	return 23
+}
+
+func Test24() int {
+	src := make([]int, 2)
+	for i := 0; i < 2; i++ {
+		src[i] = i
+	}
+	dst := make([]int, 3)
+	n := copy(dst, src)
+	if n != 2 {
+		return 0
+	}
+	if dst[0] != 0 {
+		return 1
+	}
+	if dst[1] != 1 {
+		return 2
+	}
+	if dst[2] != 0 {
+		return 3
+	}
+	return 24
+}
+
+func Test25() int {
+	s := make([]int, 5)
+	for i := 0; i < 5; i++ {
+		s[i] = i
+	}
+	n := copy(s[2:], s[:3])
+	if n != 3 {
+		return 0
+	}
+	if s[0] != 0 {
+		return 1
+	}
+	if s[1] != 1 {
+		return 2
+	}
+	if s[2] != 0 {
+		return 3
+	}
+	if s[3] != 1 {
+		return 4
+	}
+	if s[4] != 2 {
+		return 5
+	}
+	return 25
+}
+
 func main() {
 	runTest := func(testName string, test func() int) {
 		println(testName+":", test())
@@ -372,4 +440,7 @@ func main() {
 	runTest("Test20", Test20)
 	runTest("Test21", Test21)
 	runTest("Test22", Test22)
+	runTest("Test23", Test23)
+	runTest("Test24", Test24)
+	runTest("Test25", Test25)
 }
