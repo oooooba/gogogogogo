@@ -492,6 +492,17 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 		} else {
 			switch callee := callCommon.Value.(type) {
 			case *ssa.Builtin:
+				complexNumberBitLength := func(v ssa.Value) uint {
+					switch v.Type().(*types.Basic).Kind() {
+					case types.Complex64:
+						return 64
+					case types.Complex128:
+						return 128
+					default:
+						panic("unreachable")
+					}
+				}
+
 				needToCallRuntimeApi := false
 				raw := ""
 				switch callee.Name() {
@@ -519,11 +530,27 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 					needToCallRuntimeApi = true
 
 				case "complex":
-					raw = fmt.Sprintf("%s.raw + %s.raw * I",
-						createValueRelName(callCommon.Args[0]), createValueRelName(callCommon.Args[1]))
+					bitLength := complexNumberBitLength(instr)
+					result := createValueRelName(instr)
+					ctx.switchFunctionToCallRuntimeApi(
+						fmt.Sprintf("gox5_complex%d_new", bitLength),
+						fmt.Sprintf("StackFrameComplex%dNew", bitLength),
+						createInstructionName(instr), &result, nil,
+						paramArgPair{param: "real", arg: createValueRelName(callCommon.Args[0])},
+						paramArgPair{param: "imaginary", arg: createValueRelName(callCommon.Args[1])},
+					)
+					needToCallRuntimeApi = true
 
 				case "imag":
-					raw = fmt.Sprintf("cimag(%s.raw)", createValueRelName(callCommon.Args[0]))
+					bitLength := complexNumberBitLength(callCommon.Args[0])
+					result := createValueRelName(instr)
+					ctx.switchFunctionToCallRuntimeApi(
+						fmt.Sprintf("gox5_complex%d_imaginary", bitLength),
+						fmt.Sprintf("StackFrameComplex%dImaginary", bitLength),
+						createInstructionName(instr), &result, nil,
+						paramArgPair{param: "value", arg: createValueRelName(callCommon.Args[0])},
+					)
+					needToCallRuntimeApi = true
 
 				case "len":
 					switch t := callCommon.Args[0].Type().(type) {
@@ -571,7 +598,15 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 					fmt.Fprintf(ctx.stream, "fprintf(stderr, \"\\n\");\n")
 
 				case "real":
-					raw = fmt.Sprintf("creal(%s.raw)", createValueRelName(callCommon.Args[0]))
+					bitLength := complexNumberBitLength(callCommon.Args[0])
+					result := createValueRelName(instr)
+					ctx.switchFunctionToCallRuntimeApi(
+						fmt.Sprintf("gox5_complex%d_real", bitLength),
+						fmt.Sprintf("StackFrameComplex%dReal", bitLength),
+						createInstructionName(instr), &result, nil,
+						paramArgPair{param: "value", arg: createValueRelName(callCommon.Args[0])},
+					)
+					needToCallRuntimeApi = true
 
 				default:
 					panic(fmt.Sprintf("unsuported builtin function: %s", callee.Name()))
@@ -1739,6 +1774,61 @@ UserFunction runtime_info_get_init_point(void) {
 `, mainFunctionName, initFunctionName)
 }
 
+func (ctx *Context) emitComplexNumberBuiltinFunctions() {
+	for _, bitLength := range []int{64, 128} {
+		elemBitLength := bitLength / 2
+
+		fmt.Fprintf(ctx.stream, `
+typedef struct {
+	StackFrameCommon common;
+	Complex%dObject* result_ptr;
+	Float%dObject real;
+	Float%dObject imaginary;
+} StackFrameComplex%dNew;
+
+__attribute__((unused)) static
+FunctionObject gox5_complex%d_new(LightWeightThreadContext* ctx) {
+	StackFrameComplex%dNew* frame = (void*)ctx->stack_pointer;
+	*frame->result_ptr = (Complex%dObject){.raw = frame->real.raw + frame->imaginary.raw * I};
+	ctx->stack_pointer = frame->common.prev_stack_pointer;
+	return frame->common.resume_func;
+}
+`, bitLength, elemBitLength, elemBitLength, bitLength, bitLength, bitLength, bitLength)
+
+		fmt.Fprintf(ctx.stream, `
+typedef struct {
+	StackFrameCommon common;
+	Float%dObject* result_ptr;
+	Complex%dObject value;
+} StackFrameComplex%dReal;
+
+__attribute__((unused)) static
+FunctionObject gox5_complex%d_real(LightWeightThreadContext* ctx) {
+	StackFrameComplex%dReal* frame = (void*)ctx->stack_pointer;
+	*frame->result_ptr = (Float%dObject){.raw = creal(frame->value.raw)};
+	ctx->stack_pointer = frame->common.prev_stack_pointer;
+	return frame->common.resume_func;
+}
+`, elemBitLength, bitLength, bitLength, bitLength, bitLength, elemBitLength)
+
+		fmt.Fprintf(ctx.stream, `
+typedef struct {
+	StackFrameCommon common;
+	Float%dObject* result_ptr;
+	Complex%dObject value;
+} StackFrameComplex%dImaginary;
+
+__attribute__((unused)) static
+FunctionObject gox5_complex%d_imaginary(LightWeightThreadContext* ctx) {
+	StackFrameComplex%dImaginary* frame = (void*)ctx->stack_pointer;
+	*frame->result_ptr = (Float%dObject){.raw = cimag(frame->value.raw)};
+	ctx->stack_pointer = frame->common.prev_stack_pointer;
+	return frame->common.resume_func;
+}
+`, elemBitLength, bitLength, bitLength, bitLength, bitLength, elemBitLength)
+	}
+}
+
 func findMainPackage(program *ssa.Program) *ssa.Package {
 	for _, pkg := range program.AllPackages() {
 		if pkg.Pkg.Name() == "main" {
@@ -2416,6 +2506,8 @@ __attribute__((unused)) static void builtin_print_float(double val) {
 	fprintf(stderr, "%%s", buf);
 }
 `)
+
+	ctx.emitComplexNumberBuiltinFunctions()
 
 	ctx.emitType()
 	ctx.emitEqualFunctionDeclaration()
