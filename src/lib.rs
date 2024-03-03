@@ -1,5 +1,4 @@
 mod api;
-mod defer;
 mod global_context;
 mod interface;
 mod object;
@@ -11,7 +10,7 @@ use std::process;
 use std::ptr;
 use std::slice;
 
-use defer::DeferStack;
+use api::defer::DeferStack;
 use global_context::GlobalContextPtr;
 use interface::Interface;
 use object::string::StringObject;
