@@ -161,6 +161,17 @@ func Test14() int {
 	return 14
 }
 
+func Test15() int {
+	type Arr [3]int
+	a := Arr{0, 1, 2}
+	for i := 0; i < 3; i++ {
+		if a[i] != i {
+			return i
+		}
+	}
+	return 15
+}
+
 func main() {
 	runTest := func(testName string, test func() int) {
 		println(testName+":", test())
@@ -179,4 +190,5 @@ func main() {
 	runTest("Test12", Test12)
 	runTest("Test13", Test13)
 	runTest("Test14", Test14)
+	runTest("Test15", Test15)
 }

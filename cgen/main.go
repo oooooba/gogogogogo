@@ -743,7 +743,7 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 		case *types.Slice:
 			fmt.Fprintf(ctx.stream, "%s* raw = &((%s.typed.ptr)[index]);\n", createTypeName(t.Elem()), createValueRelName(instr.X))
 		case *types.Pointer:
-			fmt.Fprintf(ctx.stream, "%s* raw = &(%s.raw->raw[index]);\n", createTypeName(t.Elem().(*types.Array).Elem()), createValueRelName(instr.X))
+			fmt.Fprintf(ctx.stream, "%s* raw = &(%s.raw->raw[index]);\n", createTypeName(t.Elem().Underlying().(*types.Array).Elem()), createValueRelName(instr.X))
 		default:
 			panic(fmt.Sprintf("%s, %s, %s", instr, instr.X, t))
 		}
