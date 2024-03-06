@@ -1,6 +1,7 @@
 pub(crate) mod channel;
 pub(crate) mod defer;
 pub(crate) mod map;
+pub(crate) mod panic;
 pub(crate) mod slice;
 pub(crate) mod string;
 

@@ -1,3 +1,5 @@
+use std::ptr;
+
 use super::type_id::TypeId;
 use super::FunctionObject;
 use super::ObjectPtr;
@@ -19,6 +21,12 @@ pub(crate) struct Interface {
 
 impl Interface {
     pub fn new(receiver: ObjectPtr, type_id: TypeId) -> Self {
+        Self { receiver, type_id }
+    }
+
+    pub fn nil() -> Self {
+        let receiver = ObjectPtr(ptr::null_mut());
+        let type_id = TypeId::new_invalid();
         Self { receiver, type_id }
     }
 

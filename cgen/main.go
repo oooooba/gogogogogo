@@ -617,6 +617,11 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 					)
 					needToCallRuntimeApi = true
 
+				case "recover":
+					result := createValueRelName(instr)
+					ctx.switchFunctionToCallRuntimeApi("gox5_panic_recover", "StackFramePanicRecover", createInstructionName(instr), &result, nil)
+					needToCallRuntimeApi = true
+
 				default:
 					panic(fmt.Sprintf("unsuported builtin function: %s", callee.Name()))
 				}
@@ -2470,6 +2475,12 @@ typedef struct {
 	TypeId type_id;
 } StackFrameChannelSend;
 DECLARE_RUNTIME_API(channel_send, StackFrameChannelSend);
+
+typedef struct {
+	StackFrameCommon common;
+	Interface* result_ptr;
+} StackFramePanicRecover;
+DECLARE_RUNTIME_API(panic_recover, StackFramePanicRecover);
 
 typedef struct {
 	StackFrameCommon common;

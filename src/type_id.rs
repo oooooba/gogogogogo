@@ -19,6 +19,10 @@ struct TypeInfo {
 pub(crate) struct TypeId(usize);
 
 impl TypeId {
+    pub(crate) fn new_invalid() -> Self {
+        TypeId(0)
+    }
+
     fn type_info(&self) -> &TypeInfo {
         unsafe { &*(self.0 as *const TypeInfo) }
     }
