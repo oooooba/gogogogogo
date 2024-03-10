@@ -110,13 +110,13 @@ impl StackFrameCommon {
 
 #[repr(C)]
 pub struct LightWeightThreadContext {
+    stack_pointer: *mut StackFrame,
+    prev_func: UserFunction,
+    marker: isize,
     id: usize,
     global_context: GlobalContextPtr,
     current_func: FunctionObject,
-    stack_pointer: *mut StackFrame,
-    prev_func: UserFunction,
     control_flags: usize,
-    marker: isize,
     panic_data: Interface,
     initial_stack_pointer: *mut StackFrame,
 }
@@ -130,13 +130,13 @@ impl LightWeightThreadContext {
         prev_func: UserFunction,
     ) -> Self {
         LightWeightThreadContext {
+            stack_pointer,
+            prev_func,
+            marker: 0xdeadbeef,
             id,
             global_context,
             current_func: entry_func,
-            stack_pointer,
-            prev_func,
             control_flags: 0,
-            marker: 0xdeadbeef,
             panic_data: Interface::nil(),
             initial_stack_pointer: stack_pointer,
         }

@@ -2250,12 +2250,8 @@ typedef struct StackFrameCommon {
 } StackFrameCommon;
 
 typedef struct {
-	uintptr_t id;
-	GlobalContext* global_context;
-	FunctionObject current_func;
 	StackFrameCommon* stack_pointer;
 	UserFunction prev_func;
-	uintptr_t control_flags;
 	intptr_t marker;
 } LightWeightThreadContext;
 
