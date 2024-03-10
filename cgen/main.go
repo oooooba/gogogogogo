@@ -753,7 +753,7 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 
 	case *ssa.IndexAddr:
 		fmt.Fprintf(ctx.stream, "uintptr_t index = %s.raw;\n", createValueRelName(instr.Index))
-		switch t := instr.X.Type().(type) {
+		switch t := instr.X.Type().Underlying().(type) {
 		case *types.Slice:
 			fmt.Fprintf(ctx.stream, "%s* raw = &((%s.typed.ptr)[index]);\n", createTypeName(t.Elem()), createValueRelName(instr.X))
 		case *types.Pointer:
@@ -1020,7 +1020,7 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 
 			ptr := ""
 			length := ""
-			switch t := instr.X.Type().(type) {
+			switch t := instr.X.Type().Underlying().(type) {
 			case *types.Pointer:
 				ptr = "raw->raw"
 				elemType := t.Elem().Underlying().(*types.Array)
