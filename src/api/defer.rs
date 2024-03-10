@@ -5,7 +5,6 @@ use std::ptr;
 use crate::defer_stack::DeferStackEntry;
 use crate::FunctionObject;
 use crate::LightWeightThreadContext;
-use crate::StackFrame;
 use crate::StackFrameCommon;
 use crate::UserFunction;
 
@@ -42,7 +41,7 @@ pub extern "C" fn gox5_defer_register(ctx: &mut LightWeightThreadContext) -> Fun
     }
 
     let frame = ctx.stack_frame_mut::<StackFrameDeferRegister>();
-    let prev_frame = frame.common.prev_stack_frame_mut::<StackFrame>();
+    let prev_frame = frame.common.prev_stack_frame_mut::<StackFrameCommon>();
 
     let entry = DeferStackEntry::new(
         frame.func.clone(),
@@ -53,7 +52,6 @@ pub extern "C" fn gox5_defer_register(ctx: &mut LightWeightThreadContext) -> Fun
     unsafe {
         *entry_ptr = entry;
         prev_frame
-            .common
             .defer_stack_mut()
             .push(ptr::NonNull::new_unchecked(entry_ptr));
     }
@@ -69,17 +67,16 @@ struct StackFrameDeferExecute {
 #[no_mangle]
 pub extern "C" fn gox5_defer_execute(ctx: &mut LightWeightThreadContext) -> FunctionObject {
     let frame = ctx.stack_frame_mut::<StackFrameDeferExecute>();
-    let prev_frame = frame.common.prev_stack_frame_mut::<StackFrame>();
+    let prev_frame = frame.common.prev_stack_frame_mut::<StackFrameCommon>();
 
-    let entry = match prev_frame.common.defer_stack_mut().pop() {
+    let entry = match prev_frame.defer_stack_mut().pop() {
         Some(mut entry) => unsafe { entry.as_mut() },
         None => return ctx.leave(),
     };
 
-    let args = entry.args();
     ctx.call::<StackFrameDeferExecute>(
         entry.result_size(),
-        args,
+        entry.args(),
         FunctionObject::from_user_function(UserFunction::new(gox5_defer_execute)),
     );
 
