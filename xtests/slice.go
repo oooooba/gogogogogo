@@ -414,6 +414,35 @@ func Test25() int {
 	return 25
 }
 
+func Test26() int {
+	type B [10]int
+	var a B
+	if a[9] != 0 {
+		return 0
+	}
+	s0 := a[:]
+	s0[0] = 1
+	if a[0] != 1 {
+		return 1
+	}
+	s1 := a[2:]
+	s1[1] = 2
+	if a[3] != 2 {
+		return 2
+	}
+	s2 := a[:7]
+	s2[2] = 3
+	if a[2] != 3 {
+		return 3
+	}
+	s3 := a[2:7]
+	s3[3] = 4
+	if a[5] != 4 {
+		return 4
+	}
+	return 26
+}
+
 func main() {
 	runTest := func(testName string, test func() int) {
 		println(testName+":", test())
@@ -443,4 +472,5 @@ func main() {
 	runTest("Test23", Test23)
 	runTest("Test24", Test24)
 	runTest("Test25", Test25)
+	runTest("Test26", Test26)
 }

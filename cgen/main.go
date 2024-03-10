@@ -1023,7 +1023,7 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 			switch t := instr.X.Type().(type) {
 			case *types.Pointer:
 				ptr = "raw->raw"
-				elemType := t.Elem().(*types.Array)
+				elemType := t.Elem().Underlying().(*types.Array)
 				length = fmt.Sprintf("%d", elemType.Len())
 			case *types.Slice:
 				ptr = "typed.ptr"
