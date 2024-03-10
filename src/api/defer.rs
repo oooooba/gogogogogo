@@ -2,57 +2,12 @@ use core::slice;
 use std::mem;
 use std::ptr;
 
+use crate::defer_stack::DeferStackEntry;
 use crate::FunctionObject;
 use crate::LightWeightThreadContext;
 use crate::StackFrame;
 use crate::StackFrameCommon;
 use crate::UserFunction;
-
-#[repr(C)]
-struct DeferStackEntry {
-    next: Option<ptr::NonNull<DeferStackEntry>>,
-    func: FunctionObject,
-    result_size: usize,
-    num_arg_buffer_words: usize,
-    arg_buffer: *const *const (),
-}
-
-impl DeferStackEntry {
-    fn new(
-        func: FunctionObject,
-        result_size: usize,
-        num_arg_buffer_words: usize,
-        arg_buffer: *const *const (),
-    ) -> Self {
-        Self {
-            next: None,
-            func,
-            result_size,
-            num_arg_buffer_words,
-            arg_buffer,
-        }
-    }
-}
-
-#[repr(C)]
-pub(crate) struct DeferStack(Option<ptr::NonNull<DeferStackEntry>>);
-
-impl DeferStack {
-    pub fn new() -> Self {
-        Self(None)
-    }
-
-    fn push(&mut self, mut entry: ptr::NonNull<DeferStackEntry>) {
-        unsafe { entry.as_mut() }.next = self.0.take();
-        self.0 = Some(entry);
-    }
-
-    fn pop(&mut self) -> Option<ptr::NonNull<DeferStackEntry>> {
-        let mut entry = self.0.take()?;
-        self.0 = unsafe { entry.as_mut() }.next.take();
-        Some(entry)
-    }
-}
 
 #[repr(C)]
 struct StackFrameDeferRegister {
@@ -121,12 +76,12 @@ pub extern "C" fn gox5_defer_execute(ctx: &mut LightWeightThreadContext) -> Func
         None => return ctx.leave(),
     };
 
-    let args = unsafe { std::slice::from_raw_parts(entry.arg_buffer, entry.num_arg_buffer_words) };
+    let args = entry.args();
     ctx.call::<StackFrameDeferExecute>(
-        entry.result_size,
+        entry.result_size(),
         args,
         FunctionObject::from_user_function(UserFunction::new(gox5_defer_execute)),
     );
 
-    entry.func.clone()
+    entry.func()
 }
