@@ -39,4 +39,9 @@ impl Interface {
         }
         None
     }
+
+    pub fn panic_print(&self) {
+        assert!(self.receiver.is_null());
+        eprintln!("panic: nil");
+    }
 }

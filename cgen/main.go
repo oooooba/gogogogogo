@@ -927,8 +927,9 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 		)
 
 	case *ssa.Panic:
-		fmt.Fprintf(ctx.stream, "fprintf(stderr, \"panic\\n\");\n")
-		fmt.Fprintf(ctx.stream, "assert(false);\n")
+		ctx.switchFunctionToCallRuntimeApi("gox5_panic_raise", "StackFramePanicRaise", "NULL", nil, nil,
+			paramArgPair{param: "value", arg: createValueRelName(instr.X)},
+		)
 
 	case *ssa.Phi:
 		basicBlock := instr.Block()
@@ -2475,6 +2476,12 @@ typedef struct {
 	TypeId type_id;
 } StackFrameChannelSend;
 DECLARE_RUNTIME_API(channel_send, StackFrameChannelSend);
+
+typedef struct {
+	StackFrameCommon common;
+	Interface value;
+} StackFramePanicRaise;
+DECLARE_RUNTIME_API(panic_raise, StackFramePanicRaise);
 
 typedef struct {
 	StackFrameCommon common;
