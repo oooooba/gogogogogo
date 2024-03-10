@@ -117,6 +117,8 @@ pub struct LightWeightThreadContext {
     prev_func: UserFunction,
     control_flags: usize,
     marker: isize,
+    panic_data: Interface,
+    initial_stack_pointer: *mut StackFrame,
 }
 
 impl LightWeightThreadContext {
@@ -135,6 +137,8 @@ impl LightWeightThreadContext {
             prev_func,
             control_flags: 0,
             marker: 0xdeadbeef,
+            panic_data: Interface::nil(),
+            initial_stack_pointer: stack_pointer,
         }
     }
 
@@ -207,6 +211,11 @@ impl LightWeightThreadContext {
         unsafe { &mut *p }
     }
 
+    pub fn is_stack_empty(&self) -> bool {
+        assert!(self.initial_stack_pointer <= self.stack_pointer);
+        self.initial_stack_pointer == self.stack_pointer
+    }
+
     fn leave(&mut self) -> FunctionObject {
         let (prev_stack_pointer, resume_func) = {
             let stack_frame = self.stack_frame::<StackFrameCommon>();
@@ -241,6 +250,21 @@ impl LightWeightThreadContext {
 
     fn terminate(&mut self) {
         self.control_flags |= 0b10;
+    }
+
+    fn enter_panic(&mut self, data: Interface) {
+        self.control_flags |= 0b100;
+        self.panic_data = data;
+    }
+
+    fn exit_panic(&mut self) -> Interface {
+        assert!(self.is_panicking());
+        self.control_flags &= !0b100;
+        self.panic_data.clone()
+    }
+
+    fn is_panicking(&self) -> bool {
+        self.control_flags & 0b100 > 0
     }
 }
 

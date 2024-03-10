@@ -12,7 +12,7 @@ pub(crate) struct InterfaceTableEntry {
     method: FunctionObject,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 #[repr(C)]
 pub(crate) struct Interface {
     receiver: ObjectPtr,
