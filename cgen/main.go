@@ -5,8 +5,10 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strconv"
 	"strings"
 
+	"go/constant"
 	"go/token"
 	"go/types"
 
@@ -1555,6 +1557,8 @@ func (ctx *Context) emitConstant() {
 							inner = fmt.Sprintf("%su", inner)
 						case types.Int, types.Int64:
 							inner = fmt.Sprintf("%slu", inner)
+						case types.String:
+							inner = strconv.Quote(constant.StringVal(cst.Value))
 						}
 					}
 				}

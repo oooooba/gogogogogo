@@ -252,6 +252,22 @@ func Test21() int {
 	return 21
 }
 
+func Test22() int {
+	s := "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+	if len(s) != 26*3 {
+		return 0
+	}
+	return 22
+}
+
+func Test23() int {
+	s := "\""
+	if len(s) != 1 {
+		return 0
+	}
+	return 23
+}
+
 func main() {
 	runTest := func(testName string, test func() int) {
 		println(testName+":", test())
@@ -279,4 +295,6 @@ func main() {
 	runTest("Test19", Test19)
 	runTest("Test20", Test20)
 	runTest("Test21", Test21)
+	runTest("Test22", Test22)
+	runTest("Test23", Test23)
 }
