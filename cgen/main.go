@@ -1551,6 +1551,10 @@ func (ctx *Context) emitConstant() {
 						switch t.Kind() {
 						case types.Complex64, types.Complex128, types.Float32, types.Float64:
 							inner = fmt.Sprintf("%g", cst.Complex128())
+						case types.Uint, types.Uint8, types.Uint16, types.Uint32, types.Uint64, types.Uintptr:
+							inner = fmt.Sprintf("%su", inner)
+						case types.Int, types.Int64:
+							inner = fmt.Sprintf("%slu", inner)
 						}
 					}
 				}

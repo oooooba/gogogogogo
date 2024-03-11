@@ -302,6 +302,46 @@ func Test18() int {
 	return 18
 }
 
+func Test19() int {
+	var x0 uint = 0x8000_0000_0000_0000
+	var y0 uint = 0x4000_0000_0000_0000
+	if x0 != y0+y0 {
+		return 0
+	}
+
+	var x1 uint64 = 0x8000_0000_0000_0000
+	var y1 uint64 = 0x4000_0000_0000_0000
+	if x1 != y1+y1 {
+		return 1
+	}
+
+	var x2 uint32 = 0x8000_0000
+	var y2 uint32 = 0x4000_0000
+	if x2 != y2+y2 {
+		return 2
+	}
+
+	var x3 int = -9223372036854775808
+	var y3 int = -4611686018427387904
+	if x3 != y3+y3 {
+		return 3
+	}
+
+	var x4 int64 = -9223372036854775808
+	var y4 int64 = -4611686018427387904
+	if x4 != y4+y4 {
+		return 4
+	}
+
+	var x5 int32 = -2147483648
+	var y5 int32 = -1073741824
+	if x5 != y5+y5 {
+		return 5
+	}
+
+	return 19
+}
+
 func main() {
 	runTest := func(testName string, test func() int) {
 		println(testName+":", test())
@@ -324,4 +364,5 @@ func main() {
 	runTest("Test16", Test16)
 	runTest("Test17", Test17)
 	runTest("Test18", Test18)
+	runTest("Test19", Test19)
 }
