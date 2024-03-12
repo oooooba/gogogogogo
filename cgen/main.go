@@ -456,7 +456,11 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 			}
 			fmt.Fprintf(ctx.stream, "%s unsignedLhs = (%s)(%s.raw);\n", unsignedRawType, unsignedRawType, createValueRelName(instr.X))
 			fmt.Fprintf(ctx.stream, "%s rhs = %s.raw;\n", createRawTypeName(instr.Y.Type()), createValueRelName(instr.Y))
-			raw = "(rhs < sizeof(unsignedLhs) * 8) ? (unsignedLhs << rhs) : 0"
+			switch instr.Y.Type().Underlying().(*types.Basic).Kind() {
+			case types.Int, types.Int8, types.Int16, types.Int32, types.Int64:
+				fmt.Fprintln(ctx.stream, "assert(rhs>=0);")
+			}
+			raw = "(((size_t)rhs) < sizeof(unsignedLhs) * 8) ? (unsignedLhs << rhs) : 0"
 		case token.SHR:
 			var unsignedRawType string
 			var overflowExpr string
@@ -476,7 +480,11 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 			}
 			fmt.Fprintf(ctx.stream, "%s unsignedLhs = (%s)(%s.raw);\n", unsignedRawType, unsignedRawType, createValueRelName(instr.X))
 			fmt.Fprintf(ctx.stream, "%s rhs = %s.raw;\n", createRawTypeName(instr.Y.Type()), createValueRelName(instr.Y))
-			raw = fmt.Sprintf("rhs < %s ? (%s) : (%s)", bitLen, calcExpr, overflowExpr)
+			switch instr.Y.Type().Underlying().(*types.Basic).Kind() {
+			case types.Int, types.Int8, types.Int16, types.Int32, types.Int64:
+				fmt.Fprintln(ctx.stream, "assert(rhs>=0);")
+			}
+			raw = fmt.Sprintf("((size_t)rhs) < %s ? (%s) : (%s)", bitLen, calcExpr, overflowExpr)
 		default:
 			raw = fmt.Sprintf("%s.raw %s %s.raw", createValueRelName(instr.X), instr.Op.String(), createValueRelName(instr.Y))
 		}

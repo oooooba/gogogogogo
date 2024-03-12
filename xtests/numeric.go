@@ -185,6 +185,17 @@ func Test14() int {
 		return 4
 	}
 
+	var xus uint = 1
+	var ys int = 64
+	if xus<<ys != 0 {
+		return 5
+	}
+
+	var xs int = 1
+	if xs<<ys != 0 {
+		return 6
+	}
+
 	return 14
 }
 
@@ -251,6 +262,17 @@ func Test16() int {
 	var y64 uint = 64
 	if x64>>y64 != 0 {
 		return 4
+	}
+
+	var xus uint = 1
+	var ys int = 64
+	if xus>>ys != 0 {
+		return 5
+	}
+
+	var xs int = 1
+	if xs>>ys != 0 {
+		return 6
 	}
 
 	return 16
