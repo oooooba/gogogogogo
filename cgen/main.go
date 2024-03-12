@@ -181,7 +181,7 @@ func createTypeName(typ types.Type) string {
 				return fmt.Sprintf("StringObject")
 			case types.UnsafePointer:
 				return fmt.Sprintf("UnsafePointerObject")
-			case types.Uint, types.Uintptr:
+			case types.Uint:
 				return fmt.Sprintf("UintObject")
 			case types.Uint8:
 				return fmt.Sprintf("Uint8Object")
@@ -191,6 +191,8 @@ func createTypeName(typ types.Type) string {
 				return fmt.Sprintf("Uint32Object")
 			case types.Uint64:
 				return fmt.Sprintf("Uint64Object")
+			case types.Uintptr:
+				return fmt.Sprintf("UintptrObject")
 			}
 		case *types.Chan:
 			return fmt.Sprintf("ChannelObject")
@@ -2228,6 +2230,7 @@ DEFINE_BUILTIN_OBJECT_TYPE(Uint8, uint8_t);
 DEFINE_BUILTIN_OBJECT_TYPE(Uint16, uint16_t);
 DEFINE_BUILTIN_OBJECT_TYPE(Uint32, uint32_t);
 DEFINE_BUILTIN_OBJECT_TYPE(Uint64, uint64_t);
+DEFINE_BUILTIN_OBJECT_TYPE(Uintptr, uintptr_t);
 
 typedef struct {
 	void* raw;
