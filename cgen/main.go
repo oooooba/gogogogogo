@@ -651,35 +651,60 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 		fmt.Fprintf(ctx.stream, "%s = %s;\n", createValueRelName(instr), createValueRelName(instr.X))
 
 	case *ssa.Convert:
-		if dstType, ok := instr.Type().(*types.Basic); ok && dstType.Kind() == types.String {
-			result := createValueRelName(instr)
-			switch srcType := instr.X.Type().(type) {
-			case *types.Basic:
-				arg := fmt.Sprintf("(IntObject){%s.raw}", createValueRelName(instr.X))
-				ctx.switchFunctionToCallRuntimeApi("gox5_string_new_from_rune", "StackFrameStringNewFromRune", createInstructionName(instr), &result, nil,
-					paramArgPair{param: "rune", arg: arg},
-				)
-			case *types.Slice:
-				if elemType, ok := srcType.Elem().(*types.Basic); ok {
-					switch elemType.Kind() {
-					case types.Byte:
-						arg := fmt.Sprintf("%s.raw", createValueRelName(instr.X))
-						ctx.switchFunctionToCallRuntimeApi("gox5_string_new_from_byte_slice", "StackFrameStringNewFromByteSlice", createInstructionName(instr), &result, nil,
-							paramArgPair{param: "byte_slice", arg: arg},
-						)
-					case types.Rune:
-						arg := fmt.Sprintf("%s.raw", createValueRelName(instr.X))
-						ctx.switchFunctionToCallRuntimeApi("gox5_string_new_from_rune_slice", "StackFrameStringNewFromRuneSlice", createInstructionName(instr), &result, nil,
-							paramArgPair{param: "rune_slice", arg: arg},
-						)
-					default:
+		if dstType, ok := instr.Type().(*types.Basic); ok {
+			switch dstType.Kind() {
+			case types.String:
+				result := createValueRelName(instr)
+				switch srcType := instr.X.Type().(type) {
+				case *types.Basic:
+					arg := fmt.Sprintf("(IntObject){%s.raw}", createValueRelName(instr.X))
+					ctx.switchFunctionToCallRuntimeApi("gox5_string_new_from_rune", "StackFrameStringNewFromRune", createInstructionName(instr), &result, nil,
+						paramArgPair{param: "rune", arg: arg},
+					)
+				case *types.Slice:
+					if elemType, ok := srcType.Elem().(*types.Basic); ok {
+						switch elemType.Kind() {
+						case types.Byte:
+							arg := fmt.Sprintf("%s.raw", createValueRelName(instr.X))
+							ctx.switchFunctionToCallRuntimeApi("gox5_string_new_from_byte_slice", "StackFrameStringNewFromByteSlice", createInstructionName(instr), &result, nil,
+								paramArgPair{param: "byte_slice", arg: arg},
+							)
+						case types.Rune:
+							arg := fmt.Sprintf("%s.raw", createValueRelName(instr.X))
+							ctx.switchFunctionToCallRuntimeApi("gox5_string_new_from_rune_slice", "StackFrameStringNewFromRuneSlice", createInstructionName(instr), &result, nil,
+								paramArgPair{param: "rune_slice", arg: arg},
+							)
+						default:
+							panic(fmt.Sprintf("%s, %s, %s (%T)", instr, srcType, elemType, elemType))
+						}
+					} else {
 						panic(fmt.Sprintf("%s, %s, %s (%T)", instr, srcType, elemType, elemType))
 					}
-				} else {
-					panic(fmt.Sprintf("%s, %s, %s (%T)", instr, srcType, elemType, elemType))
+				default:
+					panic(fmt.Sprintf("%s, %s (%T)", instr, srcType, srcType))
 				}
+
+			case types.Uintptr:
+				var raw string
+				if srcType, ok := instr.X.Type().(*types.Basic); ok && srcType.Kind() == types.UnsafePointer {
+					raw = fmt.Sprintf("(uintptr_t)%s.raw", createValueRelName(instr.X))
+				} else {
+					raw = fmt.Sprintf("%s.raw", createValueRelName(instr.X))
+				}
+				fmt.Fprintf(ctx.stream, "%s = %s;\n", createValueRelName(instr), wrapInObject(raw, instr.Type()))
+
+			case types.UnsafePointer:
+				var raw string
+				if srcType, ok := instr.X.Type().(*types.Basic); ok && srcType.Kind() == types.Uintptr {
+					raw = fmt.Sprintf("(void*)%s.raw", createValueRelName(instr.X))
+				} else {
+					raw = fmt.Sprintf("%s.raw", createValueRelName(instr.X))
+				}
+				fmt.Fprintf(ctx.stream, "%s = %s;\n", createValueRelName(instr), wrapInObject(raw, instr.Type()))
+
 			default:
-				panic(fmt.Sprintf("%s, %s (%T)", instr, srcType, srcType))
+				raw := fmt.Sprintf("%s.raw", createValueRelName(instr.X))
+				fmt.Fprintf(ctx.stream, "%s = %s;\n", createValueRelName(instr), wrapInObject(raw, instr.Type()))
 			}
 		} else {
 			raw := fmt.Sprintf("%s.raw", createValueRelName(instr.X))
@@ -1561,6 +1586,8 @@ func (ctx *Context) emitConstant() {
 							inner = fmt.Sprintf("%slu", inner)
 						case types.String:
 							inner = strconv.Quote(constant.StringVal(cst.Value))
+						case types.UnsafePointer:
+							inner = fmt.Sprintf("(void*)%su", inner)
 						}
 					}
 				}
