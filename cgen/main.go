@@ -659,7 +659,7 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 		fmt.Fprintf(ctx.stream, "%s = %s;\n", createValueRelName(instr), createValueRelName(instr.X))
 
 	case *ssa.Convert:
-		if dstType, ok := instr.Type().(*types.Basic); ok {
+		if dstType, ok := instr.Type().Underlying().(*types.Basic); ok {
 			switch dstType.Kind() {
 			case types.String:
 				result := createValueRelName(instr)
@@ -694,7 +694,7 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 
 			case types.Uintptr:
 				var raw string
-				if srcType, ok := instr.X.Type().(*types.Basic); ok && srcType.Kind() == types.UnsafePointer {
+				if srcType, ok := instr.X.Type().Underlying().(*types.Basic); ok && srcType.Kind() == types.UnsafePointer {
 					raw = fmt.Sprintf("(uintptr_t)%s.raw", createValueRelName(instr.X))
 				} else {
 					raw = fmt.Sprintf("%s.raw", createValueRelName(instr.X))
@@ -703,7 +703,7 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 
 			case types.UnsafePointer:
 				var raw string
-				if srcType, ok := instr.X.Type().(*types.Basic); ok && srcType.Kind() == types.Uintptr {
+				if srcType, ok := instr.X.Type().Underlying().(*types.Basic); ok && srcType.Kind() == types.Uintptr {
 					raw = fmt.Sprintf("(void*)%s.raw", createValueRelName(instr.X))
 				} else {
 					raw = fmt.Sprintf("%s.raw", createValueRelName(instr.X))
