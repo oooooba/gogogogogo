@@ -392,6 +392,70 @@ func Test20() int {
 	return 20
 }
 
+func Test21() int {
+	var x0 uint = 0xffff_0000_ffff_0000
+	if ^x0 != 0x0000_ffff_0000_ffff {
+		return 0
+	}
+
+	var x1 uint64 = 0xffff_0000_ffff_0000
+	if ^x1 != 0x0000_ffff_0000_ffff {
+		return 1
+	}
+
+	var x2 uint32 = 0xffff_0000
+	if ^x2 != 0x0000_ffff {
+		return 2
+	}
+
+	var x3 uint16 = 0xffff
+	if ^x3 != 0x0000 {
+		return 3
+	}
+
+	var x4 int = -1
+	if ^x4 != 0 {
+		return 4
+	}
+
+	var x5 int64 = -1
+	if ^x5 != 0 {
+		return 5
+	}
+
+	var x6 int32 = -1
+	if ^x6 != 0 {
+		return 6
+	}
+
+	var x7 int16 = -1
+	if ^x7 != 0 {
+		return 7
+	}
+
+	var x8 int = 0
+	if ^x8 != -1 {
+		return 8
+	}
+
+	var x9 int64 = 0
+	if ^x9 != -1 {
+		return 9
+	}
+
+	var x10 int32 = 0
+	if ^x10 != -1 {
+		return 10
+	}
+
+	var x11 int16 = 0
+	if ^x11 != -1 {
+		return 11
+	}
+
+	return 21
+}
+
 func main() {
 	runTest := func(testName string, test func() int) {
 		println(testName+":", test())
@@ -416,4 +480,5 @@ func main() {
 	runTest("Test18", Test18)
 	runTest("Test19", Test19)
 	runTest("Test20", Test20)
+	runTest("Test21", Test21)
 }

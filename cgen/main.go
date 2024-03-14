@@ -1135,6 +1135,9 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 				paramArgPair{param: "data", arg: data},
 				paramArgPair{param: "available", arg: available},
 			)
+		} else if instr.Op == token.XOR {
+			s := wrapInObject(fmt.Sprintf("~(%s.raw)", createValueRelName(instr.X)), instr.Type())
+			fmt.Fprintf(ctx.stream, "%s = %s;\n", createValueRelName(instr), s)
 		} else {
 			s := fmt.Sprintf("%s (%s.raw)", instr.Op.String(), createValueRelName(instr.X))
 			if instr.Op != token.MUL {
