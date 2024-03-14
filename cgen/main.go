@@ -427,6 +427,8 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 		needToCallRuntimeApi := false
 		raw := ""
 		switch op := instr.Op; op {
+		case token.AND_NOT:
+			raw = fmt.Sprintf("%s.raw & (~(%s.raw))", createValueRelName(instr.X), createValueRelName(instr.Y))
 		case token.EQL, token.NEQ:
 			equalFunc := fmt.Sprintf("equal_%s", createTypeName(instr.X.Type()))
 			fmt.Fprintf(ctx.stream, "bool raw = %s(&%s, &%s) %s true;", equalFunc, createValueRelName(instr.X), createValueRelName(instr.Y), instr.Op)
