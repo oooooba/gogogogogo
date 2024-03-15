@@ -661,7 +661,8 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 		fmt.Fprintf(ctx.stream, "%s = %s;\n", createValueRelName(instr), createValueRelName(instr.X))
 
 	case *ssa.Convert:
-		if dstType, ok := instr.Type().Underlying().(*types.Basic); ok {
+		switch dstType := instr.Type().Underlying().(type) {
+		case *types.Basic:
 			switch dstType.Kind() {
 			case types.String:
 				result := createValueRelName(instr)
@@ -716,7 +717,8 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 				raw := fmt.Sprintf("%s.raw", createValueRelName(instr.X))
 				fmt.Fprintf(ctx.stream, "%s = %s;\n", createValueRelName(instr), wrapInObject(raw, instr.Type()))
 			}
-		} else {
+
+		default:
 			raw := fmt.Sprintf("%s.raw", createValueRelName(instr.X))
 			fmt.Fprintf(ctx.stream, "%s = %s;\n", createValueRelName(instr), wrapInObject(raw, instr.Type()))
 		}
