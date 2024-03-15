@@ -18,11 +18,11 @@ struct StackFrameSliceAppend<'a> {
 
 #[no_mangle]
 pub extern "C" fn gox5_slice_append(ctx: &mut LightWeightThreadContext) -> FunctionObject {
-    let stack_frame = ctx.stack_frame::<StackFrameSliceAppend>();
-    let lhs = &stack_frame.lhs;
-    let rhs = &stack_frame.rhs;
+    let frame = ctx.stack_frame::<StackFrameSliceAppend>();
+    let lhs = &frame.lhs;
+    let rhs = &frame.rhs;
 
-    let elem_size = stack_frame.type_id.size();
+    let elem_size = frame.type_id.size();
 
     let new_size = lhs.size() + rhs.size();
     let mut result = if new_size > lhs.capacity() {
@@ -58,13 +58,6 @@ pub extern "C" fn gox5_slice_append(ctx: &mut LightWeightThreadContext) -> Funct
 }
 
 #[repr(C)]
-struct StackFrameSliceCapacity<'a> {
-    common: StackFrameCommon,
-    result_ptr: &'a mut isize,
-    slice: SliceObject,
-}
-
-#[repr(C)]
 struct StackFrameSliceCopy<'a> {
     common: StackFrameCommon,
     result_ptr: &'a mut isize,
@@ -94,10 +87,17 @@ pub extern "C" fn gox5_slice_copy(ctx: &mut LightWeightThreadContext) -> Functio
     ctx.leave()
 }
 
+#[repr(C)]
+struct StackFrameSliceCapacity<'a> {
+    common: StackFrameCommon,
+    result_ptr: &'a mut isize,
+    slice: SliceObject,
+}
+
 #[no_mangle]
 pub extern "C" fn gox5_slice_capacity(ctx: &mut LightWeightThreadContext) -> FunctionObject {
-    let stack_frame = ctx.stack_frame::<StackFrameSliceCapacity>();
-    let result = isize::try_from(stack_frame.slice.capacity()).unwrap();
+    let frame = ctx.stack_frame::<StackFrameSliceCapacity>();
+    let result = isize::try_from(frame.slice.capacity()).unwrap();
 
     let frame = ctx.stack_frame_mut::<StackFrameSliceCapacity>();
     *frame.result_ptr = result;
@@ -114,8 +114,8 @@ struct StackFrameSliceSize<'a> {
 
 #[no_mangle]
 pub extern "C" fn gox5_slice_size(ctx: &mut LightWeightThreadContext) -> FunctionObject {
-    let stack_frame = ctx.stack_frame::<StackFrameSliceSize>();
-    let result = isize::try_from(stack_frame.slice.size()).unwrap();
+    let frame = ctx.stack_frame::<StackFrameSliceSize>();
+    let result = isize::try_from(frame.slice.size()).unwrap();
 
     let frame = ctx.stack_frame_mut::<StackFrameSliceSize>();
     *frame.result_ptr = result;
