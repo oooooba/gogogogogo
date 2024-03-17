@@ -718,6 +718,20 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 				fmt.Fprintf(ctx.stream, "%s = %s;\n", createValueRelName(instr), wrapInObject(raw, instr.Type()))
 			}
 
+		case *types.Slice:
+			elemType := dstType.Elem().(*types.Basic)
+			if elemType.Kind() != types.Byte {
+				panic(instr.String())
+			}
+			srcType := instr.X.Type().(*types.Basic)
+			if srcType.Kind() != types.String {
+				panic(instr.String())
+			}
+			result := fmt.Sprintf("%s.raw", createValueRelName(instr))
+			ctx.switchFunctionToCallRuntimeApi("gox5_slice_from_string", " StackFrameSliceFromString", createInstructionName(instr), &result, nil,
+				paramArgPair{param: "src", arg: createValueRelName(instr.X)},
+			)
+
 		default:
 			raw := fmt.Sprintf("%s.raw", createValueRelName(instr.X))
 			fmt.Fprintf(ctx.stream, "%s = %s;\n", createValueRelName(instr), wrapInObject(raw, instr.Type()))
@@ -1199,6 +1213,9 @@ func requireSwitchFunction(instruction ssa.Instruction) bool {
 		return t.Common().Value.Name() != "init"
 	case *ssa.Convert:
 		if dstType, ok := t.Type().(*types.Basic); ok && dstType.Kind() == types.String {
+			return true
+		}
+		if _, ok := t.Type().(*types.Slice); ok {
 			return true
 		}
 		return false
@@ -2364,6 +2381,13 @@ typedef struct {
 	SliceObject slice;
 } StackFrameSliceSize;
 DECLARE_RUNTIME_API(slice_size, StackFrameSliceSize);
+
+typedef struct {
+	StackFrameCommon common;
+	SliceObject* result_ptr;
+	StringObject src;
+} StackFrameSliceFromString;
+DECLARE_RUNTIME_API(slice_from_string, StackFrameSliceFromString);
 
 typedef struct {
 	StackFrameCommon common;

@@ -1,11 +1,40 @@
 use std::cmp;
+use std::mem;
 use std::ptr;
 
 use crate::object::slice::SliceObject;
+use crate::object::string::StringObject;
 use crate::type_id::TypeId;
 use crate::FunctionObject;
 use crate::LightWeightThreadContext;
 use crate::StackFrameCommon;
+
+#[repr(C)]
+struct StackFrameSliceFromString<'a> {
+    common: StackFrameCommon,
+    result_ptr: &'a mut SliceObject,
+    src: StringObject,
+}
+
+#[no_mangle]
+pub extern "C" fn gox5_slice_from_string(ctx: &mut LightWeightThreadContext) -> FunctionObject {
+    let frame = ctx.stack_frame::<StackFrameSliceFromString>();
+
+    let buffer_size = frame.src.len_in_bytes();
+    let ptr = ctx
+        .global_context()
+        .process(|mut global_context| global_context.allocator().allocate(buffer_size, |_ptr| {}));
+
+    let mut result = SliceObject::new(ptr, buffer_size, buffer_size);
+    result
+        .as_bytes_mut(mem::size_of::<u8>())
+        .clone_from_slice(frame.src.as_bytes());
+
+    let frame = ctx.stack_frame_mut::<StackFrameSliceFromString>();
+    *frame.result_ptr = result;
+
+    ctx.leave()
+}
 
 #[repr(C)]
 struct StackFrameSliceAppend<'a> {
