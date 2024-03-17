@@ -523,11 +523,21 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 				case "append":
 					result := createValueRelName(instr)
 					result += ".raw"
-					ctx.switchFunctionToCallRuntimeApi("gox5_slice_append", "StackFrameSliceAppend", createInstructionName(instr), &result, nil,
-						paramArgPair{param: "type_id", arg: wrapInTypeId(callCommon.Args[0].Type().Underlying().(*types.Slice).Elem())},
-						paramArgPair{param: "lhs", arg: fmt.Sprintf("%s.raw", createValueRelName(callCommon.Args[0]))},
-						paramArgPair{param: "rhs", arg: fmt.Sprintf("%s.raw", createValueRelName(callCommon.Args[1]))},
-					)
+					if t, ok := callCommon.Args[1].Type().(*types.Basic); ok && t.Kind() == types.String {
+						if instr.Type().(*types.Slice).Elem().(*types.Basic).Kind() != types.Byte {
+							panic(instr.String())
+						}
+						ctx.switchFunctionToCallRuntimeApi("gox5_slice_append_string", "StackFrameSliceAppendString", createInstructionName(instr), &result, nil,
+							paramArgPair{param: "slice", arg: fmt.Sprintf("%s.raw", createValueRelName(callCommon.Args[0]))},
+							paramArgPair{param: "string", arg: createValueRelName(callCommon.Args[1])},
+						)
+					} else {
+						ctx.switchFunctionToCallRuntimeApi("gox5_slice_append", "StackFrameSliceAppend", createInstructionName(instr), &result, nil,
+							paramArgPair{param: "type_id", arg: wrapInTypeId(callCommon.Args[0].Type().Underlying().(*types.Slice).Elem())},
+							paramArgPair{param: "lhs", arg: fmt.Sprintf("%s.raw", createValueRelName(callCommon.Args[0]))},
+							paramArgPair{param: "rhs", arg: fmt.Sprintf("%s.raw", createValueRelName(callCommon.Args[1]))},
+						)
+					}
 					needToCallRuntimeApi = true
 
 				case "cap":
@@ -2358,6 +2368,14 @@ typedef struct {
 	SliceObject rhs;
 } StackFrameSliceAppend;
 DECLARE_RUNTIME_API(slice_append, StackFrameSliceAppend);
+
+typedef struct {
+	StackFrameCommon common;
+	SliceObject* result_ptr;
+	SliceObject slice;
+	StringObject string;
+} StackFrameSliceAppendString;
+DECLARE_RUNTIME_API(slice_append_string, StackFrameSliceAppendString);
 
 typedef struct {
 	StackFrameCommon common;

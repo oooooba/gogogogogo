@@ -473,6 +473,19 @@ func Test28() int {
 	return 28
 }
 
+func Test29() int {
+	s := append([]byte("abc"), "def"...)
+	for i := 0; i < 6; i++ {
+		if s[i] != byte('a'+i) {
+			return i
+		}
+	}
+	if len(s) != 6 {
+		return 6
+	}
+	return 29
+}
+
 func main() {
 	runTest := func(testName string, test func() int) {
 		println(testName+":", test())
@@ -505,4 +518,5 @@ func main() {
 	runTest("Test26", Test26)
 	runTest("Test27", Test27)
 	runTest("Test28", Test28)
+	runTest("Test29", Test29)
 }

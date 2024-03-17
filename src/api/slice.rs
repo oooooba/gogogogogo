@@ -104,6 +104,36 @@ pub extern "C" fn gox5_slice_append(ctx: &mut LightWeightThreadContext) -> Funct
 }
 
 #[repr(C)]
+struct StackFrameSliceAppendString<'a> {
+    common: StackFrameCommon,
+    result_ptr: &'a mut SliceObject,
+    slice: SliceObject,
+    string: StringObject,
+}
+
+#[no_mangle]
+pub extern "C" fn gox5_slice_append_string(ctx: &mut LightWeightThreadContext) -> FunctionObject {
+    let frame = ctx.stack_frame::<StackFrameSliceAppendString>();
+    let slice = &frame.slice;
+    let string = &frame.string;
+
+    let elem_size = mem::size_of::<u8>();
+    let result = ctx.global_context().process(|mut global_context| {
+        reallocate_slice(
+            slice,
+            elem_size,
+            string.as_bytes(),
+            global_context.allocator(),
+        )
+    });
+
+    let frame = ctx.stack_frame_mut::<StackFrameSliceAppendString>();
+    *frame.result_ptr = result;
+
+    ctx.leave()
+}
+
+#[repr(C)]
 struct StackFrameSliceCopy<'a> {
     common: StackFrameCommon,
     result_ptr: &'a mut isize,
