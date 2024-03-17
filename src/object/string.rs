@@ -26,6 +26,10 @@ impl StringObject {
     pub(crate) fn as_bytes(&self) -> &[u8] {
         unsafe { ffi::CStr::from_ptr(self.0 as *const libc::c_char).to_bytes() }
     }
+
+    pub(crate) fn to_str(&self) -> Result<&str, std::str::Utf8Error> {
+        unsafe { ffi::CStr::from_ptr(self.0 as *const libc::c_char).to_str() }
+    }
 }
 
 pub(crate) struct StringObjectBuilder {

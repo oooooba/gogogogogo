@@ -1,4 +1,5 @@
 use std::cmp;
+use std::iter;
 use std::mem;
 use std::ptr;
 
@@ -14,6 +15,7 @@ use crate::StackFrameCommon;
 struct StackFrameSliceFromString<'a> {
     common: StackFrameCommon,
     result_ptr: &'a mut SliceObject,
+    type_id: TypeId,
     src: StringObject,
 }
 
@@ -21,15 +23,31 @@ struct StackFrameSliceFromString<'a> {
 pub extern "C" fn gox5_slice_from_string(ctx: &mut LightWeightThreadContext) -> FunctionObject {
     let frame = ctx.stack_frame::<StackFrameSliceFromString>();
 
-    let buffer_size = frame.src.len_in_bytes();
+    let elem_size = frame.type_id.size();
+    assert!(elem_size == mem::size_of::<u8>() || elem_size == mem::size_of::<u32>());
+
+    let len = frame.src.len_in_bytes();
+    let buffer_size = len * elem_size;
     let ptr = ctx
         .global_context()
         .process(|mut global_context| global_context.allocator().allocate(buffer_size, |_ptr| {}));
 
-    let mut result = SliceObject::new(ptr, buffer_size, buffer_size);
-    result
-        .as_bytes_mut(mem::size_of::<u8>())
-        .clone_from_slice(frame.src.as_bytes());
+    let mut result = SliceObject::new(ptr, len, len);
+    if frame.type_id.size() == mem::size_of::<u8>() {
+        result
+            .as_bytes_mut(elem_size)
+            .clone_from_slice(frame.src.as_bytes());
+    } else {
+        let s = frame.src.to_str().unwrap();
+        iter::zip(
+            result.as_bytes_mut(elem_size)[..buffer_size].chunks_mut(elem_size),
+            s.chars(),
+        )
+        .for_each(|(dst_bytes, ch)| {
+            let src_bytes = (ch as u32).to_le_bytes();
+            dst_bytes.clone_from_slice(&src_bytes);
+        });
+    }
 
     let frame = ctx.stack_frame_mut::<StackFrameSliceFromString>();
     *frame.result_ptr = result;

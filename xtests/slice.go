@@ -486,6 +486,23 @@ func Test29() int {
 	return 29
 }
 
+func Test30() int {
+	s := []rune("abc")
+	for i := 0; i < 3; i++ {
+		if s[i] != rune('a'+i) {
+			return i
+		}
+	}
+	if len(s) != 3 {
+		return 3
+	}
+	s[1] = rune('d')
+	if string(s) != "adc" {
+		return 4
+	}
+	return 30
+}
+
 func main() {
 	runTest := func(testName string, test func() int) {
 		println(testName+":", test())
@@ -519,4 +536,5 @@ func main() {
 	runTest("Test27", Test27)
 	runTest("Test28", Test28)
 	runTest("Test29", Test29)
+	runTest("Test30", Test30)
 }
