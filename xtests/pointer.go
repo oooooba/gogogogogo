@@ -117,6 +117,34 @@ func Test13() int {
 	return (**h)()
 }
 
+func Test14() int {
+	type Int int
+	var n int = 42
+	var p *int = &n
+	var q *Int = (*Int)(p)
+	*q = 14
+	return int(*q)
+}
+
+func Test15() int {
+	type Int int
+	var n Int = 42
+	var p *Int = &n
+	var q *int = (*int)(p)
+	*q = 15
+	return *q
+}
+
+func Test16() int {
+	type Int0 int
+	type Int1 int
+	var n Int0 = 42
+	var p *Int0 = &n
+	var q *Int1 = (*Int1)(p)
+	*q = 16
+	return int(*q)
+}
+
 func main() {
 	runTest := func(testName string, test func() int) {
 		println(testName+":", test())
@@ -134,4 +162,7 @@ func main() {
 	runTest("Test11", Test11)
 	runTest("Test12", Test12)
 	runTest("Test13", Test13)
+	runTest("Test14", Test14)
+	runTest("Test15", Test15)
+	runTest("Test16", Test16)
 }

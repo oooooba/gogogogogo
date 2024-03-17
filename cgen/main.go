@@ -668,7 +668,8 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 		fmt.Fprintf(ctx.stream, "%s = %s;\n", createValueRelName(instr), createValueRelName(instr.X))
 
 	case *ssa.ChangeType:
-		fmt.Fprintf(ctx.stream, "%s = %s;\n", createValueRelName(instr), createValueRelName(instr.X))
+		s := wrapInObject(fmt.Sprintf("%s.raw", createValueRelName(instr.X)), instr.Type())
+		fmt.Fprintf(ctx.stream, "%s = %s;\n", createValueRelName(instr), s)
 
 	case *ssa.Convert:
 		switch dstType := instr.Type().Underlying().(type) {
