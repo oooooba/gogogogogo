@@ -7,6 +7,7 @@ use crate::object::string::StringObject;
 use crate::type_id::TypeId;
 use crate::FunctionObject;
 use crate::LightWeightThreadContext;
+use crate::ObjectAllocator;
 use crate::StackFrameCommon;
 
 #[repr(C)]
@@ -36,6 +37,41 @@ pub extern "C" fn gox5_slice_from_string(ctx: &mut LightWeightThreadContext) -> 
     ctx.leave()
 }
 
+fn reallocate_slice(
+    base: &SliceObject,
+    elem_size: usize,
+    extend_bytes: &[u8],
+    allocator: &mut dyn ObjectAllocator,
+) -> SliceObject {
+    assert!(elem_size > 0);
+    assert!(extend_bytes.len() % elem_size == 0);
+
+    let new_size = base.size() + extend_bytes.len() / elem_size;
+    let mut result = if new_size > base.capacity() {
+        let new_capacity = new_size * 2;
+        let buffer_size = new_capacity * elem_size;
+        let ptr = allocator.allocate(buffer_size, |_ptr| {});
+
+        let mut result = SliceObject::new(ptr, new_size, new_capacity);
+        result.as_bytes_mut(elem_size).fill(0);
+
+        let lhs_slice = base.as_bytes(elem_size);
+        let result_slice = result.as_bytes_mut(elem_size);
+        let lhs_len = base.size() * elem_size;
+        result_slice[..lhs_len].clone_from_slice(&lhs_slice[..lhs_len]);
+
+        result
+    } else {
+        base.duplicate_extend(base.size())
+    };
+
+    let result_slice = result.as_bytes_mut(elem_size);
+    let base_len = base.size() * elem_size;
+    let extend_len = extend_bytes.len();
+    result_slice[base_len..base_len + extend_len].clone_from_slice(&extend_bytes[..extend_len]);
+    result
+}
+
 #[repr(C)]
 struct StackFrameSliceAppend<'a> {
     common: StackFrameCommon,
@@ -52,33 +88,14 @@ pub extern "C" fn gox5_slice_append(ctx: &mut LightWeightThreadContext) -> Funct
     let rhs = &frame.rhs;
 
     let elem_size = frame.type_id.size();
-
-    let new_size = lhs.size() + rhs.size();
-    let mut result = if new_size > lhs.capacity() {
-        let new_capacity = new_size * 2;
-        let buffer_size = new_capacity * elem_size;
-        let ptr = ctx.global_context().process(|mut global_context| {
-            global_context.allocator().allocate(buffer_size, |_ptr| {})
-        });
-
-        let mut result = SliceObject::new(ptr, new_size, new_capacity);
-        result.as_bytes_mut(elem_size).fill(0);
-
-        let lhs_slice = lhs.as_bytes(elem_size);
-        let result_slice = result.as_bytes_mut(elem_size);
-        let lhs_len = lhs.size() * elem_size;
-        result_slice[..lhs_len].clone_from_slice(&lhs_slice[..lhs_len]);
-
-        result
-    } else {
-        lhs.duplicate_extend(lhs.size())
-    };
-
-    let rhs_slice = rhs.as_bytes(elem_size);
-    let result_slice = result.as_bytes_mut(elem_size);
-    let lhs_len = lhs.size() * elem_size;
-    let rhs_len = rhs.size() * elem_size;
-    result_slice[lhs_len..lhs_len + rhs_len].clone_from_slice(&rhs_slice[..rhs_len]);
+    let result = ctx.global_context().process(|mut global_context| {
+        reallocate_slice(
+            lhs,
+            elem_size,
+            rhs.as_bytes(elem_size),
+            global_context.allocator(),
+        )
+    });
 
     let frame = ctx.stack_frame_mut::<StackFrameSliceAppend>();
     *frame.result_ptr = result;
