@@ -184,6 +184,23 @@ pub extern "C" fn gox5_slice_copy(ctx: &mut LightWeightThreadContext) -> Functio
 }
 
 #[repr(C)]
+struct StackFrameSliceCopyString<'a> {
+    common: StackFrameCommon,
+    result_ptr: &'a mut isize,
+    src: StringObject,
+    dst: SliceObject,
+}
+
+#[no_mangle]
+pub extern "C" fn gox5_slice_copy_string(ctx: &mut LightWeightThreadContext) -> FunctionObject {
+    let frame = ctx.stack_frame_mut::<StackFrameSliceCopyString>();
+    let elem_size = mem::size_of::<u8>();
+    let copy_count = copy_slice(&mut frame.dst, elem_size, frame.src.as_bytes());
+    *frame.result_ptr = isize::try_from(copy_count).unwrap();
+    ctx.leave()
+}
+
+#[repr(C)]
 struct StackFrameSliceCapacity<'a> {
     common: StackFrameCommon,
     result_ptr: &'a mut isize,

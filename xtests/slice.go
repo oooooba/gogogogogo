@@ -503,6 +503,46 @@ func Test30() int {
 	return 30
 }
 
+func Test31() int {
+	s0 := []byte("abc")
+	n0 := copy(s0, "def")
+	if n0 != 3 {
+		return 0
+	}
+	if len(s0) != 3 {
+		return 1
+	}
+	if string(s0) != "def" {
+		return 2
+	}
+
+	s1 := []byte("abcd")
+	n1 := copy(s1, "def")
+	if n1 != 3 {
+		return 3
+	}
+	if len(s1) != 4 {
+		return 4
+	}
+	if string(s1) != "defd" {
+		return 5
+	}
+
+	s2 := []byte("abc")
+	n2 := copy(s2, "defg")
+	if n2 != 3 {
+		return 6
+	}
+	if len(s2) != 3 {
+		return 7
+	}
+	if string(s2) != "def" {
+		return 8
+	}
+
+	return 31
+}
+
 func main() {
 	runTest := func(testName string, test func() int) {
 		println(testName+":", test())
@@ -537,4 +577,5 @@ func main() {
 	runTest("Test28", Test28)
 	runTest("Test29", Test29)
 	runTest("Test30", Test30)
+	runTest("Test31", Test31)
 }
