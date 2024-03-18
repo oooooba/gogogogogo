@@ -151,6 +151,20 @@ pub extern "C" fn gox5_slice_append_string(ctx: &mut LightWeightThreadContext) -
     ctx.leave()
 }
 
+fn copy_slice(dst: &mut SliceObject, elem_size: usize, src: &[u8]) -> usize {
+    assert!(elem_size > 0);
+    assert!(src.len() % elem_size == 0);
+
+    let copy_count = cmp::min(src.len() / elem_size, dst.size());
+    let src = src.as_ptr();
+    let dst = dst.as_bytes_mut(elem_size).as_mut_ptr();
+    unsafe {
+        ptr::copy(src, dst, elem_size * copy_count);
+    }
+
+    copy_count
+}
+
 #[repr(C)]
 struct StackFrameSliceCopy<'a> {
     common: StackFrameCommon,
@@ -162,22 +176,10 @@ struct StackFrameSliceCopy<'a> {
 
 #[no_mangle]
 pub extern "C" fn gox5_slice_copy(ctx: &mut LightWeightThreadContext) -> FunctionObject {
-    let frame = ctx.stack_frame::<StackFrameSliceCopy>();
-
-    let elem_size = frame.type_id.size();
-    let copy_count = cmp::min(frame.src.size(), frame.dst.size());
-
-    let src = frame.src.as_bytes(elem_size).as_ptr();
-
     let frame = ctx.stack_frame_mut::<StackFrameSliceCopy>();
-    let dst = frame.dst.as_bytes_mut(elem_size).as_mut_ptr();
-
-    unsafe {
-        ptr::copy(src, dst, elem_size * copy_count);
-    }
-
+    let elem_size = frame.type_id.size();
+    let copy_count = copy_slice(&mut frame.dst, elem_size, frame.src.as_bytes(elem_size));
     *frame.result_ptr = isize::try_from(copy_count).unwrap();
-
     ctx.leave()
 }
 
