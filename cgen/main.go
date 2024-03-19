@@ -418,7 +418,7 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 		} else {
 			v := createValueRelName(instr)
 			elemType := instr.Type().(*types.Pointer).Elem()
-			fmt.Fprintf(ctx.stream, "%s_buf = (%s){0};\n", v, createTypeName(elemType))
+			fmt.Fprintf(ctx.stream, "%s_buf = (%s){};\n", v, createTypeName(elemType))
 			fmt.Fprintf(ctx.stream, "%s* raw = &%s_buf;\n", createTypeName(elemType), v)
 			fmt.Fprintf(ctx.stream, "%s = %s;\n", v, wrapInObject("raw", instr.Type()))
 		}

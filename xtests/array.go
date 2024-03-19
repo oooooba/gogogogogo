@@ -172,6 +172,22 @@ func Test15() int {
 	return 15
 }
 
+func Test16() int {
+	type T struct{}
+	ts := [2]T{}
+	for i := 0; i < 0; i++ {
+		ts[i] = T{}
+	}
+	t := T{}
+	if ts[0] != t {
+		return 0
+	}
+	if ts[1] != t {
+		return 1
+	}
+	return 16
+}
+
 func main() {
 	runTest := func(testName string, test func() int) {
 		println(testName+":", test())
@@ -191,4 +207,5 @@ func main() {
 	runTest("Test13", Test13)
 	runTest("Test14", Test14)
 	runTest("Test15", Test15)
+	runTest("Test16", Test16)
 }
