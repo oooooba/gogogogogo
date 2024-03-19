@@ -2064,18 +2064,11 @@ func (ctx *Context) visitAllTypes(program *ssa.Program, procedure func(typ types
 	var g func(function *ssa.Function)
 	g = func(function *ssa.Function) {
 		sig := function.Signature
-
-		for i := 0; i < sig.Results().Len(); i++ {
-			f(sig.Results().At(i).Type())
-		}
-
 		if sig.Recv() != nil {
 			f(sig.Recv().Type())
 		}
-
-		for i := 0; i < sig.Params().Len(); i++ {
-			f(sig.Params().At(i).Type())
-		}
+		f(sig.Params())
+		f(sig.Results())
 	}
 
 	ctx.visitAllFunctions(ctx.program, func(function *ssa.Function) {
