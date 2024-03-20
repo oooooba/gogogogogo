@@ -1725,6 +1725,8 @@ bool equal_Interface(const Interface* lhs, const Interface* rhs) {
 			switch t := typ.(type) {
 			case *types.Basic:
 				switch t.Kind() {
+				case types.Invalid:
+					body += "return true;\n"
 				case types.String:
 					body += "return strcmp(lhs->raw, rhs->raw) == 0;\n"
 				default:
@@ -1784,7 +1786,7 @@ uintptr_t hash_Interface(const Interface* obj) {
 			switch t := typ.(type) {
 			case *types.Basic:
 				switch t.Kind() {
-				case types.String:
+				case types.Invalid, types.String:
 					body += "assert(false); /// not implemented\n"
 					body += "return 0;\n"
 				default:
@@ -2327,7 +2329,6 @@ typedef struct {
 } MapObject;
 
 typedef struct {
-	void* raw;
 } InvalidObject;
 
 typedef struct {
