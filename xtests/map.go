@@ -120,6 +120,29 @@ func Test7() int {
 	return 7
 }
 
+func Test8() int {
+	m := map[int]int{10: 1, 20: 2, 30: 3}
+	var found [4]bool
+	for _, v := range m {
+		if !(v == 1 || v == 2 || v == 3) {
+			return v * 10
+		}
+		if found[v] {
+			return v * 100
+		}
+		found[v] = true
+	}
+	if found[0] {
+		return 0
+	}
+	for i := 1; i < 4; i++ {
+		if !found[i] {
+			return i * 1000
+		}
+	}
+	return 8
+}
+
 type S struct {
 	x int
 	y int
@@ -158,5 +181,6 @@ func main() {
 	runTest("Test5", Test5)
 	runTest("Test6", Test6)
 	runTest("Test7", Test7)
+	runTest("Test8", Test8)
 	runTest("Test9", Test9)
 }

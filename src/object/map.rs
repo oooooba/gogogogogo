@@ -93,9 +93,15 @@ impl MapObject {
     pub fn nth(&self, key: ObjectPtr, value: ObjectPtr, nth: usize) -> bool {
         match self.map.iter().nth(nth) {
             Some((k, v)) => {
-                unsafe {
-                    let object_size = self.key_type.size();
-                    ptr::copy_nonoverlapping(k.ptr.0 as *const u8, key.0 as *mut u8, object_size);
+                if !key.is_null() {
+                    unsafe {
+                        let object_size = self.key_type.size();
+                        ptr::copy_nonoverlapping(
+                            k.ptr.0 as *const u8,
+                            key.0 as *mut u8,
+                            object_size,
+                        );
+                    }
                 }
                 if !value.is_null() {
                     unsafe {

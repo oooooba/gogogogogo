@@ -989,7 +989,12 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 		result := createValueRelName(instr)
 		iter := fmt.Sprintf("%s", createValueRelName(instr.Iter))
 		mp := fmt.Sprintf("%s.obj", iter)
-		key := fmt.Sprintf("&%s.raw.e1", result)
+		var key string
+		if instr.Type().(*types.Tuple).At(1).Type().(*types.Basic).Kind() == types.Invalid {
+			key = "NULL"
+		} else {
+			key = fmt.Sprintf("&%s.raw.e1", result)
+		}
 		var value string
 		if instr.Type().(*types.Tuple).At(2).Type().(*types.Basic).Kind() == types.Invalid {
 			value = "NULL"
