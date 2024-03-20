@@ -105,7 +105,7 @@ func Test7() int {
 			return k * 100
 		}
 		if k*10 != v {
-			return k * 100
+			return k * 1000
 		}
 		found[k] = true
 	}
@@ -114,7 +114,7 @@ func Test7() int {
 	}
 	for i := 1; i < 4; i++ {
 		if !found[i] {
-			return i * 1000
+			return i * 10000
 		}
 	}
 	return 7
@@ -125,7 +125,7 @@ type S struct {
 	y int
 }
 
-func Test8() int {
+func Test9() int {
 	m := map[S]S{}
 	if len(m) != 0 {
 		return 0
@@ -144,7 +144,7 @@ func Test8() int {
 	if m[s].y != 2 {
 		return 4
 	}
-	return 8
+	return 9
 }
 
 func main() {
@@ -158,5 +158,5 @@ func main() {
 	runTest("Test5", Test5)
 	runTest("Test6", Test6)
 	runTest("Test7", Test7)
-	runTest("Test8", Test8)
+	runTest("Test9", Test9)
 }
