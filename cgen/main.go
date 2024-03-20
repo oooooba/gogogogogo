@@ -987,29 +987,33 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 
 	case *ssa.Next:
 		result := createValueRelName(instr)
-		iter := fmt.Sprintf("%s", createValueRelName(instr.Iter))
-		mp := fmt.Sprintf("%s.obj", iter)
-		var key string
+		iter := createValueRelName(instr.Iter)
+		var rng string
 		if instr.Type().(*types.Tuple).At(1).Type().(*types.Basic).Kind() == types.Invalid {
-			key = "NULL"
+			rng = "NULL"
 		} else {
-			key = fmt.Sprintf("&%s.raw.e1", result)
+			rng = fmt.Sprintf("&%s.raw.e1", result)
 		}
-		var value string
+		var dom string
 		if instr.Type().(*types.Tuple).At(2).Type().(*types.Basic).Kind() == types.Invalid {
-			value = "NULL"
+			dom = "NULL"
 		} else {
-			value = fmt.Sprintf("&%s.raw.e2", result)
+			dom = fmt.Sprintf("&%s.raw.e2", result)
 		}
 		found := fmt.Sprintf("&%s.raw.e0.raw", result)
 		count := fmt.Sprintf("&%s.count", iter)
-		ctx.switchFunctionToCallRuntimeApi("gox5_map_next", "StackFrameMapNext", createInstructionName(instr), nil, nil,
-			paramArgPair{param: "map", arg: mp},
-			paramArgPair{param: "key", arg: key},
-			paramArgPair{param: "value", arg: value},
-			paramArgPair{param: "found", arg: found},
-			paramArgPair{param: "count", arg: count},
-		)
+		if instr.IsString {
+			panic("unimplemented")
+		} else {
+			mp := fmt.Sprintf("%s.obj.map", iter)
+			ctx.switchFunctionToCallRuntimeApi("gox5_map_next", "StackFrameMapNext", createInstructionName(instr), nil, nil,
+				paramArgPair{param: "map", arg: mp},
+				paramArgPair{param: "key", arg: rng},
+				paramArgPair{param: "value", arg: dom},
+				paramArgPair{param: "found", arg: found},
+				paramArgPair{param: "count", arg: count},
+			)
+		}
 
 	case *ssa.Panic:
 		ctx.switchFunctionToCallRuntimeApi("gox5_panic_raise", "StackFramePanicRaise", "NULL", nil, nil,
@@ -1025,7 +1029,13 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 		fmt.Fprintln(ctx.stream, "\t{ assert(false); }")
 
 	case *ssa.Range:
-		fmt.Fprintf(ctx.stream, "%s = (IterObject){.obj = %s};\n", createValueRelName(instr), createValueRelName(instr.X))
+		var fieldName string
+		if _, ok := instr.X.Type().(*types.Map); ok {
+			fieldName = "map"
+		} else {
+			panic("unimplemented")
+		}
+		fmt.Fprintf(ctx.stream, "%s = (IterObject){.obj = {.%s = %s}};\n", createValueRelName(instr), fieldName, createValueRelName(instr.X))
 
 	case *ssa.Return:
 		fmt.Fprintf(ctx.stream, "ctx->stack_pointer = frame->common.prev_stack_pointer;\n")
@@ -2332,7 +2342,9 @@ typedef struct {
 } InvalidObject;
 
 typedef struct {
-	MapObject obj;
+	union {
+		MapObject map;
+	} obj;
 	uintptr_t count;
 } IterObject;
 
