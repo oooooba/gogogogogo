@@ -188,6 +188,18 @@ func Test16() int {
 	return 16
 }
 
+func Test17() int {
+	type S struct{}
+	s := [2]S{}
+	for i := 0; i < 0; i++ {
+		s[i] = S{}
+	}
+	if &s[0] != &s[1] {
+		return 0
+	}
+	return 17
+}
+
 func main() {
 	runTest := func(testName string, test func() int) {
 		println(testName+":", test())
@@ -208,4 +220,5 @@ func main() {
 	runTest("Test14", Test14)
 	runTest("Test15", Test15)
 	runTest("Test16", Test16)
+	runTest("Test17", Test17)
 }

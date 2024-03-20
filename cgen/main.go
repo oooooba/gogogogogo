@@ -201,9 +201,12 @@ func createTypeName(typ types.Type) string {
 		case *types.Map:
 			return fmt.Sprintf("MapObject")
 		case *types.Named:
-			// remove "command-line-arguments."
-			l := strings.Split(typ.String(), ".")
-			return fmt.Sprintf("Named<%s>", l[len(l)-1])
+			// handle "command-line-arguments." and package deliminator
+			s := typ.String()
+			s = strings.Replace(s, "-", "#", -1)
+			s = strings.Replace(s, ".", "#", -1)
+			s = strings.Replace(s, "/", "#", -1)
+			return fmt.Sprintf("Named<%s$%p>", s, typ.Underlying())
 		case *types.Pointer:
 			return fmt.Sprintf("Pointer<%s>", f(t.Elem()))
 		case *types.Signature:
