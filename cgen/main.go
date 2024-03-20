@@ -1003,7 +1003,14 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 		found := fmt.Sprintf("&%s.raw.e0.raw", result)
 		count := fmt.Sprintf("&%s.count", iter)
 		if instr.IsString {
-			panic("unimplemented")
+			mp := fmt.Sprintf("%s.obj.string", iter)
+			ctx.switchFunctionToCallRuntimeApi("gox5_string_next", "StackFrameStringNext", createInstructionName(instr), nil, nil,
+				paramArgPair{param: "string", arg: mp},
+				paramArgPair{param: "index", arg: rng},
+				paramArgPair{param: "rune", arg: dom},
+				paramArgPair{param: "found", arg: found},
+				paramArgPair{param: "count", arg: count},
+			)
 		} else {
 			mp := fmt.Sprintf("%s.obj.map", iter)
 			ctx.switchFunctionToCallRuntimeApi("gox5_map_next", "StackFrameMapNext", createInstructionName(instr), nil, nil,
@@ -1033,7 +1040,7 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 		if _, ok := instr.X.Type().(*types.Map); ok {
 			fieldName = "map"
 		} else {
-			panic("unimplemented")
+			fieldName = "string"
 		}
 		fmt.Fprintf(ctx.stream, "%s = (IterObject){.obj = {.%s = %s}};\n", createValueRelName(instr), fieldName, createValueRelName(instr.X))
 
@@ -2344,6 +2351,7 @@ typedef struct {
 typedef struct {
 	union {
 		MapObject map;
+		StringObject string;
 	} obj;
 	uintptr_t count;
 } IterObject;
@@ -2449,6 +2457,16 @@ typedef struct {
 	StringObject rhs;
 } StackFrameStringAppend;
 DECLARE_RUNTIME_API(string_append, StackFrameStringAppend);
+
+typedef struct {
+	StackFrameCommon common;
+	StringObject string;
+	IntObject* index;
+	Int32Object* rune;
+	bool* found;
+	uintptr_t* count;
+} StackFrameStringNext;
+DECLARE_RUNTIME_API(string_next, StackFrameStringNext);
 
 typedef struct {
 	StackFrameCommon common;

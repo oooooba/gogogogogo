@@ -268,6 +268,58 @@ func Test23() int {
 	return 23
 }
 
+func Test24() int {
+	s := "abc"
+	n := 0
+	for i, c := range s {
+		if i != n {
+			return i
+		}
+		if c != rune('a'+i) {
+			return i * 10
+		}
+		n++
+	}
+	if n != 3 {
+		return 3
+	}
+	return 24
+}
+
+func Test25() int {
+	s := "abc"
+	n := 0
+	for i := range s {
+		if i != n {
+			return i
+		}
+		c := s[i]
+		if c != byte('a'+i) {
+			return i * 10
+		}
+		n++
+	}
+	if n != 3 {
+		return 3
+	}
+	return 25
+}
+
+func Test26() int {
+	s := "abc"
+	n := 0
+	for _, c := range s {
+		if c != rune('a'+n) {
+			return int(c)
+		}
+		n++
+	}
+	if n != 3 {
+		return 3
+	}
+	return 26
+}
+
 func main() {
 	runTest := func(testName string, test func() int) {
 		println(testName+":", test())
@@ -297,4 +349,7 @@ func main() {
 	runTest("Test21", Test21)
 	runTest("Test22", Test22)
 	runTest("Test23", Test23)
+	runTest("Test24", Test24)
+	runTest("Test25", Test25)
+	runTest("Test26", Test26)
 }

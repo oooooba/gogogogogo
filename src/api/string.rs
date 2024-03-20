@@ -152,6 +152,38 @@ pub extern "C" fn gox5_string_length(ctx: &mut LightWeightThreadContext) -> Func
 }
 
 #[repr(C)]
+struct StackFrameStringNext<'a> {
+    common: StackFrameCommon,
+    string: StringObject,
+    index: Option<&'a mut isize>,
+    rune: Option<&'a mut i32>,
+    found: &'a mut bool,
+    count: &'a mut usize,
+}
+
+#[no_mangle]
+pub extern "C" fn gox5_string_next(ctx: &mut LightWeightThreadContext) -> FunctionObject {
+    let frame = ctx.stack_frame_mut::<StackFrameStringNext>();
+
+    let s = frame.string.to_str().unwrap();
+    let index = *frame.count;
+    if let Some(c) = s.chars().nth(index) {
+        if let Some(p) = frame.index.as_mut() {
+            **p = index as isize;
+        }
+        if let Some(p) = frame.rune.as_mut() {
+            **p = c as i32;
+        }
+        *frame.found = true;
+        *frame.count = index + 1;
+    } else {
+        *frame.found = false;
+    }
+
+    ctx.leave()
+}
+
+#[repr(C)]
 struct StackFrameStringSubstr<'a> {
     common: StackFrameCommon,
     result_ptr: &'a mut StringObject,
