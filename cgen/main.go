@@ -1230,12 +1230,14 @@ func createBasicBlockName(basicBlock *ssa.BasicBlock) string {
 }
 
 func createFunctionName(function *ssa.Function) string {
-	packageName := createPackageName(function.Package())
-	methodType := ""
-	if function.Signature.Recv() != nil {
-		methodType = fmt.Sprintf("$%s", createTypeName(function.Signature.Recv().Type()))
-	}
-	return encode(fmt.Sprintf("f$%s$%s%s", function.Name(), packageName, methodType))
+	funcName := function.RelString(nil)
+	funcName = strings.ReplaceAll(funcName, "(", "#")
+	funcName = strings.ReplaceAll(funcName, ")", "#")
+	funcName = strings.ReplaceAll(funcName, "-", "#")
+	funcName = strings.ReplaceAll(funcName, "*", "#")
+	funcName = strings.ReplaceAll(funcName, ".", "#")
+	funcName = strings.ReplaceAll(funcName, "/", "#")
+	return encode(fmt.Sprintf("f$%s", funcName))
 }
 
 func createPackageName(pkg *ssa.Package) string {
@@ -2611,7 +2613,7 @@ typedef struct {
 } StackFrameSchedule;
 DECLARE_RUNTIME_API(schedule, StackFrameSchedule);
 
-#define f_S_Gosched_S_runtime gox5_schedule
+#define f_S_runtime_H_Gosched gox5_schedule
 
 typedef struct {
 	StackFrameCommon common;
