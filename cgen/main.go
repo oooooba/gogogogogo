@@ -1367,10 +1367,10 @@ func (ctx *Context) emitFunctionDeclaration(function *ssa.Function) {
 
 	signature := function.Signature
 	concreteSignatureName := createSignatureName(signature, false)
-	ctx.tryEmitSignatureDefinition(function.Signature, concreteSignatureName, false)
+	ctx.tryEmitSignatureDefinition(signature, concreteSignatureName, false)
 	if function.Signature.Recv() != nil {
-		abstructSignatureName := createSignatureName(signature, true)
-		ctx.tryEmitSignatureDefinition(function.Signature, abstructSignatureName, true)
+		abstractSignatureName := createSignatureName(signature, true)
+		ctx.tryEmitSignatureDefinition(signature, abstractSignatureName, true)
 	}
 
 	fmt.Fprintf(ctx.stream, "typedef struct {\n")
