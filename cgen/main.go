@@ -1456,19 +1456,19 @@ func (ctx *Context) emitFunctionDeclaration(function *ssa.Function) {
 	}
 }
 
-func (ctx *Context) emitFunctionDefinitionPrologue(function *ssa.Function, name string) {
-	ctx.emitFunctionHeader(name, "{")
+func (ctx *Context) emitFunctionDefinitionPrologue(functionName string, frameName string, hasFreeVariables bool) {
+	ctx.emitFunctionHeader(functionName, "{")
 	freeVarsCompareOp := "=="
-	if len(function.FreeVars) != 0 {
+	if hasFreeVariables {
 		freeVarsCompareOp = "!="
 	}
 	fmt.Fprintf(ctx.stream, `
 	StackFrame_%s* frame = (void*)ctx->stack_pointer;
 	assert(frame->common.free_vars %s NULL);
-`, createFunctionName(function), freeVarsCompareOp)
+`, frameName, freeVarsCompareOp)
 }
 
-func (ctx *Context) emitFunctionDefinitionEpilogue(function *ssa.Function) {
+func (ctx *Context) emitFunctionDefinitionEpilogue() {
 	fmt.Fprintln(ctx.stream, "}")
 }
 
@@ -1478,19 +1478,21 @@ func (ctx *Context) emitFunctionDefinition(function *ssa.Function) {
 	fmt.Fprintf(ctx.stream, "\treturn %s;\n", wrapInFunctionObject(createBasicBlockName(function.Blocks[0])))
 	fmt.Fprintf(ctx.stream, "}\n")
 
+	frameName := createFunctionName(function)
+	hasFreeVariables := len(function.FreeVars) != 0
 	for _, basicBlock := range function.DomPreorder() {
-		ctx.emitFunctionDefinitionPrologue(function, createBasicBlockName(basicBlock))
+		ctx.emitFunctionDefinitionPrologue(createBasicBlockName(basicBlock), frameName, hasFreeVariables)
 
 		for _, instr := range basicBlock.Instrs {
 			ctx.emitInstruction(instr)
 
 			if requireSwitchFunction(instr) {
-				ctx.emitFunctionDefinitionEpilogue(function)
-				ctx.emitFunctionDefinitionPrologue(function, createInstructionName(instr))
+				ctx.emitFunctionDefinitionEpilogue()
+				ctx.emitFunctionDefinitionPrologue(createInstructionName(instr), frameName, hasFreeVariables)
 			}
 		}
 
-		ctx.emitFunctionDefinitionEpilogue(function)
+		ctx.emitFunctionDefinitionEpilogue()
 	}
 
 	signature := function.Signature
@@ -1500,38 +1502,26 @@ func (ctx *Context) emitFunctionDefinition(function *ssa.Function) {
 
 	origFuncName := createFunctionName(function)
 	boundFuncName := fmt.Sprintf("%s%s", origFuncName, encode("$bound"))
+	resumeFuncName := fmt.Sprintf("%s_return", boundFuncName)
+	ctx.emitFunctionDefinitionPrologue(resumeFuncName, boundFuncName, true)
 	fmt.Fprintf(ctx.stream, `
-FunctionObject %s_return (LightWeightThreadContext* ctx) {
 	assert(ctx->marker == 0xdeadbeef);
-
-	StackFrame_%s* frame = (void*)ctx->stack_pointer;
-	assert(frame->common.free_vars != NULL);
-
 	ctx->stack_pointer = frame->common.prev_stack_pointer;
 	return frame->common.resume_func;
-}
-`, boundFuncName, boundFuncName)
+`)
+	ctx.emitFunctionDefinitionEpilogue()
 
+	ctx.emitFunctionDefinitionPrologue(boundFuncName, boundFuncName, true)
+	nextFuncName := wrapInFunctionObject(origFuncName)
 	signatureName := createSignatureName(signature, false, false)
-	fmt.Fprintf(ctx.stream, `
-FunctionObject %s (LightWeightThreadContext* ctx) {
-	assert(ctx->marker == 0xdeadbeef);
-
-	StackFrame_%s* frame = (void*)ctx->stack_pointer;
-	assert(frame->common.free_vars != NULL);
-`, boundFuncName, boundFuncName)
-
-	nextFunction := wrapInFunctionObject(origFuncName)
 	result := "*frame->signature.result_ptr"
-	resumeFunction := fmt.Sprintf("%s_return", boundFuncName)
-	ctx.switchFunction(nextFunction, signature, signatureName, result, resumeFunction, func() {
+	ctx.switchFunction(nextFuncName, signature, signatureName, result, resumeFuncName, func() {
 		for i := 0; i < signature.Params().Len(); i++ {
 			fmt.Fprintf(ctx.stream, "signature->param%d = frame->signature.param%d;\n", i+1, i)
 		}
 		fmt.Fprintf(ctx.stream, "signature->param0 = ((FreeVars_%s*)(frame->common.free_vars))->receiver;\n", boundFuncName)
 	})
-
-	fmt.Fprintf(ctx.stream, "}")
+	ctx.emitFunctionDefinitionEpilogue()
 }
 
 func (ctx *Context) retrieveOrderedTypes() []types.Type {
