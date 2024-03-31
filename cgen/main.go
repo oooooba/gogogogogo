@@ -301,9 +301,9 @@ func (ctx *Context) switchFunction(nextFunction string, callCommon *ssa.CallComm
 	if signature.Recv() != nil || signature.Results().Len() > 0 || signature.Params().Len() > 0 {
 		var signatureName string
 		if callCommon.IsInvoke() {
-			signatureName = createSignatureName(signature, true)
+			signatureName = createSignatureName(signature, false, true)
 		} else {
-			signatureName = createSignatureName(signature, false)
+			signatureName = createSignatureName(signature, false, false)
 		}
 		fmt.Fprintf(ctx.stream, "%s* signature = (%s*)(next_frame + 1);\n", signatureName, signatureName)
 	}
@@ -945,9 +945,16 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 			func() {
 				fnName := createFunctionName(fn)
 				fmt.Fprintf(ctx.stream, "FreeVars_%s* free_vars = (FreeVars_%s*)&next_frame->object_ptrs;\n", fnName, fnName)
-				for i, freeVar := range fn.FreeVars {
-					val := instr.Bindings[i]
-					fmt.Fprintf(ctx.stream, "free_vars->%s = %s;\n", createValueName(freeVar), createValueRelName(val))
+				if strings.HasSuffix(fn.Name(), "$bound") {
+					if len(fn.FreeVars) != 1 {
+						panic(fmt.Sprintf("fn: %s, free_vars: %s", fn, fn.FreeVars))
+					}
+					fmt.Fprintf(ctx.stream, "free_vars->receiver = %s;\n", createValueRelName(instr.Bindings[0]))
+				} else {
+					for i, freeVar := range fn.FreeVars {
+						val := instr.Bindings[i]
+						fmt.Fprintf(ctx.stream, "free_vars->%s = %s;\n", createValueName(freeVar), createValueRelName(val))
+					}
 				}
 				fmt.Fprintf(ctx.stream, "next_frame->num_object_ptrs = sizeof(*free_vars) / sizeof(intptr_t);\n")
 			},
@@ -1288,16 +1295,16 @@ func requireSwitchFunction(instruction ssa.Instruction) bool {
 	return false
 }
 
-func createSignatureName(signature *types.Signature, makesReceiverInterface bool) string {
+func createSignatureName(signature *types.Signature, makesReceiverBound bool, makesReceiverInterface bool) string {
 	name := ""
 
-	if signature.Recv() != nil && makesReceiverInterface {
+	if signature.Recv() != nil && !makesReceiverBound && makesReceiverInterface {
 		name += "Interface"
 	}
 	name += "Signature$"
 
 	name += "Params$"
-	if signature.Recv() != nil && !makesReceiverInterface {
+	if signature.Recv() != nil && !makesReceiverBound && !makesReceiverInterface {
 		name += createTypeName(signature.Recv().Type())
 		name += "$"
 	}
@@ -1319,7 +1326,7 @@ func createSignatureName(signature *types.Signature, makesReceiverInterface bool
 	return encode(name)
 }
 
-func (ctx *Context) tryEmitSignatureDefinition(signature *types.Signature, signatureName string, makesReceiverInterface bool) {
+func (ctx *Context) tryEmitSignatureDefinition(signature *types.Signature, signatureName string, makesReceiverBound bool, makesReceiverInterface bool) {
 	_, ok := ctx.signatureNameSet[signatureName]
 	if ok {
 		return
@@ -1338,7 +1345,7 @@ func (ctx *Context) tryEmitSignatureDefinition(signature *types.Signature, signa
 	}
 
 	base := 0
-	if signature.Recv() != nil {
+	if signature.Recv() != nil && !makesReceiverBound {
 		id := fmt.Sprintf("param%d", base)
 		var typeName string
 		if makesReceiverInterface {
@@ -1366,11 +1373,26 @@ func (ctx *Context) emitFunctionDeclaration(function *ssa.Function) {
 	ctx.emitFunctionHeader(createFunctionName(function), ";")
 
 	signature := function.Signature
-	concreteSignatureName := createSignatureName(signature, false)
-	ctx.tryEmitSignatureDefinition(signature, concreteSignatureName, false)
+	concreteSignatureName := createSignatureName(signature, false, false)
+	ctx.tryEmitSignatureDefinition(signature, concreteSignatureName, false, false)
 	if function.Signature.Recv() != nil {
-		abstractSignatureName := createSignatureName(signature, true)
-		ctx.tryEmitSignatureDefinition(signature, abstractSignatureName, true)
+		abstractSignatureName := createSignatureName(signature, false, true)
+		ctx.tryEmitSignatureDefinition(signature, abstractSignatureName, false, true)
+
+		receiverBoundFuncName := fmt.Sprintf("%s%s", createFunctionName(function), encode("$bound"))
+		ctx.emitFunctionHeader(receiverBoundFuncName, ";")
+
+		receiverBoundSignatureName := createSignatureName(signature, true, false)
+		ctx.tryEmitSignatureDefinition(signature, receiverBoundSignatureName, true, true)
+
+		fmt.Fprintf(ctx.stream, "typedef struct {\n")
+		fmt.Fprintf(ctx.stream, "\t%s receiver; // %s\n", createTypeName(signature.Recv().Type()), signature)
+		fmt.Fprintf(ctx.stream, "} FreeVars_%s;\n", receiverBoundFuncName)
+
+		fmt.Fprintf(ctx.stream, "typedef struct {\n")
+		fmt.Fprintf(ctx.stream, "\tStackFrameCommon common;\n")
+		fmt.Fprintf(ctx.stream, "\t%s signature;\n", receiverBoundSignatureName)
+		fmt.Fprintf(ctx.stream, "} StackFrame_%s;\n", receiverBoundFuncName)
 	}
 
 	fmt.Fprintf(ctx.stream, "typedef struct {\n")
@@ -1471,6 +1493,58 @@ func (ctx *Context) emitFunctionDefinition(function *ssa.Function) {
 
 		ctx.emitFunctionDefinitionEpilogue(function)
 	}
+
+	signature := function.Signature
+	if signature.Recv() == nil {
+		return
+	}
+
+	origFuncName := createFunctionName(function)
+	boundFuncName := fmt.Sprintf("%s%s", origFuncName, encode("$bound"))
+	fmt.Fprintf(ctx.stream, `
+FunctionObject %s_return (LightWeightThreadContext* ctx) {
+	assert(ctx->marker == 0xdeadbeef);
+
+	StackFrame_%s* frame = (void*)ctx->stack_pointer;
+	assert(frame->common.free_vars != NULL);
+
+	ctx->stack_pointer = frame->common.prev_stack_pointer;
+	return frame->common.resume_func;
+}
+`, boundFuncName, boundFuncName)
+
+	signatureName := createSignatureName(signature, false, false)
+	fmt.Fprintf(ctx.stream, `
+FunctionObject %s (LightWeightThreadContext* ctx) {
+	assert(ctx->marker == 0xdeadbeef);
+
+	StackFrame_%s* frame = (void*)ctx->stack_pointer;
+	assert(frame->common.free_vars != NULL);
+
+	StackFrameCommon* next_frame = (StackFrameCommon*)(frame + 1);
+	assert(((uintptr_t)next_frame) %% sizeof(uintptr_t) == 0);
+	next_frame->resume_func = %s;
+	next_frame->prev_stack_pointer = ctx->stack_pointer;
+
+	%s* signature = (%s*)(next_frame + 1);
+`, boundFuncName, boundFuncName, wrapInFunctionObject(fmt.Sprintf("%s_return", boundFuncName)), signatureName, signatureName)
+
+	if signature.Results().Len() > 0 {
+		fmt.Fprintf(ctx.stream, "signature->result_ptr = frame->signature.result_ptr;\n")
+	}
+
+	for i := 0; i < signature.Params().Len(); i++ {
+		fmt.Fprintf(ctx.stream, "signature->param%d = frame->signature.param%d;\n", i+1, i)
+	}
+
+	fmt.Fprintf(ctx.stream, `
+	signature->param0 = ((FreeVars_%s*)(frame->common.free_vars))->receiver;
+
+	next_frame->free_vars = NULL;
+	ctx->stack_pointer = next_frame;
+	return %s;
+}
+`, boundFuncName, wrapInFunctionObject(origFuncName))
 }
 
 func (ctx *Context) retrieveOrderedTypes() []types.Type {
