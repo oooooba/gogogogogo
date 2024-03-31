@@ -285,26 +285,13 @@ func createFieldName(field *types.Var) string {
 	return rawFieldName
 }
 
-func (ctx *Context) switchFunction(nextFunction string, callCommon *ssa.CallCommon, result string, resumeFunction string) {
+func (ctx *Context) switchFunction(nextFunction string, signature *types.Signature, signatureName string, result string, resumeFunction string, paramAndArgsHandler func()) {
 	fmt.Fprintf(ctx.stream, "StackFrameCommon* next_frame = (StackFrameCommon*)(frame + 1);\n")
 	fmt.Fprintf(ctx.stream, "assert(((uintptr_t)next_frame) %% sizeof(uintptr_t) == 0);\n")
 	fmt.Fprintf(ctx.stream, "next_frame->resume_func = %s;\n", wrapInFunctionObject(resumeFunction))
 	fmt.Fprintf(ctx.stream, "next_frame->prev_stack_pointer = ctx->stack_pointer;\n")
 
-	var signature *types.Signature
-	if callCommon.IsInvoke() {
-		signature = callCommon.Method.Type().(*types.Signature)
-	} else {
-		signature = callCommon.Value.Type().(*types.Signature)
-	}
-
 	if signature.Recv() != nil || signature.Results().Len() > 0 || signature.Params().Len() > 0 {
-		var signatureName string
-		if callCommon.IsInvoke() {
-			signatureName = createSignatureName(signature, false, true)
-		} else {
-			signatureName = createSignatureName(signature, false, false)
-		}
 		fmt.Fprintf(ctx.stream, "%s* signature = (%s*)(next_frame + 1);\n", signatureName, signatureName)
 	}
 
@@ -312,24 +299,7 @@ func (ctx *Context) switchFunction(nextFunction string, callCommon *ssa.CallComm
 		fmt.Fprintf(ctx.stream, "signature->result_ptr = &%s;\n", result)
 	}
 
-	paramBase := 0
-	argBase := 0
-	if signature.Recv() != nil {
-		var receiver string
-		if callCommon.IsInvoke() {
-			receiver = fmt.Sprintf("*(void**)(%s.receiver)", createValueRelName(callCommon.Value))
-		} else {
-			receiver = fmt.Sprintf("%s", createValueRelName(callCommon.Args[argBase]))
-			argBase++
-		}
-		fmt.Fprintf(ctx.stream, "signature->param%d = %s; // receiver: %s\n", paramBase, receiver, signature.Recv())
-		paramBase++
-	}
-	for i := 0; i < signature.Params().Len(); i++ {
-		arg := callCommon.Args[argBase+i]
-		fmt.Fprintf(ctx.stream, "signature->param%d = %s; // %s\n",
-			paramBase+i, createValueRelName(arg), signature.Params().At(i))
-	}
+	paramAndArgsHandler()
 
 	fmt.Fprintf(ctx.stream, "next_frame->free_vars = NULL;\n")
 	fmt.Fprintf(ctx.stream, "ctx->stack_pointer = next_frame;\n")
@@ -505,7 +475,21 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 				createValueRelName(callCommon.Value), callCommon.Method.Name())
 			fmt.Fprintf(ctx.stream, "assert(next_function.raw != NULL);\n")
 			nextFunction := "next_function"
-			ctx.switchFunction(nextFunction, callCommon, createValueRelName(instr), createInstructionName(instr))
+			signature := callCommon.Method.Type().(*types.Signature)
+			signatureName := createSignatureName(signature, false, true)
+			ctx.switchFunction(nextFunction, signature, signatureName, createValueRelName(instr), createInstructionName(instr), func() {
+				paramBase := 0
+				if signature.Recv() != nil {
+					receiver := fmt.Sprintf("*(void**)(%s.receiver)", createValueRelName(callCommon.Value))
+					fmt.Fprintf(ctx.stream, "signature->param0 = %s; // receiver: %s\n", receiver, signature.Recv())
+					paramBase++
+				}
+				for i := 0; i < signature.Params().Len(); i++ {
+					arg := callCommon.Args[i]
+					fmt.Fprintf(ctx.stream, "signature->param%d = %s; // %s\n",
+						paramBase+i, createValueRelName(arg), signature.Params().At(i))
+				}
+			})
 		} else {
 			switch callee := callCommon.Value.(type) {
 			case *ssa.Builtin:
@@ -669,7 +653,22 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 			default:
 				if callee.Name() != "init" {
 					nextFunction := createValueRelName(callee)
-					ctx.switchFunction(nextFunction, callCommon, createValueRelName(instr), createInstructionName(instr))
+					signature := callCommon.Value.Type().(*types.Signature)
+					signatureName := createSignatureName(signature, false, false)
+					ctx.switchFunction(nextFunction, signature, signatureName, createValueRelName(instr), createInstructionName(instr), func() {
+						paramBase := 0
+						argBase := 0
+						if signature.Recv() != nil {
+							receiver := createValueRelName(callCommon.Args[0])
+							fmt.Fprintf(ctx.stream, "signature->param0 = %s; // receiver: %s\n", receiver, signature.Recv())
+							paramBase++
+							argBase++
+						}
+						for i := 0; i < signature.Params().Len(); i++ {
+							arg := callCommon.Args[argBase+i]
+							fmt.Fprintf(ctx.stream, "signature->param%d = %s; // %s\n", paramBase+i, createValueRelName(arg), signature.Params().At(i))
+						}
+					})
 				}
 			}
 		}
@@ -1520,31 +1519,19 @@ FunctionObject %s (LightWeightThreadContext* ctx) {
 
 	StackFrame_%s* frame = (void*)ctx->stack_pointer;
 	assert(frame->common.free_vars != NULL);
+`, boundFuncName, boundFuncName)
 
-	StackFrameCommon* next_frame = (StackFrameCommon*)(frame + 1);
-	assert(((uintptr_t)next_frame) %% sizeof(uintptr_t) == 0);
-	next_frame->resume_func = %s;
-	next_frame->prev_stack_pointer = ctx->stack_pointer;
+	nextFunction := wrapInFunctionObject(origFuncName)
+	result := "*frame->signature.result_ptr"
+	resumeFunction := fmt.Sprintf("%s_return", boundFuncName)
+	ctx.switchFunction(nextFunction, signature, signatureName, result, resumeFunction, func() {
+		for i := 0; i < signature.Params().Len(); i++ {
+			fmt.Fprintf(ctx.stream, "signature->param%d = frame->signature.param%d;\n", i+1, i)
+		}
+		fmt.Fprintf(ctx.stream, "signature->param0 = ((FreeVars_%s*)(frame->common.free_vars))->receiver;\n", boundFuncName)
+	})
 
-	%s* signature = (%s*)(next_frame + 1);
-`, boundFuncName, boundFuncName, wrapInFunctionObject(fmt.Sprintf("%s_return", boundFuncName)), signatureName, signatureName)
-
-	if signature.Results().Len() > 0 {
-		fmt.Fprintf(ctx.stream, "signature->result_ptr = frame->signature.result_ptr;\n")
-	}
-
-	for i := 0; i < signature.Params().Len(); i++ {
-		fmt.Fprintf(ctx.stream, "signature->param%d = frame->signature.param%d;\n", i+1, i)
-	}
-
-	fmt.Fprintf(ctx.stream, `
-	signature->param0 = ((FreeVars_%s*)(frame->common.free_vars))->receiver;
-
-	next_frame->free_vars = NULL;
-	ctx->stack_pointer = next_frame;
-	return %s;
-}
-`, boundFuncName, wrapInFunctionObject(origFuncName))
+	fmt.Fprintf(ctx.stream, "}")
 }
 
 func (ctx *Context) retrieveOrderedTypes() []types.Type {
