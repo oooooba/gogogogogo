@@ -1684,6 +1684,26 @@ func (ctx *Context) emitSignature() {
 			receiverBoundSignatureName := createSignatureName(signature, true, false)
 			ctx.tryEmitSignatureDefinition(signature, receiverBoundSignatureName, true, true)
 		}
+
+		for _, basicBlock := range function.Blocks {
+			for _, instruction := range basicBlock.Instrs {
+				var callCommon *ssa.CallCommon
+				switch instr := instruction.(type) {
+				case *ssa.Call:
+					callCommon = instr.Common()
+				case *ssa.Defer:
+					callCommon = instr.Common()
+				case *ssa.Go:
+					callCommon = instr.Common()
+				}
+				if callCommon == nil {
+					continue
+				}
+				signature := callCommon.Signature()
+				signatureName := createSignatureName(signature, false, false)
+				ctx.tryEmitSignatureDefinition(signature, signatureName, false, false)
+			}
+		}
 	})
 }
 

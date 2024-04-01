@@ -149,6 +149,68 @@ func Test13() int {
 	return a
 }
 
+var Gv14 bool = false
+
+func Test14() int {
+	type T14_1 struct {
+		x int
+	}
+	type T14_2 struct {
+		f func(T14_1) int
+	}
+	t := T14_2{}
+	x := 14
+	if Gv14 {
+		x = t.f(T14_1{42})
+	}
+	return x
+}
+
+var Gv15 bool = false
+
+type T15 struct {
+	x int
+}
+
+var t15_f func(T15) int
+
+func Test15() int {
+	x := 15
+	if Gv15 {
+		x = t15_f(T15{42})
+	}
+	return x
+}
+
+var Gv16 bool = false
+
+type T16 struct {
+	x int
+}
+
+func (r *T16) t16_f() int {
+	return r.x
+}
+
+func Test16() int {
+	t := T16{42}
+	x := 0
+	if Gv16 {
+		x = t.t16_f()
+	}
+	if x != 0 {
+		return 0
+	}
+	var u interface{ t16_f() int } = &t
+	if Gv16 {
+		x = u.t16_f()
+	}
+	if x != 0 {
+		return 1
+	}
+	return 16
+}
+
 func main() {
 	runTest := func(testName string, test func() int) {
 		println(testName+":", test())
@@ -166,4 +228,7 @@ func main() {
 	runTest("Test11", Test11)
 	runTest("Test12", Test12)
 	runTest("Test13", Test13)
+	runTest("Test14", Test14)
+	runTest("Test15", Test15)
+	runTest("Test16", Test16)
 }
