@@ -1372,22 +1372,15 @@ func (ctx *Context) emitFunctionDeclaration(function *ssa.Function) {
 	ctx.emitFunctionHeader(createFunctionName(function), ";")
 
 	signature := function.Signature
-	concreteSignatureName := createSignatureName(signature, false, false)
-	ctx.tryEmitSignatureDefinition(signature, concreteSignatureName, false, false)
-	if function.Signature.Recv() != nil {
-		abstractSignatureName := createSignatureName(signature, false, true)
-		ctx.tryEmitSignatureDefinition(signature, abstractSignatureName, false, true)
-
+	if signature.Recv() != nil {
 		receiverBoundFuncName := fmt.Sprintf("%s%s", createFunctionName(function), encode("$bound"))
 		ctx.emitFunctionHeader(receiverBoundFuncName, ";")
-
-		receiverBoundSignatureName := createSignatureName(signature, true, false)
-		ctx.tryEmitSignatureDefinition(signature, receiverBoundSignatureName, true, true)
 
 		fmt.Fprintf(ctx.stream, "typedef struct {\n")
 		fmt.Fprintf(ctx.stream, "\t%s receiver; // %s\n", createTypeName(signature.Recv().Type()), signature)
 		fmt.Fprintf(ctx.stream, "} FreeVars_%s;\n", receiverBoundFuncName)
 
+		receiverBoundSignatureName := createSignatureName(signature, true, false)
 		fmt.Fprintf(ctx.stream, "typedef struct {\n")
 		fmt.Fprintf(ctx.stream, "\tStackFrameCommon common;\n")
 		fmt.Fprintf(ctx.stream, "\t%s signature;\n", receiverBoundSignatureName)
@@ -1402,6 +1395,7 @@ func (ctx *Context) emitFunctionDeclaration(function *ssa.Function) {
 	}
 	fmt.Fprintf(ctx.stream, "} FreeVars_%s;\n", createFunctionName(function))
 
+	concreteSignatureName := createSignatureName(signature, false, false)
 	fmt.Fprintf(ctx.stream, "typedef struct {\n")
 	fmt.Fprintf(ctx.stream, "\tStackFrameCommon common;\n")
 	fmt.Fprintf(ctx.stream, "\t%s signature;\n", concreteSignatureName)
@@ -1676,6 +1670,21 @@ union %s { // %s
 			panic(fmt.Sprintf("not implemented: %s %T", typ, typ))
 		}
 	}
+}
+
+func (ctx *Context) emitSignature() {
+	ctx.visitAllFunctions(ctx.program, func(function *ssa.Function) {
+		signature := function.Signature
+		concreteSignatureName := createSignatureName(signature, false, false)
+		ctx.tryEmitSignatureDefinition(signature, concreteSignatureName, false, false)
+		if signature.Recv() != nil {
+			abstractSignatureName := createSignatureName(signature, false, true)
+			ctx.tryEmitSignatureDefinition(signature, abstractSignatureName, false, true)
+
+			receiverBoundSignatureName := createSignatureName(signature, true, false)
+			ctx.tryEmitSignatureDefinition(signature, receiverBoundSignatureName, true, true)
+		}
+	})
 }
 
 func (ctx *Context) emitTypeInfo() {
@@ -2743,6 +2752,7 @@ __attribute__((unused)) static void builtin_print_float(double val) {
 	ctx.emitComplexNumberBuiltinFunctions()
 
 	ctx.emitType()
+	ctx.emitSignature()
 	ctx.emitEqualFunctionDeclaration()
 	ctx.emitHashFunctionDeclaration()
 
