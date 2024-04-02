@@ -1436,7 +1436,7 @@ func (ctx *Context) emitFunctionDeclaration(function *ssa.Function) {
 		return
 	}
 
-	for _, basicBlock := range function.DomPreorder() {
+	for _, basicBlock := range function.Blocks {
 		name := createBasicBlockName(basicBlock)
 		ctx.emitFunctionHeader(name, ";")
 		ctx.latestNameMap[basicBlock] = name
@@ -1474,7 +1474,7 @@ func (ctx *Context) emitFunctionDefinition(function *ssa.Function) {
 
 	frameName := createFunctionName(function)
 	hasFreeVariables := len(function.FreeVars) != 0
-	for _, basicBlock := range function.DomPreorder() {
+	for _, basicBlock := range function.Blocks {
 		ctx.emitFunctionDefinitionPrologue(createBasicBlockName(basicBlock), frameName, hasFreeVariables)
 
 		for _, instr := range basicBlock.Instrs {
@@ -2188,7 +2188,7 @@ func (ctx *Context) visitAllTypes(program *ssa.Program, procedure func(typ types
 		if function.Blocks == nil {
 			return
 		}
-		for _, basicBlock := range function.DomPreorder() {
+		for _, basicBlock := range function.Blocks {
 			for _, instr := range basicBlock.Instrs {
 				if value, ok := instr.(ssa.Value); ok {
 					f(value.Type())
@@ -2321,7 +2321,7 @@ func (ctx *Context) visitValue(function *ssa.Function, procedure func(value ssa.
 		procedure(value)
 	}
 
-	for _, basicBlock := range function.DomPreorder() {
+	for _, basicBlock := range function.Blocks {
 		for _, instruction := range basicBlock.Instrs {
 			switch instr := instruction.(type) {
 			case ssa.Value:
