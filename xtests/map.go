@@ -178,6 +178,21 @@ func Test10() int {
 	return 10
 }
 
+func Test11() int {
+	st := map[int]struct{}{}
+	if len(st) != 0 {
+		return 0
+	}
+	if _, ok := st[1]; ok {
+		return 1
+	}
+	st[1] = struct{}{}
+	if _, ok := st[1]; !ok {
+		return 2
+	}
+	return 11
+}
+
 func main() {
 	runTest := func(testName string, test func() int) {
 		println(testName+":", test())
@@ -192,4 +207,5 @@ func main() {
 	runTest("Test8", Test8)
 	runTest("Test9", Test9)
 	runTest("Test10", Test10)
+	runTest("Test11", Test11)
 }
