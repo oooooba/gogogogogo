@@ -170,6 +170,14 @@ func Test9() int {
 	return 9
 }
 
+func Test10() int {
+	st := map[int]struct{}{}
+	if len(st) != 0 {
+		return 0
+	}
+	return 10
+}
+
 func main() {
 	runTest := func(testName string, test func() int) {
 		println(testName+":", test())
@@ -183,4 +191,5 @@ func main() {
 	runTest("Test7", Test7)
 	runTest("Test8", Test8)
 	runTest("Test9", Test9)
+	runTest("Test10", Test10)
 }

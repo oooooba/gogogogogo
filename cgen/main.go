@@ -199,7 +199,9 @@ func createTypeName(typ types.Type) string {
 		case *types.Interface:
 			return fmt.Sprintf("Interface")
 		case *types.Map:
-			return fmt.Sprintf("MapObject")
+			k := f(t.Key())
+			v := f(t.Elem())
+			return fmt.Sprintf("Map<%s$%s>", k, v)
 		case *types.Named:
 			// handle "command-line-arguments." and package deliminator
 			s := typ.String()
@@ -595,7 +597,7 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 					case *types.Map:
 						result := createValueRelName(instr)
 						ctx.switchFunctionToCallRuntimeApi("gox5_map_len", "StackFrameMapLen", createInstructionName(instr), &result, nil,
-							paramArgPair{param: "map", arg: createValueRelName(callCommon.Args[0])},
+							paramArgPair{param: "map", arg: fmt.Sprintf("%s.raw", createValueRelName(callCommon.Args[0]))},
 						)
 						needToCallRuntimeApi = true
 					case *types.Slice:
@@ -918,7 +920,7 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 				found = "NULL"
 			}
 			ctx.switchFunctionToCallRuntimeApi("gox5_map_get", "StackFrameMapGet", createInstructionName(instr), nil, nil,
-				paramArgPair{param: "map", arg: createValueRelName(instr.X)},
+				paramArgPair{param: "map", arg: fmt.Sprintf("%s.raw", createValueRelName(instr.X))},
 				paramArgPair{param: "key", arg: key},
 				paramArgPair{param: "value", arg: value},
 				paramArgPair{param: "found", arg: found},
@@ -968,7 +970,7 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 		)
 
 	case *ssa.MakeMap:
-		result := createValueRelName(instr)
+		result := fmt.Sprintf("%s.raw", createValueRelName(instr))
 		ctx.switchFunctionToCallRuntimeApi("gox5_map_new", "StackFrameMapNew", createInstructionName(instr), &result, nil,
 			paramArgPair{param: "key_type", arg: wrapInTypeId(instr.Type().Underlying().(*types.Map).Key())},
 			paramArgPair{param: "value_type", arg: wrapInTypeId(instr.Type().Underlying().(*types.Map).Elem())},
@@ -986,7 +988,7 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 
 	case *ssa.MapUpdate:
 		ctx.switchFunctionToCallRuntimeApi("gox5_map_set", "StackFrameMapSet", createInstructionName(instr), nil, nil,
-			paramArgPair{param: "map", arg: createValueRelName(instr.Map)},
+			paramArgPair{param: "map", arg: fmt.Sprintf("%s.raw", createValueRelName(instr.Map))},
 			paramArgPair{param: "key", arg: fmt.Sprintf("&%s", createValueRelName(instr.Key))},
 			paramArgPair{param: "value", arg: fmt.Sprintf("&%s", createValueRelName(instr.Value))},
 		)
@@ -1042,13 +1044,11 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 		fmt.Fprintln(ctx.stream, "\t{ assert(false); }")
 
 	case *ssa.Range:
-		var fieldName string
 		if _, ok := instr.X.Type().(*types.Map); ok {
-			fieldName = "map"
+			fmt.Fprintf(ctx.stream, "%s = (IterObject){.obj = {.map = %s.raw}};\n", createValueRelName(instr), createValueRelName(instr.X))
 		} else {
-			fieldName = "string"
+			fmt.Fprintf(ctx.stream, "%s = (IterObject){.obj = {.string = %s}};\n", createValueRelName(instr), createValueRelName(instr.X))
 		}
-		fmt.Fprintf(ctx.stream, "%s = (IterObject){.obj = {.%s = %s}};\n", createValueRelName(instr), fieldName, createValueRelName(instr.X))
 
 	case *ssa.Return:
 		fmt.Fprintf(ctx.stream, "ctx->stack_pointer = frame->common.prev_stack_pointer;\n")
@@ -1588,10 +1588,10 @@ func (ctx *Context) emitType() {
 	for _, typ := range orderedTypes {
 		name := createTypeName(typ)
 		switch typ := typ.(type) {
-		case *types.Array, *types.Pointer, *types.Struct, *types.Tuple:
+		case *types.Array, *types.Map, *types.Pointer, *types.Struct, *types.Tuple:
 			fmt.Fprintf(ctx.stream, "typedef struct %s %s; // %s\n", name, name, typ)
 
-		case *types.Basic, *types.Chan, *types.Interface, *types.Map, *types.Signature:
+		case *types.Basic, *types.Chan, *types.Interface, *types.Signature:
 			// do nothing
 
 		case *types.Named:
@@ -1629,8 +1629,11 @@ func (ctx *Context) emitType() {
 			fmt.Fprintf(ctx.stream, "\t%s raw[%d];\n", createTypeName(typ.Elem()), typ.Len())
 			fmt.Fprintf(ctx.stream, "};\n")
 
-		case *types.Basic, *types.Chan, *types.Interface, *types.Map, *types.Named, *types.Pointer, *types.Signature:
+		case *types.Basic, *types.Chan, *types.Interface, *types.Named, *types.Pointer, *types.Signature:
 			// do nothing
+
+		case *types.Map:
+			fmt.Fprintf(ctx.stream, "struct %s { MapObject raw; }; // %s\n", name, typ)
 
 		case *types.Slice:
 			fmt.Fprintf(ctx.stream, `
@@ -1831,8 +1834,10 @@ bool equal_Interface(const Interface* lhs, const Interface* rhs) {
 				default:
 					body += "return lhs->raw == rhs->raw;\n"
 				}
-			case *types.Interface, *types.Map:
+			case *types.Interface:
 				return
+			case *types.Map:
+				body += "return equal_MapObject(&lhs->raw, &rhs->raw);\n"
 			case *types.Struct:
 				for i := 0; i < t.NumFields(); i++ {
 					field := t.Field(i)
@@ -1864,12 +1869,6 @@ func (ctx *Context) emitHashFunctionDeclaration() {
 
 func (ctx *Context) emitHashFunctionDefinition() {
 	fmt.Fprintf(ctx.stream, `
-uintptr_t hash_MapObject(const MapObject* obj) {
-	assert(obj != NULL);
-	assert(false); /// not implemented
-	return 0;
-}
-
 uintptr_t hash_Interface(const Interface* obj) {
 	(void)obj;
 	assert(false); /// not implemented
@@ -1891,8 +1890,11 @@ uintptr_t hash_Interface(const Interface* obj) {
 				default:
 					body += "return (uintptr_t)obj->raw;\n"
 				}
-			case *types.Interface, *types.Map:
+			case *types.Interface:
 				return
+			case *types.Map:
+				body += "assert(false); /// not implemented\n"
+				body += "return 0;\n"
 			case *types.Struct:
 				body += "uintptr_t hash = 0;\n"
 				for i := 0; i < t.NumFields(); i++ {
