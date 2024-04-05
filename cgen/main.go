@@ -195,7 +195,7 @@ func createTypeName(typ types.Type) string {
 				return fmt.Sprintf("UintptrObject")
 			}
 		case *types.Chan:
-			return fmt.Sprintf("ChannelObject")
+			return fmt.Sprintf("Channel<%s>", f(t.Elem()))
 		case *types.Interface:
 			return fmt.Sprintf("Interface")
 		case *types.Map:
@@ -538,7 +538,7 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 
 				case "close":
 					ctx.switchFunctionToCallRuntimeApi("gox5_channel_close", "StackFrameChannelClose", createInstructionName(instr), nil, nil,
-						paramArgPair{param: "channel", arg: fmt.Sprintf("%s", createValueRelName(callCommon.Args[0]))},
+						paramArgPair{param: "channel", arg: fmt.Sprintf("%s.raw", createValueRelName(callCommon.Args[0]))},
 					)
 					needToCallRuntimeApi = true
 
@@ -930,8 +930,9 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 		}
 
 	case *ssa.MakeChan:
-		result := createValueRelName(instr)
+		result := fmt.Sprintf("%s.raw", createValueRelName(instr))
 		ctx.switchFunctionToCallRuntimeApi("gox5_channel_new", "StackFrameChannelNew", createInstructionName(instr), &result, nil,
+			paramArgPair{param: "type_id", arg: wrapInTypeId(instr.Type().Underlying().(*types.Chan).Elem())},
 			paramArgPair{param: "capacity", arg: createValueRelName(instr.Size)},
 		)
 
@@ -1073,7 +1074,7 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 			func() {
 				receive_count := 0
 				for i, state := range instr.States {
-					fmt.Fprintf(ctx.stream, "next_frame->entry_buffer[%d].channel = %s;\n", i, createValueRelName(state.Chan))
+					fmt.Fprintf(ctx.stream, "next_frame->entry_buffer[%d].channel = %s.raw;\n", i, createValueRelName(state.Chan))
 					fmt.Fprintf(ctx.stream, "next_frame->entry_buffer[%d].type_id = %s;\n", i, wrapInTypeId(state.Chan.Type().(*types.Chan).Elem()))
 					switch state.Dir {
 					case types.SendRecv:
@@ -1096,7 +1097,7 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 
 	case *ssa.Send:
 		ctx.switchFunctionToCallRuntimeApi("gox5_channel_send", "StackFrameChannelSend", createInstructionName(instr), nil, nil,
-			paramArgPair{param: "channel", arg: createValueRelName(instr.Chan)},
+			paramArgPair{param: "channel", arg: fmt.Sprintf("%s.raw", createValueRelName(instr.Chan))},
 			paramArgPair{param: "data", arg: fmt.Sprintf("&%s", createValueRelName(instr.X))},
 			paramArgPair{param: "type_id", arg: wrapInTypeId(instr.X.Type())},
 		)
@@ -1199,7 +1200,7 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 				available = "NULL"
 			}
 			ctx.switchFunctionToCallRuntimeApi("gox5_channel_receive", "StackFrameChannelReceive", createInstructionName(instr), nil, nil,
-				paramArgPair{param: "channel", arg: createValueRelName(instr.X)},
+				paramArgPair{param: "channel", arg: fmt.Sprintf("%s.raw", createValueRelName(instr.X))},
 				paramArgPair{param: "type_id", arg: typeId},
 				paramArgPair{param: "data", arg: data},
 				paramArgPair{param: "available", arg: available},
@@ -1588,10 +1589,10 @@ func (ctx *Context) emitType() {
 	for _, typ := range orderedTypes {
 		name := createTypeName(typ)
 		switch typ := typ.(type) {
-		case *types.Array, *types.Map, *types.Pointer, *types.Struct, *types.Tuple:
+		case *types.Array, *types.Chan, *types.Map, *types.Pointer, *types.Struct, *types.Tuple:
 			fmt.Fprintf(ctx.stream, "typedef struct %s %s; // %s\n", name, name, typ)
 
-		case *types.Basic, *types.Chan, *types.Interface, *types.Signature:
+		case *types.Basic, *types.Interface, *types.Signature:
 			// do nothing
 
 		case *types.Named:
@@ -1629,8 +1630,11 @@ func (ctx *Context) emitType() {
 			fmt.Fprintf(ctx.stream, "\t%s raw[%d];\n", createTypeName(typ.Elem()), typ.Len())
 			fmt.Fprintf(ctx.stream, "};\n")
 
-		case *types.Basic, *types.Chan, *types.Interface, *types.Named, *types.Pointer, *types.Signature:
+		case *types.Basic, *types.Interface, *types.Named, *types.Pointer, *types.Signature:
 			// do nothing
+
+		case *types.Chan:
+			fmt.Fprintf(ctx.stream, "struct %s { ChannelObject raw; }; // %s\n", name, typ)
 
 		case *types.Map:
 			fmt.Fprintf(ctx.stream, "struct %s { MapObject raw; }; // %s\n", name, typ)
@@ -2114,7 +2118,7 @@ func (ctx *Context) visitAllTypes(program *ssa.Program, procedure func(typ types
 			// do nothing
 
 		case *types.Chan:
-			// do nothing
+			f(typ.Elem())
 
 		case *types.Interface:
 			// do nothing
@@ -2564,6 +2568,7 @@ DECLARE_RUNTIME_API(defer_register, StackFrameDeferRegister);
 typedef struct {
 	StackFrameCommon common;
 	ChannelObject* result_ptr;
+	TypeId type_id;
 	IntObject capacity; // ToDo: correct to proper type
 } StackFrameChannelNew;
 DECLARE_RUNTIME_API(channel_new, StackFrameChannelNew);

@@ -16,6 +16,7 @@ use super::ObjectPtr;
 struct StackFrameChannelNew<'a> {
     common: StackFrameCommon,
     result_ptr: &'a mut ObjectPtr,
+    type_id: TypeId,
     capacity: usize,
 }
 
