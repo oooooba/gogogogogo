@@ -381,7 +381,7 @@ func (ctx *Context) emitPrint(value ssa.Value) {
 }
 
 func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
-	fmt.Fprintf(ctx.stream, "\t// %T instruction\n", instruction)
+	fmt.Fprintf(ctx.stream, "\t// %T (%s): %s\n", instruction, instruction.Parent(), instruction)
 	fmt.Fprintf(ctx.stream, "\t{\n")
 	switch instr := instruction.(type) {
 	case *ssa.Alloc:
