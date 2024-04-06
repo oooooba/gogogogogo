@@ -108,6 +108,22 @@ func Test9() int {
 	return 9
 }
 
+var G10 []struct {
+	x int
+	y [1]int
+}
+
+func Test10() int {
+	G10 = make([]struct {
+		x int
+		y [1]int
+	}, 0)
+	if len(G10) != 0 {
+		return 0
+	}
+	return 10
+}
+
 func main() {
 	runTest := func(testName string, test func() int) {
 		println(testName+":", test())
@@ -121,4 +137,5 @@ func main() {
 	runTest("Test7", Test7)
 	runTest("Test8", Test8)
 	runTest("Test9", Test9)
+	runTest("Test10", Test10)
 }

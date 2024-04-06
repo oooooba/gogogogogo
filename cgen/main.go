@@ -79,6 +79,8 @@ func encode(str string) string {
 	for _, c := range str {
 		s := ""
 		switch c {
+		case ' ':
+			s = "_20_"
 		case '#':
 			s = "_23_"
 		case '$':
@@ -89,18 +91,30 @@ func encode(str string) string {
 			s = "_29_"
 		case '*':
 			s = "_2A_"
+		case ',':
+			s = "_2C_"
 		case '-':
 			s = "_2D_"
 		case '.':
 			s = "_2E_"
 		case '/':
 			s = "_2F_"
+		case ';':
+			s = "_3B_"
 		case '<':
 			s = "_3C_"
 		case '>':
 			s = "_3E_"
+		case '[':
+			s = "_5B_"
+		case ']':
+			s = "_5D_"
 		case '_':
 			s = "_5F_"
+		case '{':
+			s = "_7B_"
+		case '}':
+			s = "_7D_"
 		default:
 			s = string(c)
 		}
@@ -223,7 +237,7 @@ func createTypeName(typ types.Type) string {
 		case *types.Slice:
 			return fmt.Sprintf("Slice<%s>", f(t.Elem()))
 		case *types.Struct:
-			return fmt.Sprintf("Struct%p", t)
+			return fmt.Sprintf("Struct<%s>", typ.String())
 		case *types.Tuple:
 			name := "Tuple<"
 			for i := 0; i < t.Len(); i++ {
