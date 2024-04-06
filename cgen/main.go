@@ -79,16 +79,28 @@ func encode(str string) string {
 	for _, c := range str {
 		s := ""
 		switch c {
-		case '_':
-			s = "___"
-		case '$':
-			s = "_S_"
-		case '<':
-			s = "_lt_"
-		case '>':
-			s = "_gt_"
 		case '#':
-			s = "_H_"
+			s = "_23_"
+		case '$':
+			s = "_24_"
+		case '(':
+			s = "_28_"
+		case ')':
+			s = "_29_"
+		case '*':
+			s = "_2A_"
+		case '-':
+			s = "_2D_"
+		case '.':
+			s = "_2E_"
+		case '/':
+			s = "_2F_"
+		case '<':
+			s = "_3C_"
+		case '>':
+			s = "_3E_"
+		case '_':
+			s = "_5F_"
 		default:
 			s = string(c)
 		}
@@ -203,12 +215,7 @@ func createTypeName(typ types.Type) string {
 			v := f(t.Elem())
 			return fmt.Sprintf("Map<%s$%s>", k, v)
 		case *types.Named:
-			// handle "command-line-arguments." and package deliminator
-			s := typ.String()
-			s = strings.Replace(s, "-", "#", -1)
-			s = strings.Replace(s, ".", "#", -1)
-			s = strings.Replace(s, "/", "#", -1)
-			return fmt.Sprintf("Named<%s$%p>", s, typ.Underlying())
+			return fmt.Sprintf("Named<%s$%p>", typ.String(), typ.Underlying())
 		case *types.Pointer:
 			return fmt.Sprintf("Pointer<%s>", f(t.Elem()))
 		case *types.Signature:
@@ -1237,14 +1244,7 @@ func createBasicBlockName(basicBlock *ssa.BasicBlock) string {
 }
 
 func createFunctionName(function *ssa.Function) string {
-	funcName := function.RelString(nil)
-	funcName = strings.ReplaceAll(funcName, "(", "#")
-	funcName = strings.ReplaceAll(funcName, ")", "#")
-	funcName = strings.ReplaceAll(funcName, "-", "#")
-	funcName = strings.ReplaceAll(funcName, "*", "#")
-	funcName = strings.ReplaceAll(funcName, ".", "#")
-	funcName = strings.ReplaceAll(funcName, "/", "#")
-	return encode(fmt.Sprintf("f$%s", funcName))
+	return encode(fmt.Sprintf("f$%s", function.RelString(nil)))
 }
 
 func createPackageName(pkg *ssa.Package) string {
@@ -2700,7 +2700,7 @@ typedef struct {
 } StackFrameSchedule;
 DECLARE_RUNTIME_API(schedule, StackFrameSchedule);
 
-#define f_S_runtime_H_Gosched gox5_schedule
+#define f_24_runtime_2E_Gosched gox5_schedule
 
 typedef struct {
 	StackFrameCommon common;
