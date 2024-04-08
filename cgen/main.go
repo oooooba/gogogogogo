@@ -1220,9 +1220,9 @@ func createInstructionName(instruction ssa.Instruction) string {
 
 func createBasicBlockName(basicBlock *ssa.BasicBlock) string {
 	function := basicBlock.Parent()
-	functionName := function.Name()
+	functionName := function.RelString(nil)
 	packageName := createPackageName(function.Package())
-	return encode(fmt.Sprintf("b$%s$%s$%s$%p", basicBlock.String(), functionName, packageName, basicBlock))
+	return encode(fmt.Sprintf("b$%s$%s$%s", basicBlock.String(), functionName, packageName))
 }
 
 func createFunctionName(function *ssa.Function) string {
