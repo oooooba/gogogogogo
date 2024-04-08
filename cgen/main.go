@@ -1212,10 +1212,20 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 }
 
 func createInstructionName(instruction ssa.Instruction) string {
+	block := instruction.Block()
+	blockName := block.String()
+	index := func() int {
+		for i, instr := range block.Instrs {
+			if instr == instruction {
+				return i
+			}
+		}
+		panic(instruction)
+	}()
 	function := instruction.Parent()
-	functionName := function.Name()
+	functionName := function.RelString(nil)
 	packageName := createPackageName(function.Package())
-	return encode(fmt.Sprintf("i$%s$%s$%s$%p", instruction.Block().String(), functionName, packageName, instruction))
+	return encode(fmt.Sprintf("i$%d$%s$%s$%s", index, blockName, functionName, packageName))
 }
 
 func createBasicBlockName(basicBlock *ssa.BasicBlock) string {
