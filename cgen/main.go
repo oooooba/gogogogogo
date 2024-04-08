@@ -115,10 +115,10 @@ func createValueName(value ssa.Value) string {
 		panic(fmt.Sprintf("unreachable: val=%s, params=%v", val, val.Parent().Params))
 	} else if val, ok := value.(*ssa.Global); ok {
 		packageName := createPackageName(val.Package())
-		return encode(fmt.Sprintf("gv$%s$%s$%p", value.Name(), packageName, value))
+		return encode(fmt.Sprintf("gv$%s$%s", value.Name(), packageName))
 	} else {
 		parentName := value.Parent().Name()
-		return encode(fmt.Sprintf("v$%s$%s$%p", value.Name(), parentName, value))
+		return encode(fmt.Sprintf("v$%s$%s", value.Name(), parentName))
 	}
 }
 
