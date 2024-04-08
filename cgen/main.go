@@ -195,7 +195,7 @@ func createTypeName(typ types.Type) string {
 			v := f(t.Elem())
 			return fmt.Sprintf("Map<%s$%s>", k, v)
 		case *types.Named:
-			return fmt.Sprintf("Named<%s$%p>", typ.String(), typ.Underlying())
+			return fmt.Sprintf("Named<%s$%s>", typ.String(), f(typ.Underlying()))
 		case *types.Pointer:
 			return fmt.Sprintf("Pointer<%s>", f(t.Elem()))
 		case *types.Signature:
