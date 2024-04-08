@@ -77,48 +77,14 @@ func extractTestTargetFunctions(f *ssa.Function) []*ssa.Function {
 func encode(str string) string {
 	buf := ""
 	for _, c := range str {
-		s := ""
-		switch c {
-		case ' ':
-			s = "_20_"
-		case '#':
-			s = "_23_"
-		case '$':
-			s = "_24_"
-		case '(':
-			s = "_28_"
-		case ')':
-			s = "_29_"
-		case '*':
-			s = "_2A_"
-		case ',':
-			s = "_2C_"
-		case '-':
-			s = "_2D_"
-		case '.':
-			s = "_2E_"
-		case '/':
-			s = "_2F_"
-		case ';':
-			s = "_3B_"
-		case '<':
-			s = "_3C_"
-		case '>':
-			s = "_3E_"
-		case '[':
-			s = "_5B_"
-		case ']':
-			s = "_5D_"
-		case '_':
-			s = "_5F_"
-		case '{':
-			s = "_7B_"
-		case '}':
-			s = "_7D_"
-		default:
-			s = string(c)
+		if c >= 0x80 {
+			panic(str)
 		}
-		buf += s
+		if ('a' <= c && c <= 'z') || ('A' <= c && c <= 'Z') || ('0' <= c && c <= '9') {
+			buf += string(c)
+		} else {
+			buf += fmt.Sprintf("_%02X_", c)
+		}
 	}
 	return buf
 }
@@ -137,7 +103,7 @@ func wrapInTypeId(typ types.Type) string {
 
 func createValueName(value ssa.Value) string {
 	if _, ok := value.(*ssa.Const); ok {
-		return encode(fmt.Sprintf("c$%p", value))
+		return encode(fmt.Sprintf("c$%s", strconv.QuoteToASCII(value.String())))
 	} else if val, ok := value.(*ssa.Function); ok {
 		return wrapInObject(createFunctionName(val), val.Type())
 	} else if val, ok := value.(*ssa.Parameter); ok {
@@ -1746,14 +1712,15 @@ func (ctx *Context) emitTypeInfo() {
 }
 
 func (ctx *Context) emitConstant() {
-	foundConstValueSet := make(map[*ssa.Const]struct{})
+	foundConstValueSet := make(map[string]struct{})
 	ctx.visitAllFunctions(ctx.program, func(function *ssa.Function) {
 		ctx.visitValue(function, func(value ssa.Value) {
 			if cst, ok := value.(*ssa.Const); ok {
-				if _, ok := foundConstValueSet[cst]; ok {
+				valueName := createValueName(cst)
+				if _, ok := foundConstValueSet[valueName]; ok {
 					return
 				}
-				foundConstValueSet[cst] = struct{}{}
+				foundConstValueSet[valueName] = struct{}{}
 
 				inner := "0"
 				if !cst.IsNil() {
@@ -1782,8 +1749,7 @@ func (ctx *Context) emitConstant() {
 				}
 
 				typeName := createTypeName(cst.Type())
-				valueName := createValueName(cst)
-				fmt.Fprintf(ctx.stream, "__attribute__((unused)) static const %s %s = %s;\n", typeName, valueName, value)
+				fmt.Fprintf(ctx.stream, "__attribute__((unused)) static const %s %s = %s; // %s\n", typeName, valueName, value, cst)
 			}
 		})
 	})
