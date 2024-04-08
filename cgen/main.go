@@ -263,12 +263,12 @@ func createTypeIdName(typ types.Type) string {
 	return fmt.Sprintf("runtime_info_type_%s", createTypeName(typ))
 }
 
-func createFieldName(field *types.Var) string {
+func createFieldName(field *types.Var, index int) string {
 	rawFieldName := field.Name()
 	disallowedWords := []string{"_", "signed"} // ToDo: add C keywords
 	for _, disallowedWord := range disallowedWords {
 		if rawFieldName == disallowedWord {
-			return fmt.Sprintf("%s_%p", rawFieldName, field)
+			return fmt.Sprintf("%s_%d", rawFieldName, index)
 		}
 	}
 	return rawFieldName
@@ -800,12 +800,14 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 		fmt.Fprintf(ctx.stream, "%s = %s.raw.e%d;\n", createValueRelName(instr), createValueRelName(instr.Tuple), instr.Index)
 
 	case *ssa.Field:
-		name := createFieldName(instr.X.Type().Underlying().(*types.Struct).Field(instr.Field))
+		index := instr.Field
+		name := createFieldName(instr.X.Type().Underlying().(*types.Struct).Field(index), index)
 		fmt.Fprintf(ctx.stream, "%s val = %s.%s;\n", createTypeName(instr.Type()), createValueRelName(instr.X), name)
 		fmt.Fprintf(ctx.stream, "%s = val;\n", createValueRelName(instr))
 
 	case *ssa.FieldAddr:
-		name := createFieldName(instr.X.Type().(*types.Pointer).Elem().Underlying().(*types.Struct).Field(instr.Field))
+		index := instr.Field
+		name := createFieldName(instr.X.Type().(*types.Pointer).Elem().Underlying().(*types.Struct).Field(index), index)
 		fmt.Fprintf(ctx.stream, "%s* raw = &(%s.raw->%s);\n", createTypeName(instr.Type().(*types.Pointer).Elem()), createValueRelName(instr.X), name)
 		fmt.Fprintf(ctx.stream, "%s = %s;\n", createValueRelName(instr), wrapInObject("raw", instr.Type()))
 
@@ -1635,7 +1637,7 @@ union %s { // %s
 			fmt.Fprintf(ctx.stream, "struct %s { // %s\n", name, typ)
 			for i := 0; i < typ.NumFields(); i++ {
 				field := typ.Field(i)
-				fieldName := createFieldName(field)
+				fieldName := createFieldName(field, i)
 				fmt.Fprintf(ctx.stream, "\t%s %s; // %s\n", createTypeName(field.Type()), fieldName, field)
 			}
 			fmt.Fprintf(ctx.stream, "};\n")
@@ -1828,7 +1830,7 @@ bool equal_Interface(const Interface* lhs, const Interface* rhs) {
 					if field.Name() == "_" {
 						continue
 					}
-					name := createFieldName(field)
+					name := createFieldName(field, i)
 					body += fmt.Sprintf("if (!equal_%s(&lhs->%s, &rhs->%s)) { return false; } // %s\n", createTypeName(field.Type()), name, name, field)
 				}
 				body += "return true;"
@@ -1886,7 +1888,7 @@ uintptr_t hash_Interface(const Interface* obj) {
 					if field.Name() == "_" {
 						continue
 					}
-					name := createFieldName(field)
+					name := createFieldName(field, i)
 					body += fmt.Sprintf("hash += hash_%s(&obj->%s); // %s\n", createTypeName(field.Type()), name, field)
 				}
 				body += "return hash;\n"
