@@ -56,22 +56,6 @@ type Context struct {
 	latestNameMap map[*ssa.BasicBlock]string
 }
 
-func extractTestTargetFunctions(f *ssa.Function) []*ssa.Function {
-	targets := make([]*ssa.Function, 0)
-	for _, instr := range f.Blocks[0].Instrs {
-		if callInstr, ok := instr.(*ssa.Call); ok {
-			callCommong := callInstr.Common()
-			for _, arg := range callCommong.Args {
-				if targetFunction, ok := arg.(*ssa.Function); ok {
-					targets = append(targets, targetFunction)
-					break
-				}
-			}
-		}
-	}
-	return targets
-}
-
 func encode(str string) string {
 	buf := ""
 	for _, c := range str {
