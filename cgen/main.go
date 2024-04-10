@@ -30,10 +30,9 @@ func main() {
 	prog.Build()
 
 	ctx := Context{
-		stream:           os.Stdout,
-		program:          prog,
-		latestNameMap:    make(map[*ssa.BasicBlock]string),
-		signatureNameSet: make(map[string]struct{}),
+		stream:        os.Stdout,
+		program:       prog,
+		latestNameMap: make(map[*ssa.BasicBlock]string),
 	}
 
 	if false {
@@ -52,10 +51,9 @@ func main() {
 }
 
 type Context struct {
-	stream           *os.File
-	program          *ssa.Program
-	latestNameMap    map[*ssa.BasicBlock]string
-	signatureNameSet map[string]struct{}
+	stream        *os.File
+	program       *ssa.Program
+	latestNameMap map[*ssa.BasicBlock]string
 }
 
 func extractTestTargetFunctions(f *ssa.Function) []*ssa.Function {
@@ -1318,45 +1316,6 @@ func createSignatureName(signature *types.Signature, makesReceiverBound bool, ma
 	return encode(name)
 }
 
-func (ctx *Context) tryEmitSignatureDefinition(signature *types.Signature, signatureName string, makesReceiverBound bool, makesReceiverInterface bool) {
-	_, ok := ctx.signatureNameSet[signatureName]
-	if ok {
-		return
-	}
-	ctx.signatureNameSet[signatureName] = struct{}{}
-
-	fmt.Fprintf(ctx.stream, "typedef struct { /* %s */\n", signature)
-
-	switch signature.Results().Len() {
-	case 0:
-		// do nothing
-	case 1:
-		fmt.Fprintf(ctx.stream, "\t%s* result_ptr;\n", createTypeName(signature.Results().At(0).Type()))
-	default:
-		fmt.Fprintf(ctx.stream, "\t%s* result_ptr;\n", createTypeName(signature.Results()))
-	}
-
-	base := 0
-	if signature.Recv() != nil && !makesReceiverBound {
-		id := fmt.Sprintf("param%d", base)
-		var typeName string
-		if makesReceiverInterface {
-			typeName = "void*"
-		} else {
-			typeName = createTypeName(signature.Recv().Type())
-		}
-		fmt.Fprintf(ctx.stream, "\t%s %s; // receiver: %s\n", typeName, id, signature.Recv().String())
-		base++
-	}
-
-	for i := 0; i < signature.Params().Len(); i++ {
-		id := fmt.Sprintf("param%d", base+i)
-		fmt.Fprintf(ctx.stream, "\t%s %s; // parameter[%d]: %s\n", createTypeName(signature.Params().At(i).Type()), id, i, signature.Params().At(i).String())
-	}
-
-	fmt.Fprintf(ctx.stream, "} %s;\n", signatureName)
-}
-
 func (ctx *Context) emitFunctionHeader(name string, end string) {
 	fmt.Fprintf(ctx.stream, "FunctionObject %s (LightWeightThreadContext* ctx)%s\n", name, end)
 }
@@ -1672,16 +1631,56 @@ union %s { // %s
 }
 
 func (ctx *Context) emitSignature() {
+	signatureNameSet := make(map[string]struct{})
+	tryEmitSignatureDefinition := func(signature *types.Signature, signatureName string, makesReceiverBound bool, makesReceiverInterface bool) {
+		_, ok := signatureNameSet[signatureName]
+		if ok {
+			return
+		}
+		signatureNameSet[signatureName] = struct{}{}
+
+		fmt.Fprintf(ctx.stream, "typedef struct { /* %s */\n", signature)
+
+		switch signature.Results().Len() {
+		case 0:
+			// do nothing
+		case 1:
+			fmt.Fprintf(ctx.stream, "\t%s* result_ptr;\n", createTypeName(signature.Results().At(0).Type()))
+		default:
+			fmt.Fprintf(ctx.stream, "\t%s* result_ptr;\n", createTypeName(signature.Results()))
+		}
+
+		base := 0
+		if signature.Recv() != nil && !makesReceiverBound {
+			id := fmt.Sprintf("param%d", base)
+			var typeName string
+			if makesReceiverInterface {
+				typeName = "void*"
+			} else {
+				typeName = createTypeName(signature.Recv().Type())
+			}
+			fmt.Fprintf(ctx.stream, "\t%s %s; // receiver: %s\n", typeName, id, signature.Recv().String())
+			base++
+		}
+
+		for i := 0; i < signature.Params().Len(); i++ {
+			id := fmt.Sprintf("param%d", base+i)
+			fmt.Fprintf(ctx.stream, "\t%s %s; // parameter[%d]: %s\n", createTypeName(signature.Params().At(i).Type()), id, i, signature.Params().At(i).String())
+		}
+
+		fmt.Fprintf(ctx.stream, "} %s;\n", signatureName)
+	}
+
 	ctx.visitAllFunctions(ctx.program, func(function *ssa.Function) {
 		signature := function.Signature
 		concreteSignatureName := createSignatureName(signature, false, false)
-		ctx.tryEmitSignatureDefinition(signature, concreteSignatureName, false, false)
+		tryEmitSignatureDefinition(signature, concreteSignatureName, false, false)
 		if signature.Recv() != nil {
 			abstractSignatureName := createSignatureName(signature, false, true)
-			ctx.tryEmitSignatureDefinition(signature, abstractSignatureName, false, true)
+			tryEmitSignatureDefinition(signature, abstractSignatureName, false, true)
 
 			receiverBoundSignatureName := createSignatureName(signature, true, false)
-			ctx.tryEmitSignatureDefinition(signature, receiverBoundSignatureName, true, true)
+			tryEmitSignatureDefinition(signature, receiverBoundSignatureName, true, true)
 		}
 
 		for _, basicBlock := range function.Blocks {
@@ -1700,7 +1699,7 @@ func (ctx *Context) emitSignature() {
 				}
 				signature := callCommon.Signature()
 				signatureName := createSignatureName(signature, false, false)
-				ctx.tryEmitSignatureDefinition(signature, signatureName, false, false)
+				tryEmitSignatureDefinition(signature, signatureName, false, false)
 			}
 		}
 	})
