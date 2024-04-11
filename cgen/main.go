@@ -2349,8 +2349,7 @@ func (ctx *Context) visitValue(function *ssa.Function, procedure func(value ssa.
 	}
 }
 
-func (ctx *Context) emitProgram(program *ssa.Program) {
-	fmt.Fprintf(ctx.stream, `
+var predefined string = `
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdint.h>
@@ -2731,7 +2730,7 @@ FunctionObject gox5_search_method(Interface* interface, StringObject method_name
 
 __attribute__((unused)) static void builtin_print_float(double val) {
 	char buf[20];
-	int len = snprintf(buf, sizeof(buf) / sizeof(buf[0]), "%%+.6e", val);
+	int len = snprintf(buf, sizeof(buf) / sizeof(buf[0]), "%+.6e", val);
 	int len_e = 0;
 	for(int i = len - 1; i > 0; --i) {
 		char c = buf[i];
@@ -2747,9 +2746,12 @@ __attribute__((unused)) static void builtin_print_float(double val) {
 		assert(len > 0);
 		buf[len + 1] = '0';
 	}
-	fprintf(stderr, "%%s", buf);
+	fprintf(stderr, "%s", buf);
 }
-`)
+`
+
+func (ctx *Context) emitProgram(program *ssa.Program) {
+	fmt.Fprintln(ctx.stream, predefined)
 
 	ctx.emitComplexNumberBuiltinFunctions()
 
