@@ -3,9 +3,18 @@ use std::slice;
 
 use crate::ObjectAllocator;
 
-#[derive(Clone, PartialEq, Eq, Debug)]
+#[derive(Clone, Eq, Debug)]
 #[repr(C)]
 pub struct StringObject(*const u8);
+
+impl PartialEq for StringObject {
+    #[allow(clippy::unconditional_recursion)]
+    fn eq(&self, other: &Self) -> bool {
+        let lhs = unsafe { ffi::CStr::from_ptr(self.0 as *const libc::c_char) };
+        let rhs = unsafe { ffi::CStr::from_ptr(other.0 as *const libc::c_char) };
+        lhs == rhs
+    }
+}
 
 impl StringObject {
     fn new(p: *const u8) -> Self {
