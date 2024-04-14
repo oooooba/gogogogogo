@@ -1941,7 +1941,12 @@ func (ctx *Context) emitInterfaceTable() {
 	})
 }
 
-func (ctx *Context) emitGlobalVariable(gv *ssa.Global) {
+func (ctx *Context) emitGlobalVariableDeclaration(gv *ssa.Global) {
+	name := createValueName(gv)
+	fmt.Fprintf(ctx.stream, "extern %s %s;\n", createTypeName(gv.Type().(*types.Pointer).Elem()), name)
+}
+
+func (ctx *Context) emitGlobalVariableDefinition(gv *ssa.Global) {
 	name := createValueName(gv)
 	fmt.Fprintf(ctx.stream, "%s %s;\n", createTypeName(gv.Type().(*types.Pointer).Elem()), name)
 }
@@ -2767,15 +2772,6 @@ func (ctx *Context) emitProgram(program *ssa.Program) {
 	ctx.emitTypeInfo()
 	ctx.emitConstant()
 
-	for _, pkg := range program.AllPackages() {
-		for member := range pkg.Members {
-			gv, ok := pkg.Members[member].(*ssa.Global)
-			if !ok {
-				continue
-			}
-			ctx.emitGlobalVariable(gv)
-		}
-	}
 
 	ctx.visitAllFunctions(program, func(function *ssa.Function) {
 		if function.Blocks != nil {
@@ -2824,6 +2820,16 @@ func emitProgram(program *ssa.Program, buildDirname string) {
 		ctx.visitAllFunctions(program, func(function *ssa.Function) {
 			ctx.emitFunctionDeclaration(function)
 		})
+
+		// Todo: replace `[]*ssa.Package{findMainPackage(program)}` to `program.AllPackages()`
+		for _, pkg := range []*ssa.Package{findMainPackage(program)} {
+			for member := range pkg.Members {
+				switch member := pkg.Members[member].(type) {
+				case *ssa.Global:
+					ctx.emitGlobalVariableDeclaration(member)
+				}
+			}
+		}
 	}
 
 	// Todo: replace `[]*ssa.Package{findMainPackage(program)}` to `program.AllPackages()`
@@ -2843,5 +2849,12 @@ func emitProgram(program *ssa.Program, buildDirname string) {
 		}
 
 		fmt.Fprintln(ctx.stream, "#include \"shared_declaration.h\"")
+
+		for member := range pkg.Members {
+			switch member := pkg.Members[member].(type) {
+			case *ssa.Global:
+				ctx.emitGlobalVariableDefinition(member)
+			}
+		}
 	}
 }
