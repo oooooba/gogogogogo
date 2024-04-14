@@ -55,6 +55,8 @@ func main() {
 		})
 	}
 
+	emitProgram(prog, *buildDirname)
+
 	ctx.emitProgram(prog)
 }
 
@@ -2795,4 +2797,25 @@ func (ctx *Context) emitProgram(program *ssa.Program) {
 	})
 
 	ctx.emitRuntimeInfo()
+}
+
+func emitProgram(program *ssa.Program, buildDirname string) {
+	// Todo: replace `[]*ssa.Package{findMainPackage(program)}` to `program.AllPackages()`
+	for _, pkg := range []*ssa.Package{findMainPackage(program)} {
+		outputName := fmt.Sprintf("package_%s.c", createPackageName(pkg))
+		outputPath := fmt.Sprintf("%s/%s", buildDirname, outputName)
+		f, err := os.Create(outputPath)
+		if err != nil {
+			panic(err)
+		}
+		defer f.Close()
+
+		ctx := Context{
+			stream:        f,
+			program:       program,
+			latestNameMap: make(map[*ssa.BasicBlock]string),
+		}
+
+		fmt.Fprintln(ctx.stream, predefined)
+	}
 }
