@@ -1697,7 +1697,13 @@ func (ctx *Context) emitSignature() {
 	})
 }
 
-func (ctx *Context) emitTypeInfo() {
+func (ctx *Context) emitTypeInfoDeclaration() {
+	ctx.visitAllTypes(ctx.program, func(typ types.Type) {
+		fmt.Fprintf(ctx.stream, "extern const TypeInfo %s;\n", createTypeIdName(typ))
+	})
+}
+
+func (ctx *Context) emitTypeInfoDefinition() {
 	ctx.visitAllTypes(ctx.program, func(typ types.Type) {
 		interfaceTableName := fmt.Sprintf("interfaceTable_%s", createTypeName(typ))
 		numMethods := fmt.Sprintf("sizeof(%s.entries)/sizeof(%s.entries[0])", interfaceTableName, interfaceTableName)
@@ -2796,7 +2802,7 @@ func (ctx *Context) emitProgram(program *ssa.Program) {
 	ctx.emitEqualFunctionDefinition()
 	ctx.emitHashFunctionDefinition()
 	ctx.emitInterfaceTableDefinition()
-	ctx.emitTypeInfo()
+	ctx.emitTypeInfoDefinition()
 	ctx.emitConstant()
 
 
@@ -2849,6 +2855,7 @@ func emitProgram(program *ssa.Program, buildDirname string) {
 		})
 
 		ctx.emitInterfaceTableDeclaration()
+		ctx.emitTypeInfoDeclaration()
 
 		// Todo: replace `[]*ssa.Package{findMainPackage(program)}` to `program.AllPackages()`
 		for _, pkg := range []*ssa.Package{findMainPackage(program)} {
