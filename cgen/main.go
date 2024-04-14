@@ -2163,44 +2163,58 @@ func (ctx *Context) visitAllTypes(program *ssa.Program, procedure func(typ types
 		f(typ)
 	}
 
-	for _, pkg := range program.AllPackages() {
-		for member := range pkg.Members {
-			switch member := pkg.Members[member].(type) {
-			case *ssa.Type:
-				f(member.Type())
-
-			case *ssa.Global:
-				f(member.Type())
-			}
-		}
-	}
-
-	var g func(function *ssa.Function)
-	g = func(function *ssa.Function) {
+	var handleFunction func(function *ssa.Function)
+	handleFunction = func(function *ssa.Function) {
 		sig := function.Signature
 		if sig.Recv() != nil {
 			f(sig.Recv().Type())
 		}
 		f(sig.Params())
 		f(sig.Results())
-	}
 
-	ctx.visitAllFunctions(ctx.program, func(function *ssa.Function) {
-		g(function)
-	})
-
-	ctx.visitAllFunctions(ctx.program, func(function *ssa.Function) {
-		if function.Blocks == nil {
-			return
-		}
-		for _, basicBlock := range function.Blocks {
-			for _, instr := range basicBlock.Instrs {
-				if value, ok := instr.(ssa.Value); ok {
-					f(value.Type())
+		if function.Blocks != nil {
+			for _, basicBlock := range function.Blocks {
+				for _, instr := range basicBlock.Instrs {
+					if value, ok := instr.(ssa.Value); ok {
+						f(value.Type())
+					}
 				}
 			}
 		}
-	})
+
+		for _, anonFunc := range function.AnonFuncs {
+			handleFunction(anonFunc)
+		}
+	}
+
+	traverseMethodSet := func(t types.Type) {
+		methodSet := program.MethodSets.MethodSet(t)
+		for i := 0; i < methodSet.Len(); i++ {
+			function := program.MethodValue(methodSet.At(i))
+			if function == nil {
+				continue
+			}
+			handleFunction(function)
+		}
+	}
+
+	for _, pkg := range program.AllPackages() {
+		for member := range pkg.Members {
+			switch member := pkg.Members[member].(type) {
+			case *ssa.Function:
+				handleFunction(member)
+
+			case *ssa.Global:
+				f(member.Type())
+
+			case *ssa.Type:
+				t := member.Type()
+				f(t)
+				traverseMethodSet(t)
+				traverseMethodSet(types.NewPointer(t))
+			}
+		}
+	}
 }
 
 func (ctx *Context) visitValue(function *ssa.Function, procedure func(value ssa.Value)) {
