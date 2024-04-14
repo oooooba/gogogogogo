@@ -1385,12 +1385,10 @@ func (ctx *Context) emitFunctionDeclaration(function *ssa.Function) {
 	for _, basicBlock := range function.Blocks {
 		name := createBasicBlockName(basicBlock)
 		ctx.emitFunctionHeader(name, ";")
-		ctx.latestNameMap[basicBlock] = name
 		for _, instr := range basicBlock.Instrs {
 			if requireSwitchFunction(instr) {
-				continuation_name := createInstructionName(instr)
-				ctx.emitFunctionHeader(continuation_name, ";")
-				ctx.latestNameMap[basicBlock] = continuation_name
+				continuationName := createInstructionName(instr)
+				ctx.emitFunctionHeader(continuationName, ";")
 			}
 		}
 	}
@@ -2761,18 +2759,7 @@ __attribute__((unused)) static void builtin_print_float(double val) {
 `
 
 func (ctx *Context) emitProgram(program *ssa.Program) {
-	fmt.Fprintln(ctx.stream, predefined)
-
-	ctx.emitComplexNumberBuiltinFunctions()
-
-	ctx.emitType()
-	ctx.emitSignature()
-	ctx.emitEqualFunctionDeclaration()
-	ctx.emitHashFunctionDeclaration()
-
-	ctx.visitAllFunctions(program, func(function *ssa.Function) {
-		ctx.emitFunctionDeclaration(function)
-	})
+	fmt.Fprintln(ctx.stream, "#include \"shared_declaration.h\"")
 
 	ctx.emitEqualFunctionDefinition()
 	ctx.emitHashFunctionDefinition()
@@ -2792,6 +2779,16 @@ func (ctx *Context) emitProgram(program *ssa.Program) {
 
 	ctx.visitAllFunctions(program, func(function *ssa.Function) {
 		if function.Blocks != nil {
+			for _, basicBlock := range function.Blocks {
+				name := createBasicBlockName(basicBlock)
+				ctx.latestNameMap[basicBlock] = name
+				for _, instr := range basicBlock.Instrs {
+					if requireSwitchFunction(instr) {
+						continuationName := createInstructionName(instr)
+						ctx.latestNameMap[basicBlock] = continuationName
+					}
+				}
+			}
 			ctx.emitFunctionDefinition(function)
 		}
 	})
@@ -2800,6 +2797,35 @@ func (ctx *Context) emitProgram(program *ssa.Program) {
 }
 
 func emitProgram(program *ssa.Program, buildDirname string) {
+	{
+		declarationName := "shared_declaration.h"
+		declarationPath := fmt.Sprintf("%s/%s", buildDirname, declarationName)
+		f, err := os.Create(declarationPath)
+		if err != nil {
+			panic(err)
+		}
+		defer f.Close()
+
+		ctx := Context{
+			stream:        f,
+			program:       program,
+			latestNameMap: make(map[*ssa.BasicBlock]string),
+		}
+
+		fmt.Fprintln(ctx.stream, predefined)
+
+		ctx.emitComplexNumberBuiltinFunctions()
+
+		ctx.emitType()
+		ctx.emitSignature()
+		ctx.emitEqualFunctionDeclaration()
+		ctx.emitHashFunctionDeclaration()
+
+		ctx.visitAllFunctions(program, func(function *ssa.Function) {
+			ctx.emitFunctionDeclaration(function)
+		})
+	}
+
 	// Todo: replace `[]*ssa.Package{findMainPackage(program)}` to `program.AllPackages()`
 	for _, pkg := range []*ssa.Package{findMainPackage(program)} {
 		outputName := fmt.Sprintf("package_%s.c", createPackageName(pkg))
@@ -2816,6 +2842,6 @@ func emitProgram(program *ssa.Program, buildDirname string) {
 			latestNameMap: make(map[*ssa.BasicBlock]string),
 		}
 
-		fmt.Fprintln(ctx.stream, predefined)
+		fmt.Fprintln(ctx.stream, "#include \"shared_declaration.h\"")
 	}
 }
