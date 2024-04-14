@@ -1906,7 +1906,7 @@ uintptr_t hash_Interface(const Interface* obj) {
 	})
 }
 
-func (ctx *Context) emitInterfaceTable() {
+func (ctx *Context) emitInterfaceTableDeclaration() {
 	mainPkg := findMainPackage(ctx.program)
 	allowSet := make(map[string]struct{})
 	for member := range mainPkg.Members {
@@ -1928,9 +1928,36 @@ func (ctx *Context) emitInterfaceTable() {
 				}
 			}
 		}
-		fmt.Fprintf(ctx.stream, "struct {\n")
-		fmt.Fprintf(ctx.stream, "\tInterfaceTableEntry entries[%d];\n", len(entryIndexes))
-		fmt.Fprintf(ctx.stream, "} interfaceTable_%s = {{\n", createTypeName(typ))
+		name := createTypeName(typ)
+		fmt.Fprintf(ctx.stream, "struct InterfaceTable_%s { InterfaceTableEntry entries[%d]; };\n", name, len(entryIndexes))
+		fmt.Fprintf(ctx.stream, "extern struct InterfaceTable_%s interfaceTable_%s;\n", name, name)
+	})
+}
+
+func (ctx *Context) emitInterfaceTableDefinition() {
+	mainPkg := findMainPackage(ctx.program)
+	allowSet := make(map[string]struct{})
+	for member := range mainPkg.Members {
+		typ, ok := mainPkg.Members[member].(*ssa.Type)
+		if !ok {
+			continue
+		}
+		t := typ.Type()
+		allowSet[createTypeName(types.NewPointer(t))] = struct{}{}
+	}
+	ctx.visitAllTypes(ctx.program, func(typ types.Type) {
+		methodSet := ctx.program.MethodSets.MethodSet(typ)
+		entryIndexes := make([]int, 0)
+		if _, ok := allowSet[createTypeName(typ)]; ok {
+			for i := 0; i < methodSet.Len(); i++ {
+				function := ctx.program.MethodValue(methodSet.At(i))
+				if function != nil {
+					entryIndexes = append(entryIndexes, i)
+				}
+			}
+		}
+		name := createTypeName(typ)
+		fmt.Fprintf(ctx.stream, "struct InterfaceTable_%s interfaceTable_%s = {{\n", name, name)
 		for _, index := range entryIndexes {
 			function := ctx.program.MethodValue(methodSet.At(index))
 			methodName := function.Name()
@@ -2768,7 +2795,7 @@ func (ctx *Context) emitProgram(program *ssa.Program) {
 
 	ctx.emitEqualFunctionDefinition()
 	ctx.emitHashFunctionDefinition()
-	ctx.emitInterfaceTable()
+	ctx.emitInterfaceTableDefinition()
 	ctx.emitTypeInfo()
 	ctx.emitConstant()
 
@@ -2820,6 +2847,8 @@ func emitProgram(program *ssa.Program, buildDirname string) {
 		ctx.visitAllFunctions(program, func(function *ssa.Function) {
 			ctx.emitFunctionDeclaration(function)
 		})
+
+		ctx.emitInterfaceTableDeclaration()
 
 		// Todo: replace `[]*ssa.Package{findMainPackage(program)}` to `program.AllPackages()`
 		for _, pkg := range []*ssa.Package{findMainPackage(program)} {
