@@ -30,21 +30,13 @@ func main() {
 	prog, _ := ssautil.AllPackages(initPkgs, ssa.SanityCheckFunctions)
 	prog.Build()
 
-	outputName := fmt.Sprintf("%s/out.c", *buildDirname)
-	output, err := os.Create(outputName)
-	if err != nil {
-		panic(nil)
-	}
-	defer output.Close()
-
-	ctx := Context{
-		stream:        output,
-		program:       prog,
-		latestNameMap: make(map[*ssa.BasicBlock]string),
-	}
-
 	if false {
 		var keywords []string
+		ctx := Context{
+			stream:        nil,
+			program:       prog,
+			latestNameMap: make(map[*ssa.BasicBlock]string),
+		}
 		ctx.visitAllFunctions(prog, func(function *ssa.Function) {
 			for _, keyword := range keywords {
 				if strings.Contains(function.Name(), keyword) {
@@ -56,8 +48,6 @@ func main() {
 	}
 
 	emitProgram(prog, *buildDirname)
-
-	ctx.emitProgram(prog)
 }
 
 type Context struct {
@@ -2784,16 +2774,6 @@ __attribute__((unused)) static void builtin_print_float(double val) {
 }
 `
 
-func (ctx *Context) emitProgram(program *ssa.Program) {
-	fmt.Fprintln(ctx.stream, "#include \"shared_declaration.h\"")
-
-	ctx.emitEqualFunctionDefinition()
-	ctx.emitHashFunctionDefinition()
-	ctx.emitInterfaceTableDefinition()
-	ctx.emitTypeInfoDefinition()
-	ctx.emitRuntimeInfo()
-}
-
 func (ctx *Context) emitPackage(pkg *ssa.Package) {
 	fmt.Fprintln(ctx.stream, "#include \"shared_declaration.h\"")
 
@@ -2899,6 +2879,30 @@ func emitProgram(program *ssa.Program, buildDirname string) {
 				}
 			}
 		}
+	}
+
+	{
+		definitionName := "shared_definition.c"
+		definitionPath := fmt.Sprintf("%s/%s", buildDirname, definitionName)
+		f, err := os.Create(definitionPath)
+		if err != nil {
+			panic(err)
+		}
+		defer f.Close()
+
+		ctx := Context{
+			stream:        f,
+			program:       program,
+			latestNameMap: make(map[*ssa.BasicBlock]string),
+		}
+
+		fmt.Fprintln(ctx.stream, "#include \"shared_declaration.h\"")
+
+		ctx.emitEqualFunctionDefinition()
+		ctx.emitHashFunctionDefinition()
+		ctx.emitInterfaceTableDefinition()
+		ctx.emitTypeInfoDefinition()
+		ctx.emitRuntimeInfo()
 	}
 
 	// Todo: replace `[]*ssa.Package{findMainPackage(program)}` to `program.AllPackages()`
