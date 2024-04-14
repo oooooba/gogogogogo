@@ -19,6 +19,7 @@ import (
 
 func main() {
 	filename := flag.String("i", "/dev/stdin", "input file")
+	buildDirname := flag.String("b", "/tmp", "build directory")
 	flag.Parse()
 
 	cfg := packages.Config{Mode: packages.LoadAllSyntax}
@@ -29,8 +30,15 @@ func main() {
 	prog, _ := ssautil.AllPackages(initPkgs, ssa.SanityCheckFunctions)
 	prog.Build()
 
+	outputName := fmt.Sprintf("%s/out.c", *buildDirname)
+	output, err := os.Create(outputName)
+	if err != nil {
+		panic(nil)
+	}
+	defer output.Close()
+
 	ctx := Context{
-		stream:        os.Stdout,
+		stream:        output,
 		program:       prog,
 		latestNameMap: make(map[*ssa.BasicBlock]string),
 	}
