@@ -1720,48 +1720,36 @@ func (ctx *Context) emitTypeInfoDefinition() {
 	})
 }
 
-func (ctx *Context) emitConstant() {
-	foundConstValueSet := make(map[string]struct{})
-	ctx.visitAllFunctions(ctx.program, func(function *ssa.Function) {
-		ctx.visitValue(function, func(value ssa.Value) {
-			if cst, ok := value.(*ssa.Const); ok {
-				valueName := createValueName(cst)
-				if _, ok := foundConstValueSet[valueName]; ok {
-					return
-				}
-				foundConstValueSet[valueName] = struct{}{}
-
-				inner := "0"
-				if !cst.IsNil() {
-					inner = cst.Value.String()
-					if t, ok := cst.Type().Underlying().(*types.Basic); ok {
-						switch t.Kind() {
-						case types.Complex64, types.Complex128, types.Float32, types.Float64:
-							inner = fmt.Sprintf("%g", cst.Complex128())
-						case types.Uint, types.Uint8, types.Uint16, types.Uint32, types.Uint64, types.Uintptr:
-							inner = fmt.Sprintf("%su", inner)
-						case types.Int, types.Int64:
-							inner = fmt.Sprintf("%slu", inner)
-						case types.String:
-							inner = strconv.Quote(constant.StringVal(cst.Value))
-						case types.UnsafePointer:
-							inner = fmt.Sprintf("(void*)%su", inner)
-						}
-					}
-				}
-
-				var value string
-				if t, ok := cst.Type().Underlying().(*types.Interface); ok {
-					value = fmt.Sprintf("(%s){%s}", createTypeName(t), inner)
-				} else {
-					value = wrapInObject(inner, cst.Type())
-				}
-
-				typeName := createTypeName(cst.Type())
-				fmt.Fprintf(ctx.stream, "__attribute__((unused)) static const %s %s = %s; // %s\n", typeName, valueName, value, cst)
+func (ctx *Context) emitConstant(cst *ssa.Const) {
+	inner := "0"
+	if !cst.IsNil() {
+		inner = cst.Value.String()
+		if t, ok := cst.Type().Underlying().(*types.Basic); ok {
+			switch t.Kind() {
+			case types.Complex64, types.Complex128, types.Float32, types.Float64:
+				inner = fmt.Sprintf("%g", cst.Complex128())
+			case types.Uint, types.Uint8, types.Uint16, types.Uint32, types.Uint64, types.Uintptr:
+				inner = fmt.Sprintf("%su", inner)
+			case types.Int, types.Int64:
+				inner = fmt.Sprintf("%slu", inner)
+			case types.String:
+				inner = strconv.Quote(constant.StringVal(cst.Value))
+			case types.UnsafePointer:
+				inner = fmt.Sprintf("(void*)%su", inner)
 			}
-		})
-	})
+		}
+	}
+
+	var value string
+	if t, ok := cst.Type().Underlying().(*types.Interface); ok {
+		value = fmt.Sprintf("(%s){%s}", createTypeName(t), inner)
+	} else {
+		value = wrapInObject(inner, cst.Type())
+	}
+
+	typeName := createTypeName(cst.Type())
+	valueName := createValueName(cst)
+	fmt.Fprintf(ctx.stream, "__attribute__((unused)) static const %s %s = %s; // %s\n", typeName, valueName, value, cst)
 }
 
 func (ctx *Context) emitEqualFunctionDeclaration() {
@@ -2803,25 +2791,6 @@ func (ctx *Context) emitProgram(program *ssa.Program) {
 	ctx.emitHashFunctionDefinition()
 	ctx.emitInterfaceTableDefinition()
 	ctx.emitTypeInfoDefinition()
-	ctx.emitConstant()
-
-
-	ctx.visitAllFunctions(program, func(function *ssa.Function) {
-		if function.Blocks != nil {
-			for _, basicBlock := range function.Blocks {
-				name := createBasicBlockName(basicBlock)
-				ctx.latestNameMap[basicBlock] = name
-				for _, instr := range basicBlock.Instrs {
-					if requireSwitchFunction(instr) {
-						continuationName := createInstructionName(instr)
-						ctx.latestNameMap[basicBlock] = continuationName
-					}
-				}
-			}
-			ctx.emitFunctionDefinition(function)
-		}
-	})
-
 	ctx.emitRuntimeInfo()
 }
 
@@ -2890,6 +2859,59 @@ func emitProgram(program *ssa.Program, buildDirname string) {
 			switch member := pkg.Members[member].(type) {
 			case *ssa.Global:
 				ctx.emitGlobalVariableDefinition(member)
+			}
+		}
+
+		foundConstValueSet := make(map[string]struct{})
+
+		var handleFunction func(function *ssa.Function)
+		handleFunction = func(function *ssa.Function) {
+			if function.Blocks != nil {
+				ctx.visitValue(function, func(value ssa.Value) {
+					if cst, ok := value.(*ssa.Const); ok {
+						valueName := createValueName(cst)
+						if _, ok := foundConstValueSet[valueName]; ok {
+							return
+						}
+						foundConstValueSet[valueName] = struct{}{}
+						ctx.emitConstant(cst)
+					}
+				})
+				for _, basicBlock := range function.Blocks {
+					name := createBasicBlockName(basicBlock)
+					ctx.latestNameMap[basicBlock] = name
+					for _, instr := range basicBlock.Instrs {
+						if requireSwitchFunction(instr) {
+							continuationName := createInstructionName(instr)
+							ctx.latestNameMap[basicBlock] = continuationName
+						}
+					}
+				}
+				ctx.emitFunctionDefinition(function)
+			}
+			for _, anonFunc := range function.AnonFuncs {
+				handleFunction(anonFunc)
+			}
+		}
+
+		for member := range pkg.Members {
+			switch member := pkg.Members[member].(type) {
+			case *ssa.Function:
+				handleFunction(member)
+			case *ssa.Type:
+				traverseMethodSet := func(t types.Type) {
+					methodSet := program.MethodSets.MethodSet(t)
+					for i := 0; i < methodSet.Len(); i++ {
+						function := program.MethodValue(methodSet.At(i))
+						if function == nil {
+							continue
+						}
+						handleFunction(function)
+					}
+				}
+				t := member.Type()
+				traverseMethodSet(t)
+				traverseMethodSet(types.NewPointer(t))
 			}
 		}
 	}
