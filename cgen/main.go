@@ -2794,6 +2794,70 @@ func (ctx *Context) emitProgram(program *ssa.Program) {
 	ctx.emitRuntimeInfo()
 }
 
+func (ctx *Context) emitPackage(pkg *ssa.Package) {
+	fmt.Fprintln(ctx.stream, "#include \"shared_declaration.h\"")
+
+	for member := range pkg.Members {
+		switch member := pkg.Members[member].(type) {
+		case *ssa.Global:
+			ctx.emitGlobalVariableDefinition(member)
+		}
+	}
+
+	foundConstValueSet := make(map[string]struct{})
+
+	var handleFunction func(function *ssa.Function)
+	handleFunction = func(function *ssa.Function) {
+		if function.Blocks != nil {
+			ctx.visitValue(function, func(value ssa.Value) {
+				if cst, ok := value.(*ssa.Const); ok {
+					valueName := createValueName(cst)
+					if _, ok := foundConstValueSet[valueName]; ok {
+						return
+					}
+					foundConstValueSet[valueName] = struct{}{}
+					ctx.emitConstant(cst)
+				}
+			})
+			for _, basicBlock := range function.Blocks {
+				name := createBasicBlockName(basicBlock)
+				ctx.latestNameMap[basicBlock] = name
+				for _, instr := range basicBlock.Instrs {
+					if requireSwitchFunction(instr) {
+						continuationName := createInstructionName(instr)
+						ctx.latestNameMap[basicBlock] = continuationName
+					}
+				}
+			}
+			ctx.emitFunctionDefinition(function)
+		}
+		for _, anonFunc := range function.AnonFuncs {
+			handleFunction(anonFunc)
+		}
+	}
+
+	for member := range pkg.Members {
+		switch member := pkg.Members[member].(type) {
+		case *ssa.Function:
+			handleFunction(member)
+		case *ssa.Type:
+			traverseMethodSet := func(t types.Type) {
+				methodSet := ctx.program.MethodSets.MethodSet(t)
+				for i := 0; i < methodSet.Len(); i++ {
+					function := ctx.program.MethodValue(methodSet.At(i))
+					if function == nil {
+						continue
+					}
+					handleFunction(function)
+				}
+			}
+			t := member.Type()
+			traverseMethodSet(t)
+			traverseMethodSet(types.NewPointer(t))
+		}
+	}
+}
+
 func emitProgram(program *ssa.Program, buildDirname string) {
 	{
 		declarationName := "shared_declaration.h"
@@ -2853,66 +2917,6 @@ func emitProgram(program *ssa.Program, buildDirname string) {
 			latestNameMap: make(map[*ssa.BasicBlock]string),
 		}
 
-		fmt.Fprintln(ctx.stream, "#include \"shared_declaration.h\"")
-
-		for member := range pkg.Members {
-			switch member := pkg.Members[member].(type) {
-			case *ssa.Global:
-				ctx.emitGlobalVariableDefinition(member)
-			}
-		}
-
-		foundConstValueSet := make(map[string]struct{})
-
-		var handleFunction func(function *ssa.Function)
-		handleFunction = func(function *ssa.Function) {
-			if function.Blocks != nil {
-				ctx.visitValue(function, func(value ssa.Value) {
-					if cst, ok := value.(*ssa.Const); ok {
-						valueName := createValueName(cst)
-						if _, ok := foundConstValueSet[valueName]; ok {
-							return
-						}
-						foundConstValueSet[valueName] = struct{}{}
-						ctx.emitConstant(cst)
-					}
-				})
-				for _, basicBlock := range function.Blocks {
-					name := createBasicBlockName(basicBlock)
-					ctx.latestNameMap[basicBlock] = name
-					for _, instr := range basicBlock.Instrs {
-						if requireSwitchFunction(instr) {
-							continuationName := createInstructionName(instr)
-							ctx.latestNameMap[basicBlock] = continuationName
-						}
-					}
-				}
-				ctx.emitFunctionDefinition(function)
-			}
-			for _, anonFunc := range function.AnonFuncs {
-				handleFunction(anonFunc)
-			}
-		}
-
-		for member := range pkg.Members {
-			switch member := pkg.Members[member].(type) {
-			case *ssa.Function:
-				handleFunction(member)
-			case *ssa.Type:
-				traverseMethodSet := func(t types.Type) {
-					methodSet := program.MethodSets.MethodSet(t)
-					for i := 0; i < methodSet.Len(); i++ {
-						function := program.MethodValue(methodSet.At(i))
-						if function == nil {
-							continue
-						}
-						handleFunction(function)
-					}
-				}
-				t := member.Type()
-				traverseMethodSet(t)
-				traverseMethodSet(types.NewPointer(t))
-			}
-		}
+		ctx.emitPackage(pkg)
 	}
 }
