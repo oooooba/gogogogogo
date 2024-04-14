@@ -2876,20 +2876,40 @@ func emitProgram(program *ssa.Program, buildDirname string) {
 		ctx.emitSignature()
 		ctx.emitEqualFunctionDeclaration()
 		ctx.emitHashFunctionDeclaration()
-
-		ctx.visitAllFunctions(program, func(function *ssa.Function) {
-			ctx.emitFunctionDeclaration(function)
-		})
-
 		ctx.emitInterfaceTableDeclaration()
 		ctx.emitTypeInfoDeclaration()
+
+		var handleFunction func(function *ssa.Function)
+		handleFunction = func(function *ssa.Function) {
+			ctx.emitFunctionDeclaration(function)
+			for _, anonFunc := range function.AnonFuncs {
+				handleFunction(anonFunc)
+			}
+		}
+
+		traverseMethodSet := func(t types.Type) {
+			methodSet := program.MethodSets.MethodSet(t)
+			for i := 0; i < methodSet.Len(); i++ {
+				function := program.MethodValue(methodSet.At(i))
+				if function == nil {
+					continue
+				}
+				ctx.emitFunctionDeclaration(function)
+			}
+		}
 
 		// Todo: replace `[]*ssa.Package{findMainPackage(program)}` to `program.AllPackages()`
 		for _, pkg := range []*ssa.Package{findMainPackage(program)} {
 			for member := range pkg.Members {
 				switch member := pkg.Members[member].(type) {
+				case *ssa.Function:
+					handleFunction(member)
 				case *ssa.Global:
 					ctx.emitGlobalVariableDeclaration(member)
+				case *ssa.Type:
+					t := member.Type()
+					traverseMethodSet(t)
+					traverseMethodSet(types.NewPointer(t))
 				}
 			}
 		}
