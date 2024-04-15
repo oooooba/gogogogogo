@@ -2163,16 +2163,28 @@ func (ctx *Context) visitAllTypes(program *ssa.Program, procedure func(typ types
 		f(typ)
 	}
 
-	var handleFunction func(function *ssa.Function)
-	handleFunction = func(function *ssa.Function) {
-		sig := function.Signature
-		if sig.Recv() != nil {
-			f(sig.Recv().Type())
+	for _, pkg := range program.AllPackages() {
+		for member := range pkg.Members {
+			switch member := pkg.Members[member].(type) {
+			case *ssa.Global:
+				f(member.Type())
+			case *ssa.Type:
+				f(member.Type())
+			}
 		}
-		f(sig.Params())
-		f(sig.Results())
 
-		if function.Blocks != nil {
+		ctx.traverseFunction(pkg, func(function *ssa.Function) {
+			sig := function.Signature
+			if sig.Recv() != nil {
+				f(sig.Recv().Type())
+			}
+			f(sig.Params())
+			f(sig.Results())
+
+			if function.Blocks == nil {
+				return
+			}
+
 			for _, basicBlock := range function.Blocks {
 				for _, instr := range basicBlock.Instrs {
 					if value, ok := instr.(ssa.Value); ok {
@@ -2180,40 +2192,7 @@ func (ctx *Context) visitAllTypes(program *ssa.Program, procedure func(typ types
 					}
 				}
 			}
-		}
-
-		for _, anonFunc := range function.AnonFuncs {
-			handleFunction(anonFunc)
-		}
-	}
-
-	traverseMethodSet := func(t types.Type) {
-		methodSet := program.MethodSets.MethodSet(t)
-		for i := 0; i < methodSet.Len(); i++ {
-			function := program.MethodValue(methodSet.At(i))
-			if function == nil {
-				continue
-			}
-			handleFunction(function)
-		}
-	}
-
-	for _, pkg := range program.AllPackages() {
-		for member := range pkg.Members {
-			switch member := pkg.Members[member].(type) {
-			case *ssa.Function:
-				handleFunction(member)
-
-			case *ssa.Global:
-				f(member.Type())
-
-			case *ssa.Type:
-				t := member.Type()
-				f(t)
-				traverseMethodSet(t)
-				traverseMethodSet(types.NewPointer(t))
-			}
-		}
+		})
 	}
 }
 
@@ -2383,6 +2362,38 @@ func (ctx *Context) visitValue(function *ssa.Function, procedure func(value ssa.
 				instr.Parent().WriteTo(os.Stderr)
 				panic(fmt.Sprintf("unknown value: %s : %T", instr.String(), instr))
 			}
+		}
+	}
+}
+
+func (ctx *Context) traverseFunction(pkg *ssa.Package, procedure func(function *ssa.Function)) {
+	var f func(function *ssa.Function)
+	f = func(function *ssa.Function) {
+		procedure(function)
+		for _, anonFunc := range function.AnonFuncs {
+			f(anonFunc)
+		}
+	}
+
+	g := func(t types.Type) {
+		methodSet := ctx.program.MethodSets.MethodSet(t)
+		for i := 0; i < methodSet.Len(); i++ {
+			function := ctx.program.MethodValue(methodSet.At(i))
+			if function == nil {
+				continue
+			}
+			f(function)
+		}
+	}
+
+	for member := range pkg.Members {
+		switch member := pkg.Members[member].(type) {
+		case *ssa.Function:
+			f(member)
+		case *ssa.Type:
+			t := member.Type()
+			g(t)
+			g(types.NewPointer(t))
 		}
 	}
 }
@@ -2799,57 +2810,32 @@ func (ctx *Context) emitPackage(pkg *ssa.Package) {
 	}
 
 	foundConstValueSet := make(map[string]struct{})
-
-	var handleFunction func(function *ssa.Function)
-	handleFunction = func(function *ssa.Function) {
-		if function.Blocks != nil {
-			ctx.visitValue(function, func(value ssa.Value) {
-				if cst, ok := value.(*ssa.Const); ok {
-					valueName := createValueName(cst)
-					if _, ok := foundConstValueSet[valueName]; ok {
-						return
-					}
-					foundConstValueSet[valueName] = struct{}{}
-					ctx.emitConstant(cst)
+	ctx.traverseFunction(pkg, func(function *ssa.Function) {
+		if function.Blocks == nil {
+			return
+		}
+		ctx.visitValue(function, func(value ssa.Value) {
+			if cst, ok := value.(*ssa.Const); ok {
+				valueName := createValueName(cst)
+				if _, ok := foundConstValueSet[valueName]; ok {
+					return
 				}
-			})
-			for _, basicBlock := range function.Blocks {
-				name := createBasicBlockName(basicBlock)
-				ctx.latestNameMap[basicBlock] = name
-				for _, instr := range basicBlock.Instrs {
-					if requireSwitchFunction(instr) {
-						continuationName := createInstructionName(instr)
-						ctx.latestNameMap[basicBlock] = continuationName
-					}
+				foundConstValueSet[valueName] = struct{}{}
+				ctx.emitConstant(cst)
+			}
+		})
+		for _, basicBlock := range function.Blocks {
+			name := createBasicBlockName(basicBlock)
+			ctx.latestNameMap[basicBlock] = name
+			for _, instr := range basicBlock.Instrs {
+				if requireSwitchFunction(instr) {
+					continuationName := createInstructionName(instr)
+					ctx.latestNameMap[basicBlock] = continuationName
 				}
 			}
-			ctx.emitFunctionDefinition(function)
 		}
-		for _, anonFunc := range function.AnonFuncs {
-			handleFunction(anonFunc)
-		}
-	}
-
-	for member := range pkg.Members {
-		switch member := pkg.Members[member].(type) {
-		case *ssa.Function:
-			handleFunction(member)
-		case *ssa.Type:
-			traverseMethodSet := func(t types.Type) {
-				methodSet := ctx.program.MethodSets.MethodSet(t)
-				for i := 0; i < methodSet.Len(); i++ {
-					function := ctx.program.MethodValue(methodSet.At(i))
-					if function == nil {
-						continue
-					}
-					handleFunction(function)
-				}
-			}
-			t := member.Type()
-			traverseMethodSet(t)
-			traverseMethodSet(types.NewPointer(t))
-		}
-	}
+		ctx.emitFunctionDefinition(function)
+	})
 }
 
 func emitProgram(program *ssa.Program, buildDirname string) {
@@ -2879,39 +2865,21 @@ func emitProgram(program *ssa.Program, buildDirname string) {
 		ctx.emitInterfaceTableDeclaration()
 		ctx.emitTypeInfoDeclaration()
 
-		var handleFunction func(function *ssa.Function)
-		handleFunction = func(function *ssa.Function) {
-			ctx.emitFunctionDeclaration(function)
-			for _, anonFunc := range function.AnonFuncs {
-				handleFunction(anonFunc)
-			}
-		}
-
-		traverseMethodSet := func(t types.Type) {
-			methodSet := program.MethodSets.MethodSet(t)
-			for i := 0; i < methodSet.Len(); i++ {
-				function := program.MethodValue(methodSet.At(i))
-				if function == nil {
-					continue
+		// Todo: replace `[]*ssa.Package{findMainPackage(program)}` to `program.AllPackages()`
+		for _, pkg := range []*ssa.Package{findMainPackage(program)} {
+			for member := range pkg.Members {
+				switch member := pkg.Members[member].(type) {
+				case *ssa.Global:
+					ctx.emitGlobalVariableDeclaration(member)
 				}
-				ctx.emitFunctionDeclaration(function)
 			}
 		}
 
 		// Todo: replace `[]*ssa.Package{findMainPackage(program)}` to `program.AllPackages()`
 		for _, pkg := range []*ssa.Package{findMainPackage(program)} {
-			for member := range pkg.Members {
-				switch member := pkg.Members[member].(type) {
-				case *ssa.Function:
-					handleFunction(member)
-				case *ssa.Global:
-					ctx.emitGlobalVariableDeclaration(member)
-				case *ssa.Type:
-					t := member.Type()
-					traverseMethodSet(t)
-					traverseMethodSet(types.NewPointer(t))
-				}
-			}
+			ctx.traverseFunction(pkg, func(function *ssa.Function) {
+				ctx.emitFunctionDeclaration(function)
+			})
 		}
 	}
 
