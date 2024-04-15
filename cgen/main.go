@@ -1963,27 +1963,11 @@ func (ctx *Context) emitGlobalVariableDefinition(gv *ssa.Global) {
 }
 
 func (ctx *Context) emitRuntimeInfo() {
-	fmt.Fprintln(ctx.stream, "Func runtime_info_funcs[] = {")
-	ctx.visitAllFunctions(ctx.program, func(function *ssa.Function) {
-		packageName := createPackageName(function.Pkg)
-		functionName := function.Name()
-		fmt.Fprintf(ctx.stream, "{ (StringObject){.raw = \"%s.%s\" }, (UserFunction){.func_ptr = %s} },\n", packageName, functionName, createFunctionName(function))
-	})
-	fmt.Fprintln(ctx.stream, "};")
-
 	mainPkg := findMainPackage(ctx.program)
 	mainFunctionName := createFunctionName(mainPkg.Members["main"].(*ssa.Function))
 	initFunctionName := createFunctionName(mainPkg.Members["init"].(*ssa.Function))
 
 	fmt.Fprintf(ctx.stream, `
-size_t runtime_info_get_funcs_count(void) {
-	return sizeof(runtime_info_funcs)/sizeof(runtime_info_funcs[0]);
-}
-
-const Func* runtime_info_refer_func(size_t i) {
-	return &runtime_info_funcs[i];
-}
-
 UserFunction runtime_info_get_entry_point(void) {
 	return (UserFunction) { .func_ptr = %s };
 }
@@ -2769,11 +2753,6 @@ typedef struct {
 	intptr_t high;
 } StackFrameStringSubstr;
 DECLARE_RUNTIME_API(string_substr, StackFrameStringSubstr);
-
-typedef struct {
-	StringObject name;
-	UserFunction function;
-} Func;
 
 FunctionObject gox5_search_method(Interface* interface, StringObject method_name);
 
