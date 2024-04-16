@@ -1693,21 +1693,19 @@ func (ctx *Context) emitTypeInfoDeclaration() {
 	})
 }
 
-func (ctx *Context) emitTypeInfoDefinition() {
-	ctx.visitAllTypes(ctx.program, func(typ types.Type) {
-		interfaceTableName := fmt.Sprintf("interfaceTable_%s", createTypeName(typ))
-		numMethods := fmt.Sprintf("sizeof(%s.entries)/sizeof(%s.entries[0])", interfaceTableName, interfaceTableName)
-		interfaceTable := fmt.Sprintf("&%s.entries[0]", interfaceTableName)
+func (ctx *Context) emitTypeInfoDefinition(typ types.Type) {
+	interfaceTableName := fmt.Sprintf("interfaceTable_%s", createTypeName(typ))
+	numMethods := fmt.Sprintf("sizeof(%s.entries)/sizeof(%s.entries[0])", interfaceTableName, interfaceTableName)
+	interfaceTable := fmt.Sprintf("&%s.entries[0]", interfaceTableName)
 
-		fmt.Fprintf(ctx.stream, "const TypeInfo %s = {\n", createTypeIdName(typ))
-		fmt.Fprintf(ctx.stream, ".name = \"%s\",\n", createTypeName(typ))
-		fmt.Fprintf(ctx.stream, ".num_methods = %s,\n", numMethods)
-		fmt.Fprintf(ctx.stream, ".interface_table = %s,\n", interfaceTable)
-		fmt.Fprintf(ctx.stream, ".is_equal = equal_%s,\n", createTypeName(typ))
-		fmt.Fprintf(ctx.stream, ".hash = hash_%s,\n", createTypeName(typ))
-		fmt.Fprintf(ctx.stream, ".size = sizeof(%s),\n", createTypeName(typ))
-		fmt.Fprintf(ctx.stream, "};\n")
-	})
+	fmt.Fprintf(ctx.stream, "const TypeInfo %s = {\n", createTypeIdName(typ))
+	fmt.Fprintf(ctx.stream, ".name = \"%s\",\n", createTypeName(typ))
+	fmt.Fprintf(ctx.stream, ".num_methods = %s,\n", numMethods)
+	fmt.Fprintf(ctx.stream, ".interface_table = %s,\n", interfaceTable)
+	fmt.Fprintf(ctx.stream, ".is_equal = equal_%s,\n", createTypeName(typ))
+	fmt.Fprintf(ctx.stream, ".hash = hash_%s,\n", createTypeName(typ))
+	fmt.Fprintf(ctx.stream, ".size = sizeof(%s),\n", createTypeName(typ))
+	fmt.Fprintf(ctx.stream, "};\n")
 }
 
 func (ctx *Context) emitConstant(cst *ssa.Const) {
@@ -2382,6 +2380,106 @@ func (ctx *Context) traverseFunction(pkg *ssa.Package, procedure func(function *
 	}
 }
 
+func (ctx *Context) traverseBasicType(procedure func(typ types.Type)) {
+	for _, typ := range types.Typ {
+		switch typ.Kind() {
+		case types.Invalid, types.UntypedBool, types.UntypedComplex, types.UntypedFloat, types.UntypedInt, types.UntypedNil, types.UntypedRune, types.UntypedString:
+			continue
+		}
+		procedure(typ)
+	}
+}
+
+func (ctx *Context) traverseType(pkg *ssa.Package, procedure func(typ types.Type)) {
+	foundTypeSet := make(map[string]struct{})
+	var f func(typ types.Type)
+	f = func(typ types.Type) {
+		name := createTypeName(typ)
+		_, ok := foundTypeSet[name]
+		if ok {
+			return
+		}
+		foundTypeSet[name] = struct{}{}
+
+		switch typ := typ.(type) {
+		case *types.Array:
+			f(typ.Elem())
+
+		case *types.Basic:
+			// handled in traverseBasicType
+			return
+
+		case *types.Chan:
+			f(typ.Elem())
+
+		case *types.Interface, *types.Signature:
+			// do nothing
+
+		case *types.Map:
+			f(typ.Key())
+			f(typ.Elem())
+
+		case *types.Named:
+			f(typ.Underlying())
+
+		case *types.Pointer:
+			f(typ.Elem())
+
+		case *types.Slice:
+			f(typ.Elem())
+
+		case *types.Struct:
+			for i := 0; i < typ.NumFields(); i++ {
+				f(typ.Field(i).Type())
+			}
+
+		case *types.Tuple:
+			for i := 0; i < typ.Len(); i++ {
+				f(typ.At(i).Type())
+			}
+
+		default:
+			if typ.String() == "iter" {
+				/// iterator of map or string
+				return
+			}
+			panic(fmt.Sprintf("not implemented: %s %T", typ, typ))
+		}
+
+		procedure(typ)
+	}
+
+	for member := range pkg.Members {
+		switch member := pkg.Members[member].(type) {
+		case *ssa.Global:
+			f(member.Type())
+		case *ssa.Type:
+			f(member.Type())
+		}
+	}
+
+	ctx.traverseFunction(pkg, func(function *ssa.Function) {
+		sig := function.Signature
+		if sig.Recv() != nil {
+			f(sig.Recv().Type())
+		}
+		f(sig.Params())
+		f(sig.Results())
+
+		if function.Blocks == nil {
+			return
+		}
+
+		for _, basicBlock := range function.Blocks {
+			for _, instr := range basicBlock.Instrs {
+				if value, ok := instr.(ssa.Value); ok {
+					f(value.Type())
+				}
+			}
+		}
+	})
+}
+
 var predefined string = `
 #include <stdbool.h>
 #include <stdio.h>
@@ -2781,6 +2879,10 @@ __attribute__((unused)) static void builtin_print_float(double val) {
 func (ctx *Context) emitPackage(pkg *ssa.Package) {
 	fmt.Fprintln(ctx.stream, "#include \"shared_declaration.h\"")
 
+	ctx.traverseType(pkg, func(typ types.Type) {
+		ctx.emitTypeInfoDefinition(typ)
+	})
+
 	for member := range pkg.Members {
 		switch member := pkg.Members[member].(type) {
 		case *ssa.Global:
@@ -2882,7 +2984,11 @@ func emitProgram(program *ssa.Program, buildDirname string) {
 		ctx.emitEqualFunctionDefinition()
 		ctx.emitHashFunctionDefinition()
 		ctx.emitInterfaceTableDefinition()
-		ctx.emitTypeInfoDefinition()
+
+		ctx.traverseBasicType(func(typ types.Type) {
+			ctx.emitTypeInfoDefinition(typ)
+		})
+
 		ctx.emitRuntimeInfo()
 	}
 
