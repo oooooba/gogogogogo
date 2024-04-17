@@ -1741,92 +1741,53 @@ func (ctx *Context) emitConstant(cst *ssa.Const) {
 }
 
 func (ctx *Context) emitEqualFunctionDeclaration() {
+	fmt.Fprintln(ctx.stream, "bool equal_MapObject(const MapObject* lhs, const MapObject* rhs);")
 	ctx.visitAllTypes(ctx.program, func(typ types.Type) {
 		typeName := createTypeName(typ)
 		fmt.Fprintf(ctx.stream, "bool equal_%s(const %s* lhs, const %s* rhs); // %s\n", typeName, typeName, typeName, typ)
 	})
 }
 
-func (ctx *Context) emitEqualFunctionDefinition() {
-	fmt.Fprintf(ctx.stream, `
-bool equal_MapObject(const MapObject* lhs, const MapObject* rhs) {
-	assert(lhs != NULL);
-	assert(rhs != NULL);
-	if(lhs->raw == rhs->raw) {
-		return true;
-	}
-	if((lhs->raw == NULL) || (rhs->raw == NULL)) {
-		return false;
-	}
-	assert(false); // ToDo: unimplemented
-	return false;
-}
-
-bool equal_Interface(const Interface* lhs, const Interface* rhs) {
-	assert(lhs!=NULL);
-	assert(rhs!=NULL);
-
-	if (lhs->type_id.info == NULL && rhs->type_id.info == NULL) {
-		return true;
-	}
-
-	if ((lhs->type_id.info == NULL) || (rhs->type_id.info == NULL)) {
-		return false;
-	}
-
-	if ((lhs->receiver == NULL) && (rhs->receiver == NULL)) {
-		return true;
-	}
-
-	if ((lhs->receiver == NULL) || (rhs->receiver == NULL)) {
-		return false;
-	}
-
-	bool (*f)(const void*, const void*) = lhs->type_id.info->is_equal;
-	return f(lhs->receiver, rhs->receiver);
-}
-`)
-	ctx.visitAllTypes(ctx.program, func(typ types.Type) {
-		typeName := createTypeName(typ)
-		underlyingType := typ.Underlying()
-		var body = ""
-		body += "\tassert(lhs != NULL);\n"
-		body += "\tassert(rhs != NULL);\n"
-		if typ == underlyingType {
-			switch t := typ.(type) {
-			case *types.Basic:
-				switch t.Kind() {
-				case types.Invalid:
-					body += "return true;\n"
-				case types.String:
-					body += "return strcmp(lhs->raw, rhs->raw) == 0;\n"
-				default:
-					body += "return lhs->raw == rhs->raw;\n"
-				}
-			case *types.Interface:
-				return
-			case *types.Map:
-				body += "return equal_MapObject(&lhs->raw, &rhs->raw);\n"
-			case *types.Struct:
-				for i := 0; i < t.NumFields(); i++ {
-					field := t.Field(i)
-					if field.Name() == "_" {
-						continue
-					}
-					name := createFieldName(field, i)
-					body += fmt.Sprintf("if (!equal_%s(&lhs->%s, &rhs->%s)) { return false; } // %s\n", createTypeName(field.Type()), name, name, field)
-				}
-				body += "return true;"
+func (ctx *Context) emitEqualFunctionDefinition(typ types.Type) {
+	typeName := createTypeName(typ)
+	underlyingType := typ.Underlying()
+	var body = ""
+	body += "\tassert(lhs != NULL);\n"
+	body += "\tassert(rhs != NULL);\n"
+	if typ == underlyingType {
+		switch t := typ.(type) {
+		case *types.Basic:
+			switch t.Kind() {
+			case types.Invalid:
+				body += "return true;\n"
+			case types.String:
+				body += "return strcmp(lhs->raw, rhs->raw) == 0;\n"
 			default:
-				body += "return memcmp(lhs, rhs, sizeof(*lhs)) == 0;"
+				body += "return lhs->raw == rhs->raw;\n"
 			}
-		} else {
-			body += fmt.Sprintf("return equal_%s(lhs, rhs);\n", createTypeName(underlyingType))
+		case *types.Interface:
+			panic(typ)
+		case *types.Map:
+			body += "return equal_MapObject(&lhs->raw, &rhs->raw);\n"
+		case *types.Struct:
+			for i := 0; i < t.NumFields(); i++ {
+				field := t.Field(i)
+				if field.Name() == "_" {
+					continue
+				}
+				name := createFieldName(field, i)
+				body += fmt.Sprintf("if (!equal_%s(&lhs->%s, &rhs->%s)) { return false; } // %s\n", createTypeName(field.Type()), name, name, field)
+			}
+			body += "return true;"
+		default:
+			body += "return memcmp(lhs, rhs, sizeof(*lhs)) == 0;"
 		}
-		fmt.Fprintf(ctx.stream, "bool equal_%s(const %s* lhs, const %s* rhs) { // %s\n", typeName, typeName, typeName, typ)
-		fmt.Fprintf(ctx.stream, "%s", body)
-		fmt.Fprintf(ctx.stream, "}\n")
-	})
+	} else {
+		body += fmt.Sprintf("return equal_%s(lhs, rhs);\n", createTypeName(underlyingType))
+	}
+	fmt.Fprintf(ctx.stream, "bool equal_%s(const %s* lhs, const %s* rhs) { // %s\n", typeName, typeName, typeName, typ)
+	fmt.Fprintf(ctx.stream, "%s", body)
+	fmt.Fprintf(ctx.stream, "}\n")
 }
 
 func (ctx *Context) emitHashFunctionDeclaration() {
@@ -2868,6 +2829,7 @@ func (ctx *Context) emitPackage(pkg *ssa.Package) {
 
 	ctx.traverseType(pkg, func(typ types.Type) {
 		if _, ok := typ.(*types.Interface); !ok {
+			ctx.emitEqualFunctionDefinition(typ)
 			ctx.emitHashFunctionDefinition(typ)
 		}
 		ctx.emitInterfaceTableDefinition(typ, allowSet)
@@ -2972,6 +2934,43 @@ func emitProgram(program *ssa.Program, buildDirname string) {
 
 		fmt.Fprintln(ctx.stream, "#include \"shared_declaration.h\"")
 		fmt.Fprintf(ctx.stream, `
+bool equal_MapObject(const MapObject* lhs, const MapObject* rhs) {
+	assert(lhs != NULL);
+	assert(rhs != NULL);
+	if(lhs->raw == rhs->raw) {
+		return true;
+	}
+	if((lhs->raw == NULL) || (rhs->raw == NULL)) {
+		return false;
+	}
+	assert(false); // ToDo: unimplemented
+	return false;
+}
+
+bool equal_Interface(const Interface* lhs, const Interface* rhs) {
+	assert(lhs!=NULL);
+	assert(rhs!=NULL);
+
+	if (lhs->type_id.info == NULL && rhs->type_id.info == NULL) {
+		return true;
+	}
+
+	if ((lhs->type_id.info == NULL) || (rhs->type_id.info == NULL)) {
+		return false;
+	}
+
+	if ((lhs->receiver == NULL) && (rhs->receiver == NULL)) {
+		return true;
+	}
+
+	if ((lhs->receiver == NULL) || (rhs->receiver == NULL)) {
+		return false;
+	}
+
+	bool (*f)(const void*, const void*) = lhs->type_id.info->is_equal;
+	return f(lhs->receiver, rhs->receiver);
+}
+
 uintptr_t hash_Interface(const Interface* obj) {
 	(void)obj;
 	assert(false); /// not implemented
@@ -2979,14 +2978,13 @@ uintptr_t hash_Interface(const Interface* obj) {
 }
 `)
 
-		ctx.emitEqualFunctionDefinition()
-
 		allowSet := make(map[string]struct{})
 		ctx.traverseBasicType(func(typ types.Type) {
 			allowSet[createTypeName(typ)] = struct{}{}
 		})
 
 		ctx.traverseBasicType(func(typ types.Type) {
+			ctx.emitEqualFunctionDefinition(typ)
 			ctx.emitHashFunctionDefinition(typ)
 			ctx.emitInterfaceTableDefinition(typ, allowSet)
 			ctx.emitTypeInfoDefinition(typ)
