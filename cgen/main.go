@@ -1916,38 +1916,26 @@ func (ctx *Context) emitInterfaceTableDeclaration() {
 	})
 }
 
-func (ctx *Context) emitInterfaceTableDefinition() {
-	mainPkg := findMainPackage(ctx.program)
-	allowSet := make(map[string]struct{})
-	for member := range mainPkg.Members {
-		typ, ok := mainPkg.Members[member].(*ssa.Type)
-		if !ok {
-			continue
-		}
-		t := typ.Type()
-		allowSet[createTypeName(types.NewPointer(t))] = struct{}{}
-	}
-	ctx.visitAllTypes(ctx.program, func(typ types.Type) {
-		methodSet := ctx.program.MethodSets.MethodSet(typ)
-		entryIndexes := make([]int, 0)
-		if _, ok := allowSet[createTypeName(typ)]; ok {
-			for i := 0; i < methodSet.Len(); i++ {
-				function := ctx.program.MethodValue(methodSet.At(i))
-				if function != nil {
-					entryIndexes = append(entryIndexes, i)
-				}
+func (ctx *Context) emitInterfaceTableDefinition(typ types.Type, allowSet map[string]struct{}) {
+	methodSet := ctx.program.MethodSets.MethodSet(typ)
+	entryIndexes := make([]int, 0)
+	if _, ok := allowSet[createTypeName(typ)]; ok {
+		for i := 0; i < methodSet.Len(); i++ {
+			function := ctx.program.MethodValue(methodSet.At(i))
+			if function != nil {
+				entryIndexes = append(entryIndexes, i)
 			}
 		}
-		name := createTypeName(typ)
-		fmt.Fprintf(ctx.stream, "struct InterfaceTable_%s interfaceTable_%s = {{\n", name, name)
-		for _, index := range entryIndexes {
-			function := ctx.program.MethodValue(methodSet.At(index))
-			methodName := function.Name()
-			method := wrapInFunctionObject(createFunctionName(function))
-			fmt.Fprintf(ctx.stream, "\t{\"%s\", %s},\n", methodName, method)
-		}
-		fmt.Fprintln(ctx.stream, "}};")
-	})
+	}
+	name := createTypeName(typ)
+	fmt.Fprintf(ctx.stream, "struct InterfaceTable_%s interfaceTable_%s = {{\n", name, name)
+	for _, index := range entryIndexes {
+		function := ctx.program.MethodValue(methodSet.At(index))
+		methodName := function.Name()
+		method := wrapInFunctionObject(createFunctionName(function))
+		fmt.Fprintf(ctx.stream, "\t{\"%s\", %s},\n", methodName, method)
+	}
+	fmt.Fprintln(ctx.stream, "}};")
 }
 
 func (ctx *Context) emitGlobalVariableDeclaration(gv *ssa.Global) {
@@ -2879,7 +2867,16 @@ __attribute__((unused)) static void builtin_print_float(double val) {
 func (ctx *Context) emitPackage(pkg *ssa.Package) {
 	fmt.Fprintln(ctx.stream, "#include \"shared_declaration.h\"")
 
+	allowSet := make(map[string]struct{})
+	for member := range pkg.Members {
+		if typ, ok := pkg.Members[member].(*ssa.Type); ok {
+			t := typ.Type()
+			allowSet[createTypeName(types.NewPointer(t))] = struct{}{}
+		}
+	}
+
 	ctx.traverseType(pkg, func(typ types.Type) {
+		ctx.emitInterfaceTableDefinition(typ, allowSet)
 		ctx.emitTypeInfoDefinition(typ)
 	})
 
@@ -2983,9 +2980,14 @@ func emitProgram(program *ssa.Program, buildDirname string) {
 
 		ctx.emitEqualFunctionDefinition()
 		ctx.emitHashFunctionDefinition()
-		ctx.emitInterfaceTableDefinition()
+
+		allowSet := make(map[string]struct{})
+		ctx.traverseBasicType(func(typ types.Type) {
+			allowSet[createTypeName(typ)] = struct{}{}
+		})
 
 		ctx.traverseBasicType(func(typ types.Type) {
+			ctx.emitInterfaceTableDefinition(typ, allowSet)
 			ctx.emitTypeInfoDefinition(typ)
 		})
 
