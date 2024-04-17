@@ -1836,56 +1836,47 @@ func (ctx *Context) emitHashFunctionDeclaration() {
 	})
 }
 
-func (ctx *Context) emitHashFunctionDefinition() {
-	fmt.Fprintf(ctx.stream, `
-uintptr_t hash_Interface(const Interface* obj) {
-	(void)obj;
-	assert(false); /// not implemented
-	return 0;
-}
-`)
-	ctx.visitAllTypes(ctx.program, func(typ types.Type) {
-		typeName := createTypeName(typ)
-		underlyingType := typ.Underlying()
-		var body = ""
-		body += "\tassert(obj != NULL);\n"
-		if typ == underlyingType {
-			switch t := typ.(type) {
-			case *types.Basic:
-				switch t.Kind() {
-				case types.Invalid, types.String:
-					body += "assert(false); /// not implemented\n"
-					body += "return 0;\n"
-				default:
-					body += "return (uintptr_t)obj->raw;\n"
-				}
-			case *types.Interface:
-				return
-			case *types.Map:
+func (ctx *Context) emitHashFunctionDefinition(typ types.Type) {
+	typeName := createTypeName(typ)
+	underlyingType := typ.Underlying()
+	var body = ""
+	body += "\tassert(obj != NULL);\n"
+	if typ == underlyingType {
+		switch t := typ.(type) {
+		case *types.Basic:
+			switch t.Kind() {
+			case types.Invalid, types.String:
 				body += "assert(false); /// not implemented\n"
 				body += "return 0;\n"
-			case *types.Struct:
-				body += "uintptr_t hash = 0;\n"
-				for i := 0; i < t.NumFields(); i++ {
-					field := t.Field(i)
-					if field.Name() == "_" {
-						continue
-					}
-					name := createFieldName(field, i)
-					body += fmt.Sprintf("hash += hash_%s(&obj->%s); // %s\n", createTypeName(field.Type()), name, field)
-				}
-				body += "return hash;\n"
 			default:
-				body += "assert(false); /// not implemented\n"
-				body += "return 0;\n"
+				body += "return (uintptr_t)obj->raw;\n"
 			}
-		} else {
-			body += fmt.Sprintf("return hash_%s(obj);\n", createTypeName(underlyingType))
+		case *types.Interface:
+			panic(typ)
+		case *types.Map:
+			body += "assert(false); /// not implemented\n"
+			body += "return 0;\n"
+		case *types.Struct:
+			body += "uintptr_t hash = 0;\n"
+			for i := 0; i < t.NumFields(); i++ {
+				field := t.Field(i)
+				if field.Name() == "_" {
+					continue
+				}
+				name := createFieldName(field, i)
+				body += fmt.Sprintf("hash += hash_%s(&obj->%s); // %s\n", createTypeName(field.Type()), name, field)
+			}
+			body += "return hash;\n"
+		default:
+			body += "assert(false); /// not implemented\n"
+			body += "return 0;\n"
 		}
-		fmt.Fprintf(ctx.stream, "uintptr_t hash_%s(const %s* obj) { // %s\n", typeName, typeName, typ)
-		fmt.Fprintf(ctx.stream, "%s", body)
-		fmt.Fprintf(ctx.stream, "}\n")
-	})
+	} else {
+		body += fmt.Sprintf("return hash_%s(obj);\n", createTypeName(underlyingType))
+	}
+	fmt.Fprintf(ctx.stream, "uintptr_t hash_%s(const %s* obj) { // %s\n", typeName, typeName, typ)
+	fmt.Fprintf(ctx.stream, "%s", body)
+	fmt.Fprintf(ctx.stream, "}\n")
 }
 
 func (ctx *Context) emitInterfaceTableDeclaration() {
@@ -2876,6 +2867,9 @@ func (ctx *Context) emitPackage(pkg *ssa.Package) {
 	}
 
 	ctx.traverseType(pkg, func(typ types.Type) {
+		if _, ok := typ.(*types.Interface); !ok {
+			ctx.emitHashFunctionDefinition(typ)
+		}
 		ctx.emitInterfaceTableDefinition(typ, allowSet)
 		ctx.emitTypeInfoDefinition(typ)
 	})
@@ -2977,9 +2971,15 @@ func emitProgram(program *ssa.Program, buildDirname string) {
 		}
 
 		fmt.Fprintln(ctx.stream, "#include \"shared_declaration.h\"")
+		fmt.Fprintf(ctx.stream, `
+uintptr_t hash_Interface(const Interface* obj) {
+	(void)obj;
+	assert(false); /// not implemented
+	return 0;
+}
+`)
 
 		ctx.emitEqualFunctionDefinition()
-		ctx.emitHashFunctionDefinition()
 
 		allowSet := make(map[string]struct{})
 		ctx.traverseBasicType(func(typ types.Type) {
@@ -2987,6 +2987,7 @@ func emitProgram(program *ssa.Program, buildDirname string) {
 		})
 
 		ctx.traverseBasicType(func(typ types.Type) {
+			ctx.emitHashFunctionDefinition(typ)
 			ctx.emitInterfaceTableDefinition(typ, allowSet)
 			ctx.emitTypeInfoDefinition(typ)
 		})
