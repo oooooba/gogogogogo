@@ -1687,10 +1687,8 @@ func (ctx *Context) emitSignature() {
 	})
 }
 
-func (ctx *Context) emitTypeInfoDeclaration() {
-	ctx.visitAllTypes(ctx.program, func(typ types.Type) {
-		fmt.Fprintf(ctx.stream, "extern const TypeInfo %s;\n", createTypeIdName(typ))
-	})
+func (ctx *Context) emitTypeInfoDeclaration(typ types.Type) {
+	fmt.Fprintf(ctx.stream, "extern const TypeInfo %s;\n", createTypeIdName(typ))
 }
 
 func (ctx *Context) emitTypeInfoDefinition(typ types.Type) {
@@ -2828,6 +2826,10 @@ func (ctx *Context) emitPackage(pkg *ssa.Package) {
 	}
 
 	ctx.traverseType(pkg, func(typ types.Type) {
+		ctx.emitTypeInfoDeclaration(typ)
+	})
+
+	ctx.traverseType(pkg, func(typ types.Type) {
 		if _, ok := typ.(*types.Interface); !ok {
 			ctx.emitEqualFunctionDefinition(typ)
 			ctx.emitHashFunctionDefinition(typ)
@@ -2897,7 +2899,10 @@ func emitProgram(program *ssa.Program, buildDirname string) {
 		ctx.emitEqualFunctionDeclaration()
 		ctx.emitHashFunctionDeclaration()
 		ctx.emitInterfaceTableDeclaration()
-		ctx.emitTypeInfoDeclaration()
+
+		ctx.traverseBasicType(func(typ types.Type) {
+			ctx.emitTypeInfoDeclaration(typ)
+		})
 
 		// Todo: replace `[]*ssa.Package{findMainPackage(program)}` to `program.AllPackages()`
 		for _, pkg := range []*ssa.Package{findMainPackage(program)} {
