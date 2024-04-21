@@ -1738,12 +1738,9 @@ func (ctx *Context) emitConstant(cst *ssa.Const) {
 	fmt.Fprintf(ctx.stream, "__attribute__((unused)) static const %s %s = %s; // %s\n", typeName, valueName, value, cst)
 }
 
-func (ctx *Context) emitEqualFunctionDeclaration() {
-	fmt.Fprintln(ctx.stream, "bool equal_MapObject(const MapObject* lhs, const MapObject* rhs);")
-	ctx.visitAllTypes(ctx.program, func(typ types.Type) {
-		typeName := createTypeName(typ)
-		fmt.Fprintf(ctx.stream, "bool equal_%s(const %s* lhs, const %s* rhs); // %s\n", typeName, typeName, typeName, typ)
-	})
+func (ctx *Context) emitEqualFunctionDeclaration(typ types.Type) {
+	typeName := createTypeName(typ)
+	fmt.Fprintf(ctx.stream, "bool equal_%s(const %s* lhs, const %s* rhs); // %s\n", typeName, typeName, typeName, typ)
 }
 
 func (ctx *Context) emitEqualFunctionDefinition(typ types.Type) {
@@ -2813,6 +2810,7 @@ func (ctx *Context) emitPackage(pkg *ssa.Package) {
 
 	ctx.traverseType(pkg, func(typ types.Type) {
 		if _, ok := typ.(*types.Interface); !ok {
+			ctx.emitEqualFunctionDeclaration(typ)
 			ctx.emitHashFunctionDeclaration(typ)
 		}
 		ctx.emitInterfaceTableDeclaration(typ, allowSet)
@@ -2885,12 +2883,13 @@ func emitProgram(program *ssa.Program, buildDirname string) {
 		ctx.emitComplexNumberBuiltinFunctions()
 
 		fmt.Fprintf(ctx.stream, `
+bool equal_MapObject(const MapObject* lhs, const MapObject* rhs);
+bool equal_Interface(const Interface* lhs, const Interface* rhs);
 uintptr_t hash_Interface(const Interface* obj);
 `)
 
 		ctx.emitType()
 		ctx.emitSignature()
-		ctx.emitEqualFunctionDeclaration()
 
 		allowSet := make(map[string]struct{})
 		ctx.traverseBasicType(func(typ types.Type) {
@@ -2898,6 +2897,7 @@ uintptr_t hash_Interface(const Interface* obj);
 		})
 
 		ctx.traverseBasicType(func(typ types.Type) {
+			ctx.emitEqualFunctionDeclaration(typ)
 			ctx.emitHashFunctionDeclaration(typ)
 			ctx.emitInterfaceTableDeclaration(typ, allowSet)
 			ctx.emitTypeInfoDeclaration(typ)
