@@ -1838,32 +1838,20 @@ func (ctx *Context) emitHashFunctionDefinition(typ types.Type) {
 	fmt.Fprintf(ctx.stream, "}\n")
 }
 
-func (ctx *Context) emitInterfaceTableDeclaration() {
-	mainPkg := findMainPackage(ctx.program)
-	allowSet := make(map[string]struct{})
-	for member := range mainPkg.Members {
-		typ, ok := mainPkg.Members[member].(*ssa.Type)
-		if !ok {
-			continue
-		}
-		t := typ.Type()
-		allowSet[createTypeName(types.NewPointer(t))] = struct{}{}
-	}
-	ctx.visitAllTypes(ctx.program, func(typ types.Type) {
-		methodSet := ctx.program.MethodSets.MethodSet(typ)
-		entryIndexes := make([]int, 0)
-		if _, ok := allowSet[createTypeName(typ)]; ok {
-			for i := 0; i < methodSet.Len(); i++ {
-				function := ctx.program.MethodValue(methodSet.At(i))
-				if function != nil {
-					entryIndexes = append(entryIndexes, i)
-				}
+func (ctx *Context) emitInterfaceTableDeclaration(typ types.Type, allowSet map[string]struct{}) {
+	methodSet := ctx.program.MethodSets.MethodSet(typ)
+	entryIndexes := make([]int, 0)
+	if _, ok := allowSet[createTypeName(typ)]; ok {
+		for i := 0; i < methodSet.Len(); i++ {
+			function := ctx.program.MethodValue(methodSet.At(i))
+			if function != nil {
+				entryIndexes = append(entryIndexes, i)
 			}
 		}
-		name := createTypeName(typ)
-		fmt.Fprintf(ctx.stream, "struct InterfaceTable_%s { InterfaceTableEntry entries[%d]; };\n", name, len(entryIndexes))
-		fmt.Fprintf(ctx.stream, "extern struct InterfaceTable_%s interfaceTable_%s;\n", name, name)
-	})
+	}
+	name := createTypeName(typ)
+	fmt.Fprintf(ctx.stream, "struct InterfaceTable_%s { InterfaceTableEntry entries[%d]; };\n", name, len(entryIndexes))
+	fmt.Fprintf(ctx.stream, "extern struct InterfaceTable_%s interfaceTable_%s;\n", name, name)
 }
 
 func (ctx *Context) emitInterfaceTableDefinition(typ types.Type, allowSet map[string]struct{}) {
@@ -2826,6 +2814,7 @@ func (ctx *Context) emitPackage(pkg *ssa.Package) {
 	}
 
 	ctx.traverseType(pkg, func(typ types.Type) {
+		ctx.emitInterfaceTableDeclaration(typ, allowSet)
 		ctx.emitTypeInfoDeclaration(typ)
 	})
 
@@ -2898,9 +2887,14 @@ func emitProgram(program *ssa.Program, buildDirname string) {
 		ctx.emitSignature()
 		ctx.emitEqualFunctionDeclaration()
 		ctx.emitHashFunctionDeclaration()
-		ctx.emitInterfaceTableDeclaration()
+
+		allowSet := make(map[string]struct{})
+		ctx.traverseBasicType(func(typ types.Type) {
+			allowSet[createTypeName(typ)] = struct{}{}
+		})
 
 		ctx.traverseBasicType(func(typ types.Type) {
+			ctx.emitInterfaceTableDeclaration(typ, allowSet)
 			ctx.emitTypeInfoDeclaration(typ)
 		})
 
