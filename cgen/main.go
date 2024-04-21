@@ -1367,21 +1367,6 @@ func (ctx *Context) emitFunctionDeclaration(function *ssa.Function) {
 	}
 
 	fmt.Fprintf(ctx.stream, "} StackFrame_%s;\n", createFunctionName(function))
-
-	if function.Blocks == nil {
-		return
-	}
-
-	for _, basicBlock := range function.Blocks {
-		name := createBasicBlockName(basicBlock)
-		ctx.emitFunctionHeader(name, ";")
-		for _, instr := range basicBlock.Instrs {
-			if requireSwitchFunction(instr) {
-				continuationName := createInstructionName(instr)
-				ctx.emitFunctionHeader(continuationName, ";")
-			}
-		}
-	}
 }
 
 func (ctx *Context) emitFunctionDefinitionPrologue(functionName string, frameName string, hasFreeVariables bool) {
@@ -2850,10 +2835,12 @@ func (ctx *Context) emitPackage(pkg *ssa.Package) {
 		})
 		for _, basicBlock := range function.Blocks {
 			name := createBasicBlockName(basicBlock)
+			ctx.emitFunctionHeader(name, ";")
 			ctx.latestNameMap[basicBlock] = name
 			for _, instr := range basicBlock.Instrs {
 				if requireSwitchFunction(instr) {
 					continuationName := createInstructionName(instr)
+					ctx.emitFunctionHeader(continuationName, ";")
 					ctx.latestNameMap[basicBlock] = continuationName
 				}
 			}
