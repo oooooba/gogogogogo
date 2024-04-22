@@ -2895,16 +2895,6 @@ uintptr_t hash_Interface(const Interface* obj);
 			ctx.emitInterfaceTableDeclaration(typ, allowSet)
 			ctx.emitTypeInfoDeclaration(typ)
 		})
-
-		// Todo: replace `[]*ssa.Package{findMainPackage(program)}` to `program.AllPackages()`
-		for _, pkg := range []*ssa.Package{findMainPackage(program)} {
-			for member := range pkg.Members {
-				switch member := pkg.Members[member].(type) {
-				case *ssa.Global:
-					ctx.emitGlobalVariableDeclaration(member)
-				}
-			}
-		}
 	}
 
 	{
