@@ -1438,7 +1438,8 @@ func (ctx *Context) emitFunctionDefinition(function *ssa.Function) {
 }
 
 func (ctx *Context) retrieveOrderedTypes() []types.Type {
-	orderedTypes := make([]types.Type, 0)
+	pointerTypes := make([]types.Type, 0)
+	nonPointerTypes := make([]types.Type, 0)
 
 	foundTypeSet := make(map[string]struct{})
 	var f func(typ types.Type)
@@ -1448,6 +1449,7 @@ func (ctx *Context) retrieveOrderedTypes() []types.Type {
 			return
 		}
 
+		isPointerType := false
 		switch typ := typ.(type) {
 		case *types.Array:
 			f(typ.Elem())
@@ -1471,6 +1473,7 @@ func (ctx *Context) retrieveOrderedTypes() []types.Type {
 			f(typ.Underlying())
 
 		case *types.Pointer: // do nothing (should not enter)
+			isPointerType = true
 
 		case *types.Signature: // do nothing
 
@@ -1491,74 +1494,69 @@ func (ctx *Context) retrieveOrderedTypes() []types.Type {
 		}
 
 		foundTypeSet[name] = struct{}{}
-		orderedTypes = append(orderedTypes, typ)
+		if isPointerType {
+			pointerTypes = append(pointerTypes, typ)
+		} else {
+			nonPointerTypes = append(nonPointerTypes, typ)
+		}
 	}
 
 	ctx.visitAllTypes(ctx.program, func(typ types.Type) {
 		f(typ)
 	})
 
-	return orderedTypes
+	return append(pointerTypes, nonPointerTypes...)
 }
 
-func (ctx *Context) emitType() {
-	orderedTypes := ctx.retrieveOrderedTypes()
+func (ctx *Context) emitTypeDeclaration(typ types.Type) {
+	name := createTypeName(typ)
+	switch typ := typ.(type) {
+	case *types.Array, *types.Chan, *types.Map, *types.Pointer, *types.Struct, *types.Tuple:
+		fmt.Fprintf(ctx.stream, "typedef struct %s %s; // %s\n", name, name, typ)
 
-	for _, typ := range orderedTypes {
-		name := createTypeName(typ)
-		switch typ := typ.(type) {
-		case *types.Array, *types.Chan, *types.Map, *types.Pointer, *types.Struct, *types.Tuple:
-			fmt.Fprintf(ctx.stream, "typedef struct %s %s; // %s\n", name, name, typ)
+	case *types.Basic, *types.Interface, *types.Signature:
+		// do nothing
 
-		case *types.Basic, *types.Interface, *types.Signature:
-			// do nothing
+	case *types.Named:
+		underlyingTypeName := createTypeName(typ.Underlying())
+		fmt.Fprintf(ctx.stream, "typedef %s %s; // %s\n", underlyingTypeName, name, typ)
 
-		case *types.Named:
-			underlyingTypeName := createTypeName(typ.Underlying())
-			fmt.Fprintf(ctx.stream, "typedef %s %s; // %s\n", underlyingTypeName, name, typ)
+	case *types.Slice:
+		fmt.Fprintf(ctx.stream, "typedef union %s %s; // %s\n", name, name, typ)
 
-		case *types.Slice:
-			fmt.Fprintf(ctx.stream, "typedef union %s %s; // %s\n", name, name, typ)
-
-		default:
-			if typ.String() == "iter" {
-				return
-			}
-
-			panic(fmt.Sprintf("not implemented: %s %T", typ, typ))
+	default:
+		if typ.String() == "iter" {
+			return
 		}
+
+		panic(fmt.Sprintf("not implemented: %s %T", typ, typ))
 	}
+}
 
-	// emit Pointer types first to handle self referential structures
-	for _, typ := range orderedTypes {
-		if t, ok := typ.(*types.Pointer); ok {
-			name := createTypeName(t)
-			elemType := t.Elem()
-			fmt.Fprintf(ctx.stream, "struct %s { // %s\n", name, typ)
-			fmt.Fprintf(ctx.stream, "\t%s* raw;\n", createTypeName(elemType))
-			fmt.Fprintf(ctx.stream, "};\n")
-		}
-	}
+func (ctx *Context) emitTypeDefinition(typ types.Type) {
+	name := createTypeName(typ)
+	switch typ := typ.(type) {
+	case *types.Array:
+		fmt.Fprintf(ctx.stream, "struct %s { // %s\n", name, typ)
+		fmt.Fprintf(ctx.stream, "\t%s raw[%d];\n", createTypeName(typ.Elem()), typ.Len())
+		fmt.Fprintf(ctx.stream, "};\n")
 
-	for _, typ := range orderedTypes {
-		name := createTypeName(typ)
-		switch typ := typ.(type) {
-		case *types.Array:
-			fmt.Fprintf(ctx.stream, "struct %s { // %s\n", name, typ)
-			fmt.Fprintf(ctx.stream, "\t%s raw[%d];\n", createTypeName(typ.Elem()), typ.Len())
-			fmt.Fprintf(ctx.stream, "};\n")
+	case *types.Basic, *types.Interface, *types.Named, *types.Signature:
+		// do nothing
 
-		case *types.Basic, *types.Interface, *types.Named, *types.Pointer, *types.Signature:
-			// do nothing
+	case *types.Chan:
+		fmt.Fprintf(ctx.stream, "struct %s { ChannelObject raw; }; // %s\n", name, typ)
 
-		case *types.Chan:
-			fmt.Fprintf(ctx.stream, "struct %s { ChannelObject raw; }; // %s\n", name, typ)
+	case *types.Map:
+		fmt.Fprintf(ctx.stream, "struct %s { MapObject raw; }; // %s\n", name, typ)
 
-		case *types.Map:
-			fmt.Fprintf(ctx.stream, "struct %s { MapObject raw; }; // %s\n", name, typ)
+	case *types.Pointer:
+		fmt.Fprintf(ctx.stream, "struct %s { // %s\n", name, typ)
+		fmt.Fprintf(ctx.stream, "\t%s* raw;\n", createTypeName(typ.Elem()))
+		fmt.Fprintf(ctx.stream, "};\n")
 
-		case *types.Slice:
-			fmt.Fprintf(ctx.stream, `
+	case *types.Slice:
+		fmt.Fprintf(ctx.stream, `
 union %s { // %s
 	SliceObject raw;
 	struct {
@@ -1569,31 +1567,30 @@ union %s { // %s
 };
 `, name, typ, createTypeName(typ.Elem()))
 
-		case *types.Struct:
-			fmt.Fprintf(ctx.stream, "struct %s { // %s\n", name, typ)
-			for i := 0; i < typ.NumFields(); i++ {
-				field := typ.Field(i)
-				fieldName := createFieldName(field, i)
-				fmt.Fprintf(ctx.stream, "\t%s %s; // %s\n", createTypeName(field.Type()), fieldName, field)
-			}
-			fmt.Fprintf(ctx.stream, "};\n")
-
-		case *types.Tuple:
-			fmt.Fprintf(ctx.stream, "struct %s { // %s\n", name, typ)
-			fmt.Fprintf(ctx.stream, "struct {\n")
-			for i := 0; i < typ.Len(); i++ {
-				fmt.Fprintf(ctx.stream, "\t%s e%d; // %s\n", createTypeName(typ.At(i).Type()), i, typ.At(i))
-			}
-			fmt.Fprintf(ctx.stream, "} raw;\n")
-			fmt.Fprintf(ctx.stream, "};\n")
-
-		default:
-			if typ.String() == "iter" {
-				return
-			}
-
-			panic(fmt.Sprintf("not implemented: %s %T", typ, typ))
+	case *types.Struct:
+		fmt.Fprintf(ctx.stream, "struct %s { // %s\n", name, typ)
+		for i := 0; i < typ.NumFields(); i++ {
+			field := typ.Field(i)
+			fieldName := createFieldName(field, i)
+			fmt.Fprintf(ctx.stream, "\t%s %s; // %s\n", createTypeName(field.Type()), fieldName, field)
 		}
+		fmt.Fprintf(ctx.stream, "};\n")
+
+	case *types.Tuple:
+		fmt.Fprintf(ctx.stream, "struct %s { // %s\n", name, typ)
+		fmt.Fprintf(ctx.stream, "struct {\n")
+		for i := 0; i < typ.Len(); i++ {
+			fmt.Fprintf(ctx.stream, "\t%s e%d; // %s\n", createTypeName(typ.At(i).Type()), i, typ.At(i))
+		}
+		fmt.Fprintf(ctx.stream, "} raw;\n")
+		fmt.Fprintf(ctx.stream, "};\n")
+
+	default:
+		if typ.String() == "iter" {
+			return
+		}
+
+		panic(fmt.Sprintf("not implemented: %s %T", typ, typ))
 	}
 }
 
@@ -2883,7 +2880,13 @@ bool equal_Interface(const Interface* lhs, const Interface* rhs);
 uintptr_t hash_Interface(const Interface* obj);
 `)
 
-		ctx.emitType()
+		orderedTypes := ctx.retrieveOrderedTypes()
+		for _, typ := range orderedTypes {
+			ctx.emitTypeDeclaration(typ)
+		}
+		for _, typ := range orderedTypes {
+			ctx.emitTypeDefinition(typ)
+		}
 
 		allowSet := make(map[string]struct{})
 		ctx.traverseBasicType(func(typ types.Type) {
