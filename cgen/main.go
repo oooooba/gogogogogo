@@ -37,14 +37,15 @@ func main() {
 			program:       prog,
 			latestNameMap: make(map[*ssa.BasicBlock]string),
 		}
-		ctx.visitAllFunctions(prog, func(function *ssa.Function) {
-			for _, keyword := range keywords {
-				if strings.Contains(function.Name(), keyword) {
-					function.WriteTo(os.Stderr)
-					break
+		for _, pkg := range prog.AllPackages() {
+			ctx.traverseFunction(pkg, func(function *ssa.Function) {
+				for _, keyword := range keywords {
+					if strings.Contains(function.Name(), keyword) {
+						function.WriteTo(os.Stderr)
+					}
 				}
-			}
-		})
+			})
+		}
 	}
 
 	emitProgram(prog, *buildDirname)
