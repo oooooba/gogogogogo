@@ -1346,7 +1346,7 @@ func (ctx *Context) emitFunctionDeclaration(function *ssa.Function) {
 			fmt.Fprintf(ctx.stream, "\t%s %s;\n", createTypeName(local.Type().(*types.Pointer).Elem()), id)
 		}
 
-		ctx.visitValue(function, func(value ssa.Value) {
+		ctx.traverseValue(function, func(value ssa.Value) {
 			switch value.(type) {
 			case *ssa.Builtin, *ssa.Const, *ssa.Global, *ssa.FreeVar, *ssa.Function, *ssa.Parameter:
 				return
@@ -1946,7 +1946,7 @@ func findMainPackage(program *ssa.Program) *ssa.Package {
 	panic("main package not found")
 }
 
-func (ctx *Context) visitValue(function *ssa.Function, procedure func(value ssa.Value)) {
+func (ctx *Context) traverseValue(function *ssa.Function, procedure func(value ssa.Value)) {
 	foundValueSet := make(map[ssa.Value]struct{})
 	var f func(value ssa.Value)
 	g := func(callCommon *ssa.CallCommon) {
@@ -2699,7 +2699,7 @@ func (ctx *Context) emitPackage(pkg *ssa.Package) {
 		if function.Blocks == nil {
 			return
 		}
-		ctx.visitValue(function, func(value ssa.Value) {
+		ctx.traverseValue(function, func(value ssa.Value) {
 			if cst, ok := value.(*ssa.Const); ok {
 				valueName := createValueName(cst)
 				if _, ok := foundConstValueSet[valueName]; ok {
