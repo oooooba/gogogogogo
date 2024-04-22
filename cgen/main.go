@@ -1871,6 +1871,8 @@ func (ctx *Context) emitRuntimeInfo() {
 	mainFunctionName := createFunctionName(mainPkg.Members["main"].(*ssa.Function))
 	initFunctionName := createFunctionName(mainPkg.Members["init"].(*ssa.Function))
 
+	ctx.emitFunctionHeader(mainFunctionName, ";")
+	ctx.emitFunctionHeader(initFunctionName, ";")
 	fmt.Fprintf(ctx.stream, `
 UserFunction runtime_info_get_entry_point(void) {
 	return (UserFunction) { .func_ptr = %s };
@@ -2802,6 +2804,10 @@ func (ctx *Context) emitPackage(pkg *ssa.Package) {
 		ctx.emitTypeInfoDeclaration(typ)
 	})
 
+	ctx.traverseFunction(pkg, func(function *ssa.Function) {
+		ctx.emitFunctionDeclaration(function)
+	})
+
 	ctx.traverseType(pkg, func(typ types.Type) {
 		if _, ok := typ.(*types.Interface); !ok {
 			ctx.emitEqualFunctionDefinition(typ)
@@ -2898,13 +2904,6 @@ uintptr_t hash_Interface(const Interface* obj);
 					ctx.emitGlobalVariableDeclaration(member)
 				}
 			}
-		}
-
-		// Todo: replace `[]*ssa.Package{findMainPackage(program)}` to `program.AllPackages()`
-		for _, pkg := range []*ssa.Package{findMainPackage(program)} {
-			ctx.traverseFunction(pkg, func(function *ssa.Function) {
-				ctx.emitFunctionDeclaration(function)
-			})
 		}
 	}
 
