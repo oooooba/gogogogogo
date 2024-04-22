@@ -1597,7 +1597,7 @@ union %s { // %s
 	}
 }
 
-func (ctx *Context) emitSignature() {
+func (ctx *Context) emitSignature(pkg *ssa.Package) {
 	signatureNameSet := make(map[string]struct{})
 	tryEmitSignatureDefinition := func(signature *types.Signature, signatureName string, makesReceiverBound bool, makesReceiverInterface bool) {
 		_, ok := signatureNameSet[signatureName]
@@ -1638,7 +1638,7 @@ func (ctx *Context) emitSignature() {
 		fmt.Fprintf(ctx.stream, "} %s;\n", signatureName)
 	}
 
-	ctx.visitAllFunctions(ctx.program, func(function *ssa.Function) {
+	ctx.traverseFunction(pkg, func(function *ssa.Function) {
 		signature := function.Signature
 		concreteSignatureName := createSignatureName(signature, false, false)
 		tryEmitSignatureDefinition(signature, concreteSignatureName, false, false)
@@ -2804,6 +2804,8 @@ func (ctx *Context) emitPackage(pkg *ssa.Package) {
 		ctx.emitTypeInfoDeclaration(typ)
 	})
 
+	ctx.emitSignature(pkg)
+
 	ctx.traverseFunction(pkg, func(function *ssa.Function) {
 		ctx.emitFunctionDeclaration(function)
 	})
@@ -2882,7 +2884,6 @@ uintptr_t hash_Interface(const Interface* obj);
 `)
 
 		ctx.emitType()
-		ctx.emitSignature()
 
 		allowSet := make(map[string]struct{})
 		ctx.traverseBasicType(func(typ types.Type) {
