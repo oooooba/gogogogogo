@@ -1437,7 +1437,7 @@ func (ctx *Context) emitFunctionDefinition(function *ssa.Function) {
 	ctx.emitFunctionDefinitionEpilogue()
 }
 
-func (ctx *Context) retrieveOrderedTypes() []types.Type {
+func (ctx *Context) retrieveOrderedTypes(pkg *ssa.Package) []types.Type {
 	pointerTypes := make([]types.Type, 0)
 	nonPointerTypes := make([]types.Type, 0)
 
@@ -1501,7 +1501,7 @@ func (ctx *Context) retrieveOrderedTypes() []types.Type {
 		}
 	}
 
-	ctx.visitAllTypes(ctx.program, func(typ types.Type) {
+	ctx.traverseType(pkg, func(typ types.Type) {
 		f(typ)
 	})
 
@@ -2784,6 +2784,14 @@ __attribute__((unused)) static void builtin_print_float(double val) {
 func (ctx *Context) emitPackage(pkg *ssa.Package) {
 	fmt.Fprintln(ctx.stream, "#include \"shared_declaration.h\"")
 
+	orderedTypes := ctx.retrieveOrderedTypes(pkg)
+	for _, typ := range orderedTypes {
+		ctx.emitTypeDeclaration(typ)
+	}
+	for _, typ := range orderedTypes {
+		ctx.emitTypeDefinition(typ)
+	}
+
 	allowSet := make(map[string]struct{})
 	for member := range pkg.Members {
 		if typ, ok := pkg.Members[member].(*ssa.Type); ok {
@@ -2879,14 +2887,6 @@ bool equal_MapObject(const MapObject* lhs, const MapObject* rhs);
 bool equal_Interface(const Interface* lhs, const Interface* rhs);
 uintptr_t hash_Interface(const Interface* obj);
 `)
-
-		orderedTypes := ctx.retrieveOrderedTypes()
-		for _, typ := range orderedTypes {
-			ctx.emitTypeDeclaration(typ)
-		}
-		for _, typ := range orderedTypes {
-			ctx.emitTypeDefinition(typ)
-		}
 
 		allowSet := make(map[string]struct{})
 		ctx.traverseBasicType(func(typ types.Type) {
