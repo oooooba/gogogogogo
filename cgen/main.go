@@ -2238,13 +2238,9 @@ func (ctx *Context) traverseType(pkg *ssa.Package, procedure func(typ types.Type
 			return
 		}
 
-		for _, basicBlock := range function.Blocks {
-			for _, instr := range basicBlock.Instrs {
-				if value, ok := instr.(ssa.Value); ok {
-					f(value.Type())
-				}
-			}
-		}
+		ctx.traverseValue(function, func(value ssa.Value) {
+			f(value.Type())
+		})
 	})
 }
 
