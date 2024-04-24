@@ -1648,25 +1648,11 @@ func (ctx *Context) emitSignature(pkg *ssa.Package) {
 			tryEmitSignatureDefinition(signature, receiverBoundSignatureName, true, true)
 		}
 
-		for _, basicBlock := range function.Blocks {
-			for _, instruction := range basicBlock.Instrs {
-				var callCommon *ssa.CallCommon
-				switch instr := instruction.(type) {
-				case *ssa.Call:
-					callCommon = instr.Common()
-				case *ssa.Defer:
-					callCommon = instr.Common()
-				case *ssa.Go:
-					callCommon = instr.Common()
-				}
-				if callCommon == nil {
-					continue
-				}
-				signature := callCommon.Signature()
-				signatureName := createSignatureName(signature, false, false)
-				tryEmitSignatureDefinition(signature, signatureName, false, false)
-			}
-		}
+		ctx.traverseCallCommon(function, func(callCommon *ssa.CallCommon) {
+			signature := callCommon.Signature()
+			signatureName := createSignatureName(signature, false, false)
+			tryEmitSignatureDefinition(signature, signatureName, false, false)
+		})
 	})
 }
 
@@ -2111,6 +2097,21 @@ func (ctx *Context) traverseValue(function *ssa.Function, procedure func(value s
 			default:
 				instr.Parent().WriteTo(os.Stderr)
 				panic(fmt.Sprintf("unknown value: %s : %T", instr.String(), instr))
+			}
+		}
+	}
+}
+
+func (ctx *Context) traverseCallCommon(function *ssa.Function, procedure func(callCommon *ssa.CallCommon)) {
+	for _, basicBlock := range function.Blocks {
+		for _, instruction := range basicBlock.Instrs {
+			switch instr := instruction.(type) {
+			case *ssa.Call:
+				procedure(instr.Common())
+			case *ssa.Defer:
+				procedure(instr.Common())
+			case *ssa.Go:
+				procedure(instr.Common())
 			}
 		}
 	}
@@ -2675,25 +2676,11 @@ func (ctx *Context) emitPackage(pkg *ssa.Package) {
 	})
 
 	ctx.traverseFunction(pkg, func(function *ssa.Function) {
-		for _, basicBlock := range function.Blocks {
-			for _, instruction := range basicBlock.Instrs {
-				var callCommon *ssa.CallCommon
-				switch instr := instruction.(type) {
-				case *ssa.Call:
-					callCommon = instr.Common()
-				case *ssa.Defer:
-					callCommon = instr.Common()
-				case *ssa.Go:
-					callCommon = instr.Common()
-				}
-				if callCommon == nil {
-					continue
-				}
-				if f, ok := callCommon.Value.(*ssa.Function); ok {
-					ctx.emitFunctionHeader(createFunctionName(f), ";")
-				}
+		ctx.traverseCallCommon(function, func(callCommon *ssa.CallCommon) {
+			if f, ok := callCommon.Value.(*ssa.Function); ok {
+				ctx.emitFunctionHeader(createFunctionName(f), ";")
 			}
-		}
+		})
 	})
 
 	ctx.traverseType(pkg, func(typ types.Type) {
