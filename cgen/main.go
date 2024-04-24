@@ -1305,9 +1305,7 @@ func (ctx *Context) emitFunctionHeader(name string, end string) {
 	fmt.Fprintf(ctx.stream, "FunctionObject %s (LightWeightThreadContext* ctx)%s\n", name, end)
 }
 
-func (ctx *Context) emitFunctionDeclaration(function *ssa.Function) {
-	ctx.emitFunctionHeader(createFunctionName(function), ";")
-
+func (ctx *Context) emitFunctionVariableStructure(function *ssa.Function) {
 	signature := function.Signature
 	if signature.Recv() != nil {
 		receiverBoundFuncName := fmt.Sprintf("%s%s", createFunctionName(function), encode("$bound"))
@@ -2672,7 +2670,8 @@ func (ctx *Context) emitPackage(pkg *ssa.Package) {
 	ctx.emitSignature(pkg)
 
 	ctx.traverseFunction(pkg, func(function *ssa.Function) {
-		ctx.emitFunctionDeclaration(function)
+		ctx.emitFunctionHeader(createFunctionName(function), ";")
+		ctx.emitFunctionVariableStructure(function)
 	})
 
 	ctx.traverseFunction(pkg, func(function *ssa.Function) {
