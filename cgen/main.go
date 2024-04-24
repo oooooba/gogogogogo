@@ -2674,6 +2674,28 @@ func (ctx *Context) emitPackage(pkg *ssa.Package) {
 		ctx.emitFunctionDeclaration(function)
 	})
 
+	ctx.traverseFunction(pkg, func(function *ssa.Function) {
+		for _, basicBlock := range function.Blocks {
+			for _, instruction := range basicBlock.Instrs {
+				var callCommon *ssa.CallCommon
+				switch instr := instruction.(type) {
+				case *ssa.Call:
+					callCommon = instr.Common()
+				case *ssa.Defer:
+					callCommon = instr.Common()
+				case *ssa.Go:
+					callCommon = instr.Common()
+				}
+				if callCommon == nil {
+					continue
+				}
+				if f, ok := callCommon.Value.(*ssa.Function); ok {
+					ctx.emitFunctionHeader(createFunctionName(f), ";")
+				}
+			}
+		}
+	})
+
 	ctx.traverseType(pkg, func(typ types.Type) {
 		if _, ok := typ.(*types.Interface); !ok {
 			ctx.emitEqualFunctionDefinition(typ)
