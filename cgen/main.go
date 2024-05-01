@@ -2131,8 +2131,8 @@ func (ctx *Context) traverseFunction(pkg *ssa.Package, procedure func(function *
 		}
 	}
 
-	for member := range pkg.Members {
-		switch member := pkg.Members[member].(type) {
+	ctx.traversePackageMember(pkg, func(member ssa.Member) {
+		switch member := member.(type) {
 		case *ssa.Function:
 			f(member)
 		case *ssa.Type:
@@ -2140,7 +2140,7 @@ func (ctx *Context) traverseFunction(pkg *ssa.Package, procedure func(function *
 			g(t)
 			g(types.NewPointer(t))
 		}
-	}
+	})
 }
 
 func (ctx *Context) traverseBasicType(procedure func(typ types.Type)) {
@@ -2212,14 +2212,14 @@ func (ctx *Context) traverseType(pkg *ssa.Package, procedure func(typ types.Type
 		procedure(typ)
 	}
 
-	for member := range pkg.Members {
-		switch member := pkg.Members[member].(type) {
+	ctx.traversePackageMember(pkg, func(member ssa.Member) {
+		switch member := member.(type) {
 		case *ssa.Global:
 			f(member.Type())
 		case *ssa.Type:
 			f(member.Type())
 		}
-	}
+	})
 
 	ctx.traverseFunction(pkg, func(function *ssa.Function) {
 		sig := function.Signature
@@ -2237,6 +2237,12 @@ func (ctx *Context) traverseType(pkg *ssa.Package, procedure func(typ types.Type
 			f(value.Type())
 		})
 	})
+}
+
+func (ctx *Context) traversePackageMember(pkg *ssa.Package, procedure func(member ssa.Member)) {
+	for _, member := range pkg.Members {
+		procedure(member)
+	}
 }
 
 var predefined string = `
@@ -2647,12 +2653,12 @@ func (ctx *Context) emitPackage(pkg *ssa.Package) {
 	}
 
 	allowSet := make(map[string]struct{})
-	for member := range pkg.Members {
-		if typ, ok := pkg.Members[member].(*ssa.Type); ok {
+	ctx.traversePackageMember(pkg, func(member ssa.Member) {
+		if typ, ok := member.(*ssa.Type); ok {
 			t := typ.Type()
 			allowSet[createTypeName(types.NewPointer(t))] = struct{}{}
 		}
-	}
+	})
 
 	ctx.traverseType(pkg, func(typ types.Type) {
 		if _, ok := typ.(*types.Interface); !ok {
@@ -2695,12 +2701,11 @@ func (ctx *Context) emitPackage(pkg *ssa.Package) {
 		})
 	})
 
-	for member := range pkg.Members {
-		switch member := pkg.Members[member].(type) {
-		case *ssa.Global:
-			ctx.emitGlobalVariableDefinition(member)
+	ctx.traversePackageMember(pkg, func(member ssa.Member) {
+		if global, ok := member.(*ssa.Global); ok {
+			ctx.emitGlobalVariableDefinition(global)
 		}
-	}
+	})
 
 	foundConstValueSet := make(map[string]struct{})
 	ctx.traverseFunction(pkg, func(function *ssa.Function) {
