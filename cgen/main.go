@@ -2691,6 +2691,14 @@ func (ctx *Context) emitPackage(pkg *ssa.Package) {
 		ctx.emitTypeInfoDefinition(typ)
 	})
 
+	ctx.traverseFunction(pkg, func(function *ssa.Function) {
+		ctx.traverseValue(function, func(value ssa.Value) {
+			if gv, ok := value.(*ssa.Global); ok {
+				ctx.emitGlobalVariableDeclaration(gv)
+			}
+		})
+	})
+
 	for member := range pkg.Members {
 		switch member := pkg.Members[member].(type) {
 		case *ssa.Global:
