@@ -2847,8 +2847,7 @@ uintptr_t hash_Interface(const Interface* obj) {
 		ctx.emitRuntimeInfo()
 	}
 
-	// Todo: replace `[]*ssa.Package{findMainPackage(program)}` to `program.AllPackages()`
-	for _, pkg := range []*ssa.Package{findMainPackage(program)} {
+	for _, pkg := range program.AllPackages() {
 		outputName := fmt.Sprintf("package_%s.c", createPackageName(pkg.Pkg))
 		outputPath := fmt.Sprintf("%s/%s", buildDirname, outputName)
 		f, err := os.Create(outputPath)
@@ -2856,6 +2855,11 @@ uintptr_t hash_Interface(const Interface* obj) {
 			panic(err)
 		}
 		defer f.Close()
+
+		// Todo: remove
+		if pkg != findMainPackage(program) {
+			continue
+		}
 
 		ctx := Context{
 			stream:        f,
