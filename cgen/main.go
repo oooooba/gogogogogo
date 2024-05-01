@@ -2732,6 +2732,44 @@ func (ctx *Context) emitPackage(pkg *ssa.Package) {
 	})
 }
 
+func generateMakefile(makefile *os.File, program *ssa.Program) {
+	cc := "gcc"
+	cflags := []string{
+		"-Wall", "-Wextra", "-Werror", "-std=c11", "-g",
+		"-fstrict-aliasing", "-Wstrict-aliasing",
+		"-fsanitize=undefined", "-fno-sanitize-recover=all",
+	}
+	ldflags := []string{
+		"-fsanitize=undefined", "-fno-sanitize-recover=all",
+		"-lpthread", "-ldl", "-lm",
+	}
+	libs := []string{"../target/debug/libgogogogogo.a"}
+	fmt.Fprintf(makefile, "CC = %s\n", cc)
+	fmt.Fprintf(makefile, "CFLAGS = %s\n", strings.Join(cflags, " "))
+	fmt.Fprintf(makefile, "LDFLAGS = %s\n", strings.Join(ldflags, " "))
+	fmt.Fprintf(makefile, "LIBS = %s\n", strings.Join(libs, " "))
+
+	binaryName := "bin.exe"
+	fmt.Fprintf(makefile, "all: %s\n", binaryName)
+
+	objs := []string{}
+	cFileRule := func(outputName string) {
+		objName := fmt.Sprintf("%s.o", outputName)
+		fmt.Fprintf(makefile, "%s:\n", objName)
+		fmt.Fprintf(makefile, "\t@$(CC) $(CFLAGS) -c -o %s %s\n", objName, outputName)
+		objs = append(objs, objName)
+	}
+
+	cFileRule("shared_definition.c")
+	for _, pkg := range program.AllPackages() {
+		outputName := fmt.Sprintf("package_%s.c", createPackageName(pkg.Pkg))
+		cFileRule(outputName)
+	}
+
+	fmt.Fprintf(makefile, "%s: %s\n", binaryName, strings.Join(objs, " "))
+	fmt.Fprintf(makefile, "\t@$(CC) -o %s %s $(LIBS) $(LDFLAGS)\n", binaryName, strings.Join(objs, " "))
+}
+
 func emitProgram(program *ssa.Program, buildDirname string) {
 	{
 		declarationName := "shared_declaration.h"
@@ -2868,5 +2906,16 @@ uintptr_t hash_Interface(const Interface* obj) {
 		}
 
 		ctx.emitPackage(pkg)
+	}
+
+	{
+		makefileName := "Makefile"
+		makefilePath := fmt.Sprintf("%s/%s", buildDirname, makefileName)
+		makefile, err := os.Create(makefilePath)
+		if err != nil {
+			panic(err)
+		}
+		defer makefile.Close()
+		generateMakefile(makefile, program)
 	}
 }

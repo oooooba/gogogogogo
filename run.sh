@@ -9,7 +9,6 @@ if [ -d $build_directory ]; then
 fi
 mkdir $build_directory
 
-c_file_name=$build_directory/out.c
 bin_file_name=$build_directory/bin.exe
 
 dir_name=$(cd `dirname $1` && pwd)
@@ -19,10 +18,8 @@ cd cgen
 go run main.go -b ../$build_directory -i $src
 cd ..
 
-gcc -Wall -Wextra -Werror -std=c11 -g \
-    -fstrict-aliasing -Wstrict-aliasing \
-    -fsanitize=undefined -fno-sanitize-recover=all \
-    -o $bin_file_name $build_directory/*.c target/debug/libgogogogogo.a \
-    -lpthread -ldl -lm \
+cd $build_directory
+make -j
+cd ..
 
 $bin_file_name
