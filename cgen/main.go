@@ -7,6 +7,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 
 	"go/constant"
 	"go/token"
@@ -2885,28 +2886,35 @@ uintptr_t hash_Interface(const Interface* obj) {
 		ctx.emitRuntimeInfo()
 	}
 
+	waitGroup := sync.WaitGroup{}
 	for _, pkg := range program.AllPackages() {
-		outputName := fmt.Sprintf("package_%s.c", createPackageName(pkg.Pkg))
-		outputPath := fmt.Sprintf("%s/%s", buildDirname, outputName)
-		f, err := os.Create(outputPath)
-		if err != nil {
-			panic(err)
-		}
-		defer f.Close()
+		waitGroup.Add(1)
+		go func(pkg *ssa.Package) {
+			outputName := fmt.Sprintf("package_%s.c", createPackageName(pkg.Pkg))
+			outputPath := fmt.Sprintf("%s/%s", buildDirname, outputName)
+			f, err := os.Create(outputPath)
+			if err != nil {
+				panic(err)
+			}
+			defer f.Close()
 
-		// Todo: remove
-		if pkg != findMainPackage(program) {
-			continue
-		}
+			// Todo: remove
+			if pkg != findMainPackage(program) {
+				waitGroup.Done()
+				return
+			}
 
-		ctx := Context{
-			stream:        f,
-			program:       program,
-			latestNameMap: make(map[*ssa.BasicBlock]string),
-		}
+			ctx := Context{
+				stream:        f,
+				program:       program,
+				latestNameMap: make(map[*ssa.BasicBlock]string),
+			}
 
-		ctx.emitPackage(pkg)
+			ctx.emitPackage(pkg)
+			waitGroup.Done()
+		}(pkg)
 	}
+	waitGroup.Wait()
 
 	{
 		makefileName := "Makefile"
