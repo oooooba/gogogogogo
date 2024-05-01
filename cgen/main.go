@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -53,9 +54,10 @@ func main() {
 }
 
 type Context struct {
-	stream        *os.File
-	program       *ssa.Program
-	latestNameMap map[*ssa.BasicBlock]string
+	stream                *os.File
+	program               *ssa.Program
+	latestNameMap         map[*ssa.BasicBlock]string
+	orderedPackageMembers []ssa.Member
 }
 
 func encode(str string) string {
@@ -2240,7 +2242,27 @@ func (ctx *Context) traverseType(pkg *ssa.Package, procedure func(typ types.Type
 }
 
 func (ctx *Context) traversePackageMember(pkg *ssa.Package, procedure func(member ssa.Member)) {
-	for _, member := range pkg.Members {
+	if ctx.orderedPackageMembers == nil {
+		mp := map[string]ssa.Member{}
+		for _, member := range pkg.Members {
+			mp[member.Name()] = member
+		}
+
+		keys := []string{}
+		for key := range mp {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+
+		members := []ssa.Member{}
+		for _, key := range keys {
+			members = append(members, mp[key])
+		}
+
+		ctx.orderedPackageMembers = members
+	}
+
+	for _, member := range ctx.orderedPackageMembers {
 		procedure(member)
 	}
 }
