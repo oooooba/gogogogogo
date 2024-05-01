@@ -97,7 +97,7 @@ func createValueName(value ssa.Value) string {
 		}
 		panic(fmt.Sprintf("unreachable: val=%s, params=%v", val, val.Parent().Params))
 	} else if val, ok := value.(*ssa.Global); ok {
-		packageName := createPackageName(val.Package())
+		packageName := createPackageName(val.Package().Pkg)
 		return encode(fmt.Sprintf("gv$%s$%s", value.Name(), packageName))
 	} else {
 		parentName := value.Parent().Name()
@@ -1207,26 +1207,21 @@ func createInstructionName(instruction ssa.Instruction) string {
 	}()
 	function := instruction.Parent()
 	functionName := function.RelString(nil)
-	packageName := createPackageName(function.Package())
-	return encode(fmt.Sprintf("i$%d$%s$%s$%s", index, blockName, functionName, packageName))
+	return encode(fmt.Sprintf("i$%d$%s$%s", index, blockName, functionName))
 }
 
 func createBasicBlockName(basicBlock *ssa.BasicBlock) string {
 	function := basicBlock.Parent()
 	functionName := function.RelString(nil)
-	packageName := createPackageName(function.Package())
-	return encode(fmt.Sprintf("b$%s$%s$%s", basicBlock.String(), functionName, packageName))
+	return encode(fmt.Sprintf("b$%s$%s", basicBlock.String(), functionName))
 }
 
 func createFunctionName(function *ssa.Function) string {
 	return encode(fmt.Sprintf("f$%s", function.RelString(nil)))
 }
 
-func createPackageName(pkg *ssa.Package) string {
-	if pkg == nil {
-		return "nil"
-	}
-	return pkg.Pkg.Name()
+func createPackageName(pkg *types.Package) string {
+	return pkg.Name()
 }
 
 func requireSwitchFunction(instruction ssa.Instruction) bool {
@@ -2854,7 +2849,7 @@ uintptr_t hash_Interface(const Interface* obj) {
 
 	// Todo: replace `[]*ssa.Package{findMainPackage(program)}` to `program.AllPackages()`
 	for _, pkg := range []*ssa.Package{findMainPackage(program)} {
-		outputName := fmt.Sprintf("package_%s.c", createPackageName(pkg))
+		outputName := fmt.Sprintf("package_%s.c", createPackageName(pkg.Pkg))
 		outputPath := fmt.Sprintf("%s/%s", buildDirname, outputName)
 		f, err := os.Create(outputPath)
 		if err != nil {
