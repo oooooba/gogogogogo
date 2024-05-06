@@ -2244,8 +2244,13 @@ func (ctx *Context) traverseType(pkg *ssa.Package, procedure func(typ types.Type
 func (ctx *Context) traversePackageMember(pkg *ssa.Package, procedure func(member ssa.Member)) {
 	if ctx.orderedPackageMembers == nil {
 		mp := map[string]ssa.Member{}
-		for _, member := range pkg.Members {
-			mp[member.Name()] = member
+		for _, pkg2 := range ctx.program.AllPackages() {
+			if pkg != nil && pkg != pkg2 {
+				continue
+			}
+			for _, member := range pkg2.Members {
+				mp[member.RelString(nil)] = member
+			}
 		}
 
 		keys := []string{}
