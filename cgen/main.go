@@ -2668,9 +2668,7 @@ __attribute__((unused)) static void builtin_print_float(double val) {
 }
 `
 
-func (ctx *Context) emitPackage(pkg *ssa.Package) {
-	fmt.Fprintln(ctx.stream, "#include \"shared_declaration.h\"")
-
+func (ctx *Context) emitTypeDeclarationAndDefinition(pkg *ssa.Package) {
 	orderedTypes := ctx.retrieveOrderedTypes(pkg)
 	for _, typ := range orderedTypes {
 		ctx.emitTypeDeclaration(typ)
@@ -2678,7 +2676,9 @@ func (ctx *Context) emitPackage(pkg *ssa.Package) {
 	for _, typ := range orderedTypes {
 		ctx.emitTypeDefinition(typ)
 	}
+}
 
+func (ctx *Context) emitInterfaceDataDeclaration(pkg *ssa.Package) {
 	allowSet := make(map[string]struct{})
 	ctx.traversePackageMember(pkg, func(member ssa.Member) {
 		if typ, ok := member.(*ssa.Type); ok {
@@ -2695,6 +2695,32 @@ func (ctx *Context) emitPackage(pkg *ssa.Package) {
 		ctx.emitInterfaceTableDeclaration(typ, allowSet)
 		ctx.emitTypeInfoDeclaration(typ)
 	})
+}
+
+func (ctx *Context) emitInterfaceDataDefinition(pkg *ssa.Package) {
+	allowSet := make(map[string]struct{})
+	ctx.traversePackageMember(pkg, func(member ssa.Member) {
+		if typ, ok := member.(*ssa.Type); ok {
+			t := typ.Type()
+			allowSet[createTypeName(types.NewPointer(t))] = struct{}{}
+		}
+	})
+
+	ctx.traverseType(pkg, func(typ types.Type) {
+		if _, ok := typ.(*types.Interface); !ok {
+			ctx.emitEqualFunctionDefinition(typ)
+			ctx.emitHashFunctionDefinition(typ)
+		}
+		ctx.emitInterfaceTableDefinition(typ, allowSet)
+		ctx.emitTypeInfoDefinition(typ)
+	})
+}
+
+func (ctx *Context) emitPackage(pkg *ssa.Package) {
+	fmt.Fprintln(ctx.stream, "#include \"shared_declaration.h\"")
+
+	ctx.emitTypeDeclarationAndDefinition(pkg)
+	ctx.emitInterfaceDataDeclaration(pkg)
 
 	ctx.emitSignature(pkg)
 
@@ -2711,14 +2737,7 @@ func (ctx *Context) emitPackage(pkg *ssa.Package) {
 		})
 	})
 
-	ctx.traverseType(pkg, func(typ types.Type) {
-		if _, ok := typ.(*types.Interface); !ok {
-			ctx.emitEqualFunctionDefinition(typ)
-			ctx.emitHashFunctionDefinition(typ)
-		}
-		ctx.emitInterfaceTableDefinition(typ, allowSet)
-		ctx.emitTypeInfoDefinition(typ)
-	})
+	ctx.emitInterfaceDataDefinition(pkg)
 
 	ctx.traverseFunction(pkg, func(function *ssa.Function) {
 		ctx.traverseValue(function, func(value ssa.Value) {
@@ -2913,6 +2932,12 @@ uintptr_t hash_Interface(const Interface* obj) {
 			ctx.emitHashFunctionDefinition(typ)
 			ctx.emitInterfaceTableDefinition(typ, allowSet)
 			ctx.emitTypeInfoDefinition(typ)
+		})
+
+		ctx.emitTypeDeclarationAndDefinition(nil)
+		ctx.emitInterfaceDataDeclaration(nil)
+		ctx.traverseFunction(nil, func(function *ssa.Function) {
+			ctx.emitFunctionHeader(createFunctionName(function), ";")
 		})
 
 		ctx.emitRuntimeInfo()
