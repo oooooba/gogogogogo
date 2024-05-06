@@ -2717,16 +2717,70 @@ uintptr_t hash_Interface(const Interface* obj);
 	})
 }
 
-func (ctx *Context) emitInterfaceDataDefinition(pkg *ssa.Package) {
+func (ctx *Context) emitInterfaceDataDefinition() {
 	allowSet := make(map[string]struct{})
-	ctx.traversePackageMember(pkg, func(member ssa.Member) {
+	ctx.traverseBasicType(func(typ types.Type) {
+		allowSet[createTypeName(typ)] = struct{}{}
+	})
+	ctx.traversePackageMember(nil, func(member ssa.Member) {
 		if typ, ok := member.(*ssa.Type); ok {
 			t := typ.Type()
 			allowSet[createTypeName(types.NewPointer(t))] = struct{}{}
 		}
 	})
 
-	ctx.traverseType(pkg, func(typ types.Type) {
+	fmt.Fprintf(ctx.stream, `
+bool equal_MapObject(const MapObject* lhs, const MapObject* rhs) {
+	assert(lhs != NULL);
+	assert(rhs != NULL);
+	if(lhs->raw == rhs->raw) {
+		return true;
+	}
+	if((lhs->raw == NULL) || (rhs->raw == NULL)) {
+		return false;
+	}
+	assert(false); // ToDo: unimplemented
+	return false;
+}
+
+bool equal_Interface(const Interface* lhs, const Interface* rhs) {
+	assert(lhs!=NULL);
+	assert(rhs!=NULL);
+
+	if (lhs->type_id.info == NULL && rhs->type_id.info == NULL) {
+		return true;
+	}
+
+	if ((lhs->type_id.info == NULL) || (rhs->type_id.info == NULL)) {
+		return false;
+	}
+
+	if ((lhs->receiver == NULL) && (rhs->receiver == NULL)) {
+		return true;
+	}
+
+	if ((lhs->receiver == NULL) || (rhs->receiver == NULL)) {
+		return false;
+	}
+
+	bool (*f)(const void*, const void*) = lhs->type_id.info->is_equal;
+	return f(lhs->receiver, rhs->receiver);
+}
+
+uintptr_t hash_Interface(const Interface* obj) {
+	(void)obj;
+	assert(false); /// not implemented
+	return 0;
+}
+`)
+
+	ctx.traverseBasicType(func(typ types.Type) {
+		ctx.emitEqualFunctionDefinition(typ)
+		ctx.emitHashFunctionDefinition(typ)
+		ctx.emitInterfaceTableDefinition(typ, allowSet)
+		ctx.emitTypeInfoDefinition(typ)
+	})
+	ctx.traverseType(nil, func(typ types.Type) {
 		if _, ok := typ.(*types.Interface); !ok {
 			ctx.emitEqualFunctionDefinition(typ)
 			ctx.emitHashFunctionDefinition(typ)
@@ -2857,70 +2911,14 @@ func emitProgram(program *ssa.Program, buildDirname string) {
 		}
 
 		ctx.emitCommon()
-		fmt.Fprintf(ctx.stream, `
-bool equal_MapObject(const MapObject* lhs, const MapObject* rhs) {
-	assert(lhs != NULL);
-	assert(rhs != NULL);
-	if(lhs->raw == rhs->raw) {
-		return true;
-	}
-	if((lhs->raw == NULL) || (rhs->raw == NULL)) {
-		return false;
-	}
-	assert(false); // ToDo: unimplemented
-	return false;
-}
-
-bool equal_Interface(const Interface* lhs, const Interface* rhs) {
-	assert(lhs!=NULL);
-	assert(rhs!=NULL);
-
-	if (lhs->type_id.info == NULL && rhs->type_id.info == NULL) {
-		return true;
-	}
-
-	if ((lhs->type_id.info == NULL) || (rhs->type_id.info == NULL)) {
-		return false;
-	}
-
-	if ((lhs->receiver == NULL) && (rhs->receiver == NULL)) {
-		return true;
-	}
-
-	if ((lhs->receiver == NULL) || (rhs->receiver == NULL)) {
-		return false;
-	}
-
-	bool (*f)(const void*, const void*) = lhs->type_id.info->is_equal;
-	return f(lhs->receiver, rhs->receiver);
-}
-
-uintptr_t hash_Interface(const Interface* obj) {
-	(void)obj;
-	assert(false); /// not implemented
-	return 0;
-}
-`)
 
 		ctx.emitTypeDeclarationAndDefinition(nil)
 		ctx.emitInterfaceDataDeclaration(nil)
-
-		allowSet := make(map[string]struct{})
-		ctx.traverseBasicType(func(typ types.Type) {
-			allowSet[createTypeName(typ)] = struct{}{}
-		})
-
-		ctx.traverseBasicType(func(typ types.Type) {
-			ctx.emitEqualFunctionDefinition(typ)
-			ctx.emitHashFunctionDefinition(typ)
-			ctx.emitInterfaceTableDefinition(typ, allowSet)
-			ctx.emitTypeInfoDefinition(typ)
-		})
-
 		ctx.traverseFunction(nil, func(function *ssa.Function) {
 			ctx.emitFunctionHeader(createFunctionName(function), ";")
 		})
-		ctx.emitInterfaceDataDefinition(nil)
+
+		ctx.emitInterfaceDataDefinition()
 
 		ctx.traverseFunction(nil, func(function *ssa.Function) {
 			if function.Blocks != nil {
