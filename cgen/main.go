@@ -2685,6 +2685,9 @@ func (ctx *Context) emitTypeDeclarationAndDefinition(pkg *ssa.Package) {
 
 func (ctx *Context) emitInterfaceDataDeclaration(pkg *ssa.Package) {
 	allowSet := make(map[string]struct{})
+	ctx.traverseBasicType(func(typ types.Type) {
+		allowSet[createTypeName(typ)] = struct{}{}
+	})
 	ctx.traversePackageMember(pkg, func(member ssa.Member) {
 		if typ, ok := member.(*ssa.Type); ok {
 			t := typ.Type()
@@ -2692,6 +2695,18 @@ func (ctx *Context) emitInterfaceDataDeclaration(pkg *ssa.Package) {
 		}
 	})
 
+	fmt.Fprintf(ctx.stream, `
+bool equal_MapObject(const MapObject* lhs, const MapObject* rhs);
+bool equal_Interface(const Interface* lhs, const Interface* rhs);
+uintptr_t hash_Interface(const Interface* obj);
+`)
+
+	ctx.traverseBasicType(func(typ types.Type) {
+		ctx.emitEqualFunctionDeclaration(typ)
+		ctx.emitHashFunctionDeclaration(typ)
+		ctx.emitInterfaceTableDeclaration(typ, allowSet)
+		ctx.emitTypeInfoDeclaration(typ)
+	})
 	ctx.traverseType(pkg, func(typ types.Type) {
 		if _, ok := typ.(*types.Interface); !ok {
 			ctx.emitEqualFunctionDeclaration(typ)
@@ -2723,7 +2738,6 @@ func (ctx *Context) emitInterfaceDataDefinition(pkg *ssa.Package) {
 
 func (ctx *Context) emitPackage(pkg *ssa.Package) {
 	ctx.emitCommon()
-	fmt.Fprintln(ctx.stream, "#include \"shared_declaration.h\"")
 
 	ctx.emitTypeDeclarationAndDefinition(pkg)
 	ctx.emitInterfaceDataDeclaration(pkg)
@@ -2828,40 +2842,6 @@ func generateMakefile(makefile *os.File, program *ssa.Program) {
 
 func emitProgram(program *ssa.Program, buildDirname string) {
 	{
-		declarationName := "shared_declaration.h"
-		declarationPath := fmt.Sprintf("%s/%s", buildDirname, declarationName)
-		f, err := os.Create(declarationPath)
-		if err != nil {
-			panic(err)
-		}
-		defer f.Close()
-
-		ctx := Context{
-			stream:        f,
-			program:       program,
-			latestNameMap: make(map[*ssa.BasicBlock]string),
-		}
-
-		fmt.Fprintf(ctx.stream, `
-bool equal_MapObject(const MapObject* lhs, const MapObject* rhs);
-bool equal_Interface(const Interface* lhs, const Interface* rhs);
-uintptr_t hash_Interface(const Interface* obj);
-`)
-
-		allowSet := make(map[string]struct{})
-		ctx.traverseBasicType(func(typ types.Type) {
-			allowSet[createTypeName(typ)] = struct{}{}
-		})
-
-		ctx.traverseBasicType(func(typ types.Type) {
-			ctx.emitEqualFunctionDeclaration(typ)
-			ctx.emitHashFunctionDeclaration(typ)
-			ctx.emitInterfaceTableDeclaration(typ, allowSet)
-			ctx.emitTypeInfoDeclaration(typ)
-		})
-	}
-
-	{
 		definitionName := "shared_definition.c"
 		definitionPath := fmt.Sprintf("%s/%s", buildDirname, definitionName)
 		f, err := os.Create(definitionPath)
@@ -2877,7 +2857,6 @@ uintptr_t hash_Interface(const Interface* obj);
 		}
 
 		ctx.emitCommon()
-		fmt.Fprintln(ctx.stream, "#include \"shared_declaration.h\"")
 		fmt.Fprintf(ctx.stream, `
 bool equal_MapObject(const MapObject* lhs, const MapObject* rhs) {
 	assert(lhs != NULL);
@@ -2923,6 +2902,9 @@ uintptr_t hash_Interface(const Interface* obj) {
 }
 `)
 
+		ctx.emitTypeDeclarationAndDefinition(nil)
+		ctx.emitInterfaceDataDeclaration(nil)
+
 		allowSet := make(map[string]struct{})
 		ctx.traverseBasicType(func(typ types.Type) {
 			allowSet[createTypeName(typ)] = struct{}{}
@@ -2935,8 +2917,6 @@ uintptr_t hash_Interface(const Interface* obj) {
 			ctx.emitTypeInfoDefinition(typ)
 		})
 
-		ctx.emitTypeDeclarationAndDefinition(nil)
-		ctx.emitInterfaceDataDeclaration(nil)
 		ctx.traverseFunction(nil, func(function *ssa.Function) {
 			ctx.emitFunctionHeader(createFunctionName(function), ";")
 		})
