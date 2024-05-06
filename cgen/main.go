@@ -2272,7 +2272,8 @@ func (ctx *Context) traversePackageMember(pkg *ssa.Package, procedure func(membe
 	}
 }
 
-var predefined string = `
+func (ctx *Context) emitCommon() {
+	predefined := `
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdint.h>
@@ -2667,6 +2668,10 @@ __attribute__((unused)) static void builtin_print_float(double val) {
 	fprintf(stderr, "%s", buf);
 }
 `
+	fmt.Fprintln(ctx.stream, predefined)
+
+	ctx.emitComplexNumberBuiltinFunctions()
+}
 
 func (ctx *Context) emitTypeDeclarationAndDefinition(pkg *ssa.Package) {
 	orderedTypes := ctx.retrieveOrderedTypes(pkg)
@@ -2717,6 +2722,7 @@ func (ctx *Context) emitInterfaceDataDefinition(pkg *ssa.Package) {
 }
 
 func (ctx *Context) emitPackage(pkg *ssa.Package) {
+	ctx.emitCommon()
 	fmt.Fprintln(ctx.stream, "#include \"shared_declaration.h\"")
 
 	ctx.emitTypeDeclarationAndDefinition(pkg)
@@ -2836,10 +2842,6 @@ func emitProgram(program *ssa.Program, buildDirname string) {
 			latestNameMap: make(map[*ssa.BasicBlock]string),
 		}
 
-		fmt.Fprintln(ctx.stream, predefined)
-
-		ctx.emitComplexNumberBuiltinFunctions()
-
 		fmt.Fprintf(ctx.stream, `
 bool equal_MapObject(const MapObject* lhs, const MapObject* rhs);
 bool equal_Interface(const Interface* lhs, const Interface* rhs);
@@ -2874,6 +2876,7 @@ uintptr_t hash_Interface(const Interface* obj);
 			latestNameMap: make(map[*ssa.BasicBlock]string),
 		}
 
+		ctx.emitCommon()
 		fmt.Fprintln(ctx.stream, "#include \"shared_declaration.h\"")
 		fmt.Fprintf(ctx.stream, `
 bool equal_MapObject(const MapObject* lhs, const MapObject* rhs) {
