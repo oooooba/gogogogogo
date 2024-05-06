@@ -2597,7 +2597,7 @@ typedef struct {
 } StackFrameSchedule;
 DECLARE_RUNTIME_API(schedule, StackFrameSchedule);
 
-#define f_24_runtime_2E_Gosched gox5_schedule
+#define f_24_runtime_2E_mcall gox5_schedule
 
 typedef struct {
 	StackFrameCommon common;
@@ -2736,8 +2736,6 @@ func (ctx *Context) emitPackage(pkg *ssa.Package) {
 			}
 		})
 	})
-
-	ctx.emitInterfaceDataDefinition(pkg)
 
 	ctx.traverseFunction(pkg, func(function *ssa.Function) {
 		ctx.traverseValue(function, func(value ssa.Value) {
@@ -2939,6 +2937,17 @@ uintptr_t hash_Interface(const Interface* obj) {
 		ctx.traverseFunction(nil, func(function *ssa.Function) {
 			ctx.emitFunctionHeader(createFunctionName(function), ";")
 		})
+		ctx.emitInterfaceDataDefinition(nil)
+
+		ctx.traverseFunction(nil, func(function *ssa.Function) {
+			if function.Blocks != nil {
+				return
+			}
+			if createFunctionName(function) == "f_24_runtime_2E_mcall" {
+				return
+			}
+			fmt.Fprintf(ctx.stream, "FunctionObject %s(LightWeightThreadContext* ctx){ (void)ctx; assert(false); return (FunctionObject){NULL}; }", createFunctionName(function))
+		})
 
 		ctx.emitRuntimeInfo()
 	}
@@ -2954,12 +2963,6 @@ uintptr_t hash_Interface(const Interface* obj) {
 				panic(err)
 			}
 			defer f.Close()
-
-			// Todo: remove
-			if pkg != findMainPackage(program) {
-				waitGroup.Done()
-				return
-			}
 
 			ctx := Context{
 				stream:        f,
