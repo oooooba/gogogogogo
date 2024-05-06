@@ -2894,77 +2894,92 @@ func generateMakefile(makefile *os.File, program *ssa.Program) {
 	fmt.Fprintf(makefile, "\t@$(CC) -o %s %s $(LIBS) $(LDFLAGS)\n", binaryName, strings.Join(objs, " "))
 }
 
-func emitProgram(program *ssa.Program, buildDirname string) {
-	{
-		definitionName := "shared_definition.c"
-		definitionPath := fmt.Sprintf("%s/%s", buildDirname, definitionName)
-		f, err := os.Create(definitionPath)
-		if err != nil {
-			panic(err)
-		}
-		defer f.Close()
+func handleSharedDefinition(program *ssa.Program, outputPath string) {
+	f, err := os.Create(outputPath)
+	if err != nil {
+		panic(err)
+	}
+	defer f.Close()
 
-		ctx := Context{
-			stream:        f,
-			program:       program,
-			latestNameMap: make(map[*ssa.BasicBlock]string),
-		}
-
-		ctx.emitCommon()
-
-		ctx.emitTypeDeclarationAndDefinition(nil)
-		ctx.emitInterfaceDataDeclaration(nil)
-		ctx.traverseFunction(nil, func(function *ssa.Function) {
-			ctx.emitFunctionHeader(createFunctionName(function), ";")
-		})
-
-		ctx.emitInterfaceDataDefinition()
-
-		ctx.traverseFunction(nil, func(function *ssa.Function) {
-			if function.Blocks != nil {
-				return
-			}
-			if createFunctionName(function) == "f_24_runtime_2E_mcall" {
-				return
-			}
-			fmt.Fprintf(ctx.stream, "FunctionObject %s(LightWeightThreadContext* ctx){ (void)ctx; assert(false); return (FunctionObject){NULL}; }", createFunctionName(function))
-		})
-
-		ctx.emitRuntimeInfo()
+	ctx := Context{
+		stream:        f,
+		program:       program,
+		latestNameMap: make(map[*ssa.BasicBlock]string),
 	}
 
+	ctx.emitCommon()
+
+	ctx.emitTypeDeclarationAndDefinition(nil)
+	ctx.emitInterfaceDataDeclaration(nil)
+	ctx.traverseFunction(nil, func(function *ssa.Function) {
+		ctx.emitFunctionHeader(createFunctionName(function), ";")
+	})
+
+	ctx.emitInterfaceDataDefinition()
+
+	ctx.traverseFunction(nil, func(function *ssa.Function) {
+		if function.Blocks != nil {
+			return
+		}
+		if createFunctionName(function) == "f_24_runtime_2E_mcall" {
+			return
+		}
+		fmt.Fprintf(ctx.stream, "FunctionObject %s(LightWeightThreadContext* ctx){ (void)ctx; assert(false); return (FunctionObject){NULL}; }", createFunctionName(function))
+	})
+
+	ctx.emitRuntimeInfo()
+}
+
+func handlePackage(program *ssa.Program, pkg *ssa.Package, outputPath string) {
+	f, err := os.Create(outputPath)
+	if err != nil {
+		panic(err)
+	}
+	defer f.Close()
+
+	ctx := Context{
+		stream:        f,
+		program:       program,
+		latestNameMap: make(map[*ssa.BasicBlock]string),
+	}
+
+	ctx.emitPackage(pkg)
+}
+
+func handleMakefile(program *ssa.Program, outputPath string) {
+	makefile, err := os.Create(outputPath)
+	if err != nil {
+		panic(err)
+	}
+	defer makefile.Close()
+	generateMakefile(makefile, program)
+}
+
+func emitProgram(program *ssa.Program, buildDirname string) {
 	waitGroup := sync.WaitGroup{}
+
+	waitGroup.Add(1)
+	go func() {
+		definitionName := "shared_definition.c"
+		handleSharedDefinition(program, fmt.Sprintf("%s/%s", buildDirname, definitionName))
+		waitGroup.Done()
+	}()
+
 	for _, pkg := range program.AllPackages() {
 		waitGroup.Add(1)
 		go func(pkg *ssa.Package) {
 			outputName := fmt.Sprintf("package_%s.c", createPackageName(pkg.Pkg))
-			outputPath := fmt.Sprintf("%s/%s", buildDirname, outputName)
-			f, err := os.Create(outputPath)
-			if err != nil {
-				panic(err)
-			}
-			defer f.Close()
-
-			ctx := Context{
-				stream:        f,
-				program:       program,
-				latestNameMap: make(map[*ssa.BasicBlock]string),
-			}
-
-			ctx.emitPackage(pkg)
+			handlePackage(program, pkg, fmt.Sprintf("%s/%s", buildDirname, outputName))
 			waitGroup.Done()
 		}(pkg)
 	}
-	waitGroup.Wait()
 
-	{
+	waitGroup.Add(1)
+	go func() {
 		makefileName := "Makefile"
-		makefilePath := fmt.Sprintf("%s/%s", buildDirname, makefileName)
-		makefile, err := os.Create(makefilePath)
-		if err != nil {
-			panic(err)
-		}
-		defer makefile.Close()
-		generateMakefile(makefile, program)
-	}
+		handleMakefile(program, fmt.Sprintf("%s/%s", buildDirname, makefileName))
+		waitGroup.Done()
+	}()
+
+	waitGroup.Wait()
 }
