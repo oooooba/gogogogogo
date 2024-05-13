@@ -193,6 +193,35 @@ func Test11() int {
 	return 11
 }
 
+func Test12() int {
+	m := make(map[int]int)
+	if len(m) != 0 {
+		return 0
+	}
+
+	delete(m, 42) // nothing happens
+
+	m[1] = 2
+	if len(m) != 1 {
+		return 1
+	}
+	if m[1] != 2 {
+		return 2
+	}
+
+	delete(m, 1)
+	if len(m) != 0 {
+		return 3
+	}
+
+	delete(m, 2)
+	if len(m) != 0 {
+		return 4
+	}
+
+	return 12
+}
+
 func main() {
 	runTest := func(testName string, test func() int) {
 		println(testName+":", test())
@@ -208,4 +237,5 @@ func main() {
 	runTest("Test9", Test9)
 	runTest("Test10", Test10)
 	runTest("Test11", Test11)
+	runTest("Test12", Test12)
 }

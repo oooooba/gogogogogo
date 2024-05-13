@@ -52,6 +52,29 @@ pub extern "C" fn gox5_map_new(ctx: &mut LightWeightThreadContext) -> FunctionOb
 }
 
 #[repr(C)]
+struct StackFrameMapDelete {
+    common: StackFrameCommon,
+    map: ObjectPtr,
+    key: ObjectPtr,
+}
+
+#[no_mangle]
+pub extern "C" fn gox5_map_delete(ctx: &mut LightWeightThreadContext) -> FunctionObject {
+    let frame = ctx.stack_frame::<StackFrameMapDelete>();
+
+    if frame.map.is_null() {
+        return ctx.leave();
+    }
+
+    let mut map = frame.map.clone();
+    let key = frame.key.clone();
+    let map = map.as_mut::<MapObject>();
+    map.delete(key);
+
+    ctx.leave()
+}
+
+#[repr(C)]
 struct StackFrameMapGet {
     common: StackFrameCommon,
     map: ObjectPtr,

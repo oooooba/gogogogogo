@@ -543,6 +543,13 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 					)
 					needToCallRuntimeApi = true
 
+				case "delete":
+					ctx.switchFunctionToCallRuntimeApi("gox5_map_delete", "StackFrameMapDelete", createInstructionName(instr), nil, nil,
+						paramArgPair{param: "map", arg: fmt.Sprintf("%s.raw", createValueRelName(callCommon.Args[0]))},
+						paramArgPair{param: "key", arg: fmt.Sprintf("&%s", createValueRelName(callCommon.Args[1]))},
+					)
+					needToCallRuntimeApi = true
+
 				case "imag":
 					bitLength := complexNumberBitLength(callCommon.Args[0])
 					result := createValueRelName(instr)
@@ -2538,6 +2545,13 @@ typedef struct {
 	SliceObject rune_slice;
 } StackFrameStringNewFromRuneSlice;
 DECLARE_RUNTIME_API(string_new_from_rune_slice, StackFrameStringNewFromRuneSlice);
+
+typedef struct {
+	StackFrameCommon common;
+	MapObject map;
+	const void* key;
+} StackFrameMapDelete;
+DECLARE_RUNTIME_API(map_delete, StackFrameMapDelete);
 
 typedef struct {
 	StackFrameCommon common;

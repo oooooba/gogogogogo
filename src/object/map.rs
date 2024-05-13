@@ -90,6 +90,11 @@ impl MapObject {
         self.map.insert(key, value);
     }
 
+    pub fn delete(&mut self, key: ObjectPtr) {
+        let key = Key::new(key, self.key_type);
+        self.map.remove(&key);
+    }
+
     pub fn nth(&self, key: ObjectPtr, value: ObjectPtr, nth: usize) -> bool {
         match self.map.iter().nth(nth) {
             Some((k, v)) => {
