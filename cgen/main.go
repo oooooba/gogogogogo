@@ -626,25 +626,23 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 				}
 
 			default:
-				if callee.Name() != "init" {
-					nextFunction := createValueRelName(callee)
-					signature := callCommon.Value.Type().(*types.Signature)
-					signatureName := createSignatureName(signature, false, false)
-					ctx.switchFunction(nextFunction, signature, signatureName, createValueRelName(instr), createInstructionName(instr), func() {
-						paramBase := 0
-						argBase := 0
-						if signature.Recv() != nil {
-							receiver := createValueRelName(callCommon.Args[0])
-							fmt.Fprintf(ctx.stream, "signature->param0 = %s; // receiver: %s\n", receiver, signature.Recv())
-							paramBase++
-							argBase++
-						}
-						for i := 0; i < signature.Params().Len(); i++ {
-							arg := callCommon.Args[argBase+i]
-							fmt.Fprintf(ctx.stream, "signature->param%d = %s; // %s\n", paramBase+i, createValueRelName(arg), signature.Params().At(i))
-						}
-					})
-				}
+				nextFunction := createValueRelName(callee)
+				signature := callCommon.Value.Type().(*types.Signature)
+				signatureName := createSignatureName(signature, false, false)
+				ctx.switchFunction(nextFunction, signature, signatureName, createValueRelName(instr), createInstructionName(instr), func() {
+					paramBase := 0
+					argBase := 0
+					if signature.Recv() != nil {
+						receiver := createValueRelName(callCommon.Args[0])
+						fmt.Fprintf(ctx.stream, "signature->param0 = %s; // receiver: %s\n", receiver, signature.Recv())
+						paramBase++
+						argBase++
+					}
+					for i := 0; i < signature.Params().Len(); i++ {
+						arg := callCommon.Args[argBase+i]
+						fmt.Fprintf(ctx.stream, "signature->param%d = %s; // %s\n", paramBase+i, createValueRelName(arg), signature.Params().At(i))
+					}
+				})
 			}
 		}
 
@@ -1239,7 +1237,7 @@ func requireSwitchFunction(instruction ssa.Instruction) bool {
 		}
 		return false
 	case *ssa.Call:
-		return t.Common().Value.Name() != "init"
+		return true
 	case *ssa.Convert:
 		if dstType, ok := t.Type().(*types.Basic); ok && dstType.Kind() == types.String {
 			return true
@@ -1383,6 +1381,15 @@ func (ctx *Context) emitFunctionDefinitionEpilogue() {
 }
 
 func (ctx *Context) emitFunctionDefinition(function *ssa.Function) {
+	if function.Pkg != nil && function.Pkg.Pkg.Name() == "runtime" && function.Name() == "init" { // ToDo
+		ctx.emitFunctionHeader(createFunctionName(function), "{")
+		fmt.Fprintf(ctx.stream, "\tassert(ctx->marker == 0xdeadbeef);\n")
+		fmt.Fprintf(ctx.stream, "\tStackFrame_%s* frame = (void*)ctx->stack_pointer;\n", createFunctionName(function))
+		fmt.Fprintf(ctx.stream, "\tctx->stack_pointer = frame->common.prev_stack_pointer;\n")
+		fmt.Fprintf(ctx.stream, "\treturn frame->common.resume_func;\n")
+		fmt.Fprintf(ctx.stream, "}\n")
+		return
+	}
 	ctx.emitFunctionHeader(createFunctionName(function), "{")
 	fmt.Fprintf(ctx.stream, "\tassert(ctx->marker == 0xdeadbeef);\n")
 	fmt.Fprintf(ctx.stream, "\treturn %s;\n", wrapInFunctionObject(createBasicBlockName(function.Blocks[0])))
