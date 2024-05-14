@@ -977,17 +977,17 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 	case *ssa.Next:
 		result := createValueRelName(instr)
 		iter := createValueRelName(instr.Iter)
-		var rng string
-		if instr.Type().(*types.Tuple).At(1).Type().(*types.Basic).Kind() == types.Invalid {
-			rng = "NULL"
-		} else {
-			rng = fmt.Sprintf("&%s.raw.e1", result)
+		rng := fmt.Sprintf("&%s.raw.e1", result)
+		if t, ok := instr.Type().(*types.Tuple).At(1).Type().(*types.Basic); ok {
+			if t.Kind() == types.Invalid {
+				rng = "NULL"
+			}
 		}
-		var dom string
-		if instr.Type().(*types.Tuple).At(2).Type().(*types.Basic).Kind() == types.Invalid {
-			dom = "NULL"
-		} else {
-			dom = fmt.Sprintf("&%s.raw.e2", result)
+		dom := fmt.Sprintf("&%s.raw.e2", result)
+		if t, ok := instr.Type().(*types.Tuple).At(2).Type().(*types.Basic); ok {
+			if t.Kind() == types.Invalid {
+				dom = "NULL"
+			}
 		}
 		found := fmt.Sprintf("&%s.raw.e0.raw", result)
 		count := fmt.Sprintf("&%s.count", iter)

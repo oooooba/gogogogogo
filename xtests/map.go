@@ -167,6 +167,20 @@ func Test9() int {
 	if m[s].y != 2 {
 		return 4
 	}
+	for k, v := range m {
+		if k.x != 1 {
+			return 5
+		}
+		if k.y != 2 {
+			return 6
+		}
+		if v.x != 1 {
+			return 7
+		}
+		if v.y != 2 {
+			return 8
+		}
+	}
 	return 9
 }
 
