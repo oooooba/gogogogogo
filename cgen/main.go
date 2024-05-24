@@ -1691,8 +1691,10 @@ func (ctx *Context) emitConstant(cst *ssa.Const) {
 		inner = cst.Value.String()
 		if t, ok := cst.Type().Underlying().(*types.Basic); ok {
 			switch t.Kind() {
-			case types.Complex64, types.Complex128, types.Float32, types.Float64:
+			case types.Complex64, types.Complex128:
 				inner = fmt.Sprintf("%g", cst.Complex128())
+			case types.Float32, types.Float64:
+				inner = fmt.Sprintf("%g", cst.Float64())
 			case types.Uint, types.Uint8, types.Uint16, types.Uint32, types.Uint64, types.Uintptr:
 				inner = fmt.Sprintf("%su", inner)
 			case types.Int, types.Int64:
