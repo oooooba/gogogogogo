@@ -1,6 +1,6 @@
 use std::process;
 
-use crate::interface::Interface;
+use crate::object::interface::Interface;
 use crate::FunctionObject;
 use crate::LightWeightThreadContext;
 use crate::StackFrameCommon;

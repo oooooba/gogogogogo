@@ -945,7 +945,7 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 
 	case *ssa.MakeInterface:
 		result := createValueRelName(instr)
-		ctx.switchFunctionToCallRuntimeApi("gox5_make_interface", "StackFrameMakeInterface", createInstructionName(instr), &result, nil,
+		ctx.switchFunctionToCallRuntimeApi("gox5_interface_new", "StackFrameInterfaceNew", createInstructionName(instr), &result, nil,
 			paramArgPair{param: "receiver", arg: fmt.Sprintf("&%s", createValueRelName(instr.X))},
 			paramArgPair{param: "type_id", arg: wrapInTypeId(instr.X.Type())},
 		)
@@ -2516,8 +2516,8 @@ typedef struct {
 	Interface* result_ptr;
 	const void* receiver;
 	TypeId type_id;
-} StackFrameMakeInterface;
-DECLARE_RUNTIME_API(make_interface, StackFrameMakeInterface);
+} StackFrameInterfaceNew;
+DECLARE_RUNTIME_API(interface_new, StackFrameInterfaceNew);
 
 typedef struct {
 	StackFrameCommon common;

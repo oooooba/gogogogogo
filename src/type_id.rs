@@ -1,7 +1,7 @@
 use std::slice;
 
-use super::interface::InterfaceTableEntry;
 use super::ObjectPtr;
+use crate::object::interface::InterfaceTableEntry;
 use crate::object::string::StringObject;
 
 #[repr(C)]

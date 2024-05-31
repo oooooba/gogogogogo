@@ -1,7 +1,6 @@
 mod api;
 mod defer_stack;
 mod global_context;
-mod interface;
 mod object;
 mod type_id;
 
@@ -13,7 +12,7 @@ use std::slice;
 
 use defer_stack::DeferStack;
 use global_context::GlobalContextPtr;
-use interface::Interface;
+use object::interface::Interface;
 use object::string::StringObject;
 
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -293,11 +292,6 @@ extern "C" {
 #[no_mangle]
 pub extern "C" fn gox5_make_closure(ctx: &mut LightWeightThreadContext) -> FunctionObject {
     api::make_closure(ctx)
-}
-
-#[no_mangle]
-pub extern "C" fn gox5_make_interface(ctx: &mut LightWeightThreadContext) -> FunctionObject {
-    api::make_interface(ctx)
 }
 
 #[no_mangle]

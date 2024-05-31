@@ -1,5 +1,6 @@
 pub(crate) mod channel;
 pub(crate) mod defer;
+pub(crate) mod interface;
 pub(crate) mod map;
 pub(crate) mod panic;
 pub(crate) mod slice;
@@ -9,8 +10,6 @@ use std::mem;
 use std::ptr;
 
 use super::create_light_weight_thread_context;
-use super::interface::Interface;
-use super::type_id::TypeId;
 use super::ClosureLayout;
 use super::FunctionObject;
 use super::LightWeightThreadContext;
@@ -52,38 +51,6 @@ pub fn make_closure(ctx: &mut LightWeightThreadContext) -> FunctionObject {
         let stack_frame = ctx.stack_frame_mut::<StackFrameMakeClosure>();
         *stack_frame.result_ptr = FunctionObject::from_closure_layout_ptr(ptr as *const ());
     };
-    ctx.leave()
-}
-
-#[repr(C)]
-struct StackFrameMakeInterface {
-    common: StackFrameCommon,
-    result_ptr: *mut Interface,
-    receiver: ObjectPtr,
-    type_id: TypeId,
-}
-
-pub fn make_interface(ctx: &mut LightWeightThreadContext) -> FunctionObject {
-    let frame = ctx.stack_frame::<StackFrameMakeInterface>();
-
-    let receiver = if frame.receiver.is_null() {
-        ObjectPtr(ptr::null_mut())
-    } else {
-        let size = frame.type_id.size();
-        let ptr = ctx
-            .global_context()
-            .process(|mut global_context| global_context.allocator().allocate(size, |_ptr| {}));
-        unsafe {
-            ptr::copy_nonoverlapping(frame.receiver.0 as *const u8, ptr as *mut u8, size);
-        }
-        ObjectPtr(ptr)
-    };
-
-    let interface = Interface::new(receiver, frame.type_id);
-    unsafe {
-        ptr::copy_nonoverlapping(&interface, frame.result_ptr, 1);
-    }
-    mem::forget(interface);
     ctx.leave()
 }
 

@@ -1,9 +1,9 @@
 use std::ptr;
 
-use super::type_id::TypeId;
-use super::FunctionObject;
-use super::ObjectPtr;
 use crate::object::string::StringObject;
+use crate::type_id::TypeId;
+use crate::FunctionObject;
+use crate::ObjectPtr;
 
 #[derive(Debug)]
 #[repr(C)]
