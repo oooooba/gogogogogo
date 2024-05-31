@@ -116,7 +116,7 @@ pub fn spawn(ctx: &mut LightWeightThreadContext) -> FunctionObject {
         );
         new_ctx
     };
-    ctx.global_context.process(|mut global_context| {
+    ctx.global_context().process(|mut global_context| {
         global_context.push_light_weight_thread(new_ctx);
     });
     ctx.suspend();

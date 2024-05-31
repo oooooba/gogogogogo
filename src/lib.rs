@@ -1,6 +1,7 @@
 mod api;
 mod defer_stack;
 mod global_context;
+mod light_weight_thread;
 mod object;
 mod type_id;
 
@@ -8,10 +9,10 @@ use std::ffi;
 use std::mem;
 use std::process;
 use std::ptr;
-use std::slice;
 
 use defer_stack::DeferStack;
 use global_context::GlobalContextPtr;
+use light_weight_thread::LightWeightThreadContext;
 use object::interface::Interface;
 use object::string::StringObject;
 
@@ -104,166 +105,6 @@ impl StackFrameCommon {
 
     fn defer_stack_mut(&mut self) -> &mut DeferStack {
         &mut self.defer_stack
-    }
-}
-
-#[repr(C)]
-pub struct LightWeightThreadContext {
-    stack_pointer: *mut StackFrame,
-    prev_func: UserFunction,
-    marker: isize,
-    id: usize,
-    global_context: GlobalContextPtr,
-    current_func: FunctionObject,
-    control_flags: usize,
-    panic_data: Interface,
-    initial_stack_pointer: *mut StackFrame,
-}
-
-impl LightWeightThreadContext {
-    fn new(
-        id: usize,
-        global_context: GlobalContextPtr,
-        stack_pointer: *mut StackFrame,
-        entry_func: FunctionObject,
-        prev_func: UserFunction,
-    ) -> Self {
-        LightWeightThreadContext {
-            stack_pointer,
-            prev_func,
-            marker: 0xdeadbeef,
-            id,
-            global_context,
-            current_func: entry_func,
-            control_flags: 0,
-            panic_data: Interface::nil(),
-            initial_stack_pointer: stack_pointer,
-        }
-    }
-
-    fn call<T>(&mut self, result_size: usize, args: &[*const ()], resume_func: FunctionObject) {
-        let result_size = result_size.next_multiple_of(mem::size_of::<*const ()>());
-
-        let p = self.stack_pointer as *mut u8;
-        let p = unsafe { p.add(mem::size_of::<T>()) };
-        let result_pointer = p as *const ();
-
-        let p = unsafe { p.add(result_size) };
-        let next_stack_pointer = p as *mut StackFrame;
-        let next_frame = unsafe { &mut (*next_stack_pointer) };
-
-        next_frame.common.resume_func = resume_func;
-        next_frame.common.prev_stack_pointer = self.stack_pointer;
-        next_frame.common.free_vars = ptr::null_mut();
-        next_frame.common.defer_stack = DeferStack::new();
-
-        let has_result = result_size > 0;
-        let params_offset = usize::from(has_result);
-        let additional_words = unsafe {
-            slice::from_raw_parts_mut(
-                next_frame.additional_words.as_mut_ptr(),
-                params_offset + args.len(),
-            )
-        };
-
-        if has_result {
-            additional_words[0] = result_pointer;
-        }
-
-        let params = &mut additional_words[params_offset..];
-        params.copy_from_slice(args);
-
-        self.stack_pointer = next_stack_pointer;
-    }
-
-    fn prepare_user_function(&mut self) -> UserFunction {
-        let (func, object_ptrs) = self.current_func.extract_user_function();
-        if let Some(object_ptrs) = object_ptrs {
-            unsafe {
-                let words = slice::from_raw_parts_mut(self.stack_pointer as *mut *mut (), 3);
-                words[2] = object_ptrs; // free_vars
-            }
-        }
-        func
-    }
-
-    fn id(&self) -> usize {
-        self.id
-    }
-
-    fn global_context(&self) -> &GlobalContextPtr {
-        &self.global_context
-    }
-
-    fn update_current_func(&mut self, func: FunctionObject) {
-        self.prev_func = self.current_func.extract_user_function().0;
-        self.current_func = func
-    }
-
-    fn stack_frame<T>(&self) -> &T {
-        let p = self.stack_pointer as *const T;
-        unsafe { &*p }
-    }
-
-    fn stack_frame_mut<T>(&mut self) -> &mut T {
-        let p = self.stack_pointer as *mut T;
-        unsafe { &mut *p }
-    }
-
-    pub fn is_stack_empty(&self) -> bool {
-        assert!(self.initial_stack_pointer <= self.stack_pointer);
-        self.initial_stack_pointer == self.stack_pointer
-    }
-
-    fn leave(&mut self) -> FunctionObject {
-        let (prev_stack_pointer, resume_func) = {
-            let stack_frame = self.stack_frame::<StackFrameCommon>();
-            (
-                stack_frame.prev_stack_pointer,
-                stack_frame.resume_func.clone(),
-            )
-        };
-        self.stack_pointer = prev_stack_pointer;
-        resume_func
-    }
-
-    fn is_main(&self) -> bool {
-        self.id == 0
-    }
-
-    fn is_suspended(&self) -> bool {
-        self.control_flags & 0b1 > 0
-    }
-
-    fn suspend(&mut self) {
-        self.control_flags |= 0b1;
-    }
-
-    fn resume(&mut self) {
-        self.control_flags &= !0b1;
-    }
-
-    fn is_terminated(&self) -> bool {
-        self.control_flags & 0b10 > 0
-    }
-
-    fn terminate(&mut self) {
-        self.control_flags |= 0b10;
-    }
-
-    fn enter_panic(&mut self, data: Interface) {
-        self.control_flags |= 0b100;
-        self.panic_data = data;
-    }
-
-    fn exit_panic(&mut self) -> Interface {
-        assert!(self.is_panicking());
-        self.control_flags &= !0b100;
-        self.panic_data.clone()
-    }
-
-    fn is_panicking(&self) -> bool {
-        self.control_flags & 0b100 > 0
     }
 }
 
@@ -520,16 +361,17 @@ mod tests {
         let global_context = global_context::create_global_context(allocator);
         let func = FunctionObject::from_user_function(UserFunction::new(user_function));
         let ctx = create_light_weight_thread_context(global_context.dupulicate(), func);
-        assert_eq!(ctx.global_context, global_context);
-        assert!(
-            ctx.current_func
-                == FunctionObject::from_user_function(UserFunction::new(user_function))
-        );
-        assert!(ctx.prev_func == terminate);
+        assert_eq!(ctx.id(), 0);
+        assert!(ctx.is_main());
+        assert_eq!(ctx.global_context(), &global_context);
+        assert!(ctx.is_stack_empty());
+        assert!(!ctx.is_suspended());
+        assert!(!ctx.is_terminated());
+        assert!(!ctx.is_panicking());
     }
 
     unsafe extern "C" fn user_function(ctx: &mut LightWeightThreadContext) -> FunctionObject {
-        ctx.marker = 0x12345678;
+        ctx.terminate(); // observable side effect
         FunctionObject::new_null()
     }
 
@@ -541,8 +383,10 @@ mod tests {
             global_context.dupulicate(),
             FunctionObject::new_null(),
         );
+        assert!(!ctx.is_terminated());
         let func = UserFunction::new(user_function);
-        func.invoke(&mut ctx);
-        assert_eq!(ctx.marker, 0x12345678);
+        let result = func.invoke(&mut ctx);
+        assert_eq!(result, FunctionObject::new_null());
+        assert!(ctx.is_terminated());
     }
 }
