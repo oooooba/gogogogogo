@@ -1,6 +1,7 @@
 pub(crate) mod channel;
 pub(crate) mod defer;
 pub(crate) mod interface;
+pub(crate) mod lwt;
 pub(crate) mod map;
 pub(crate) mod panic;
 pub(crate) mod slice;
@@ -9,7 +10,6 @@ pub(crate) mod string;
 use std::mem;
 use std::ptr;
 
-use super::create_light_weight_thread_context;
 use super::ClosureLayout;
 use super::FunctionObject;
 use super::LightWeightThreadContext;
@@ -77,48 +77,5 @@ pub fn new(ctx: &mut LightWeightThreadContext) -> FunctionObject {
         let stack_frame = ctx.stack_frame_mut::<StackFrameNew>();
         *stack_frame.result_ptr = ptr;
     };
-    ctx.leave()
-}
-
-pub fn schedule(ctx: &mut LightWeightThreadContext) -> FunctionObject {
-    ctx.suspend();
-    ctx.leave()
-}
-
-#[repr(C)]
-struct StackFrameSpawn {
-    common: StackFrameCommon,
-    func: FunctionObject,
-    result_size: usize,
-    num_arg_buffer_words: usize,
-    arg_buffer: [*const (); 0],
-}
-
-pub fn spawn(ctx: &mut LightWeightThreadContext) -> FunctionObject {
-    let new_ctx = {
-        let stack_frame = ctx.stack_frame_mut::<StackFrameSpawn>();
-
-        let entry_func = stack_frame.func.clone();
-        let result_size = stack_frame.result_size;
-        let args = unsafe {
-            std::slice::from_raw_parts(
-                stack_frame.arg_buffer.as_mut_ptr(),
-                stack_frame.num_arg_buffer_words,
-            )
-        };
-        let global_context = ctx.global_context().dupulicate();
-
-        let mut new_ctx = create_light_weight_thread_context(global_context, entry_func);
-        new_ctx.call::<StackFrameCommon>(
-            result_size,
-            args,
-            FunctionObject::from_user_function(UserFunction::new(crate::terminate)),
-        );
-        new_ctx
-    };
-    ctx.global_context().process(|mut global_context| {
-        global_context.push_light_weight_thread(new_ctx);
-    });
-    ctx.suspend();
     ctx.leave()
 }

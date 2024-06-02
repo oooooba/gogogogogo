@@ -853,7 +853,7 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 			resultSize = fmt.Sprintf("sizeof(%s)", createTypeName(signature.Results()))
 		}
 
-		ctx.switchFunctionToCallRuntimeApi("gox5_spawn", "StackFrameSpawn", createInstructionName(instr), nil,
+		ctx.switchFunctionToCallRuntimeApi("gox5_lwt_spawn", "StackFrameLwtSpawn", createInstructionName(instr), nil,
 			func() {
 				fmt.Fprintf(ctx.stream, "intptr_t num_arg_buffer_words = 0;\n")
 				for i, arg := range callCommon.Args {
@@ -2621,7 +2621,7 @@ typedef struct {
 } StackFrameSchedule;
 DECLARE_RUNTIME_API(schedule, StackFrameSchedule);
 
-#define f_24_runtime_2E_mcall gox5_schedule
+#define f_24_runtime_2E_mcall gox5_lwt_yield
 
 typedef struct {
 	StackFrameCommon common;
@@ -2649,8 +2649,8 @@ typedef struct {
 	uintptr_t result_size;
 	uintptr_t num_arg_buffer_words;
 	void* arg_buffer[0];
-} StackFrameSpawn;
-DECLARE_RUNTIME_API(spawn, StackFrameSpawn);
+} StackFrameLwtSpawn;
+DECLARE_RUNTIME_API(lwt_spawn, StackFrameLwtSpawn);
 
 typedef struct {
 	StackFrameCommon common;

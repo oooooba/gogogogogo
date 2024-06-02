@@ -141,16 +141,6 @@ pub extern "C" fn gox5_new(ctx: &mut LightWeightThreadContext) -> FunctionObject
 }
 
 #[no_mangle]
-pub extern "C" fn gox5_schedule(_ctx: &mut LightWeightThreadContext) -> FunctionObject {
-    unreachable!()
-}
-
-#[no_mangle]
-pub extern "C" fn gox5_spawn(_ctx: &mut LightWeightThreadContext) -> FunctionObject {
-    unreachable!()
-}
-
-#[no_mangle]
 pub extern "C" fn gox5_search_method(
     interface: *const (),
     method_name: StringObject,
@@ -255,13 +245,7 @@ fn execute(ctx: &mut LightWeightThreadContext) {
     ctx.resume();
     while !ctx.is_suspended() {
         let func = ctx.prepare_user_function();
-        let next_func = if func == gox5_schedule {
-            api::schedule(ctx)
-        } else if func == gox5_spawn {
-            api::spawn(ctx)
-        } else {
-            func.invoke(ctx)
-        };
+        let next_func = func.invoke(ctx);
         ctx.update_current_func(next_func);
     }
 }
