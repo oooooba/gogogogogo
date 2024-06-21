@@ -137,11 +137,6 @@ extern "C" {
 }
 
 #[no_mangle]
-pub extern "C" fn gox5_new(ctx: &mut LightWeightThreadContext) -> FunctionObject {
-    api::new(ctx)
-}
-
-#[no_mangle]
 pub extern "C" fn gox5_search_method(
     interface: *const (),
     method_name: StringObject,
