@@ -7,10 +7,9 @@ use crate::object::channel::ReceiveStatus;
 use crate::type_id::TypeId;
 use crate::FunctionObject;
 use crate::LightWeightThreadContext;
+use crate::ObjectPtr;
 use crate::StackFrameCommon;
 use crate::UserFunction;
-
-use super::ObjectPtr;
 
 #[repr(C)]
 struct StackFrameChannelNew<'a> {
