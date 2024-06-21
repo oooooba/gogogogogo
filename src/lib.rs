@@ -23,7 +23,13 @@ pub struct FunctionObject(*const ());
 #[repr(C)]
 struct ClosureLayout {
     func: UserFunction,
-    object_ptrs: Vec<ObjectPtr>,
+    object_ptrs: Vec<ObjectPtr>, // ToDo: fix not to use Vec
+}
+
+impl ClosureLayout {
+    fn new(func: UserFunction, object_ptrs: Vec<ObjectPtr>) -> Self {
+        Self { func, object_ptrs }
+    }
 }
 
 impl FunctionObject {
@@ -128,11 +134,6 @@ impl ObjectPtr {
 extern "C" {
     fn runtime_info_get_entry_point() -> UserFunction;
     fn runtime_info_get_init_point() -> UserFunction;
-}
-
-#[no_mangle]
-pub extern "C" fn gox5_make_closure(ctx: &mut LightWeightThreadContext) -> FunctionObject {
-    api::make_closure(ctx)
 }
 
 #[no_mangle]

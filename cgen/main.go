@@ -923,7 +923,7 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 		}
 		result := createValueRelName(instr)
 		userFunction := fmt.Sprintf("(UserFunction){.func_ptr = %s}", createFunctionName(fn))
-		ctx.switchFunctionToCallRuntimeApi("gox5_make_closure", "StackFrameMakeClosure", createInstructionName(instr), &result,
+		ctx.switchFunctionToCallRuntimeApi("gox5_closure_new", "StackFrameClosureNew", createInstructionName(instr), &result,
 			func() {
 				fnName := createFunctionName(fn)
 				fmt.Fprintf(ctx.stream, "FreeVars_%s* free_vars = (FreeVars_%s*)&next_frame->object_ptrs;\n", fnName, fnName)
@@ -2508,8 +2508,8 @@ typedef struct {
 	UserFunction user_function;
 	uintptr_t num_object_ptrs;
 	void* object_ptrs[0];
-} StackFrameMakeClosure;
-DECLARE_RUNTIME_API(make_closure, StackFrameMakeClosure);
+} StackFrameClosureNew;
+DECLARE_RUNTIME_API(closure_new, StackFrameClosureNew);
 
 typedef struct {
 	StackFrameCommon common;
