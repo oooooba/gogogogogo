@@ -40,7 +40,7 @@ fn allocate_map(
 
 #[no_mangle]
 pub extern "C" fn gox5_map_new(ctx: &mut LightWeightThreadContext) -> FunctionObject {
-    let frame = &ctx.stack_frame::<StackFrameMapNew>();
+    let frame = ctx.stack_frame::<StackFrameMapNew>();
 
     let ptr = allocate_map(ctx, frame.key_type, frame.value_type);
     let ptr = ObjectPtr(ptr as *mut ());
