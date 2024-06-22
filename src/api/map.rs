@@ -32,9 +32,8 @@ fn allocate_map(
 
     let map = MapObject::new(key_type, value_type);
     unsafe {
-        ptr::copy_nonoverlapping(&map, ptr, 1);
+        *ptr = map;
     }
-    mem::forget(map);
     ptr
 }
 

@@ -1,5 +1,4 @@
 use std::mem;
-use std::ptr;
 
 use crate::word_chunk::WordChunk;
 use crate::ClosureLayout;
@@ -29,9 +28,8 @@ pub extern "C" fn gox5_closure_new(ctx: &mut LightWeightThreadContext) -> Functi
     let object_ptrs = frame.free_vars.as_slice().to_vec();
     let closure_layout = ClosureLayout::new(frame.user_function.clone(), object_ptrs);
     unsafe {
-        ptr::copy_nonoverlapping(&closure_layout, ptr, 1);
+        *ptr = closure_layout;
     }
-    mem::forget(closure_layout);
 
     let frame = ctx.stack_frame_mut::<StackFrameClosureNew>();
     *frame.result_ptr = FunctionObject::from_closure_layout_ptr(ptr as *const ());

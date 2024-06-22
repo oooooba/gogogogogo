@@ -34,7 +34,7 @@ fn allocate_channel(ctx: &mut LightWeightThreadContext, capacity: usize) -> *mut
         .process(|mut global_context| ChannelObject::new(capacity, global_context.allocator()));
 
     unsafe {
-        ptr::copy_nonoverlapping(&channel, ptr, 1);
+        *ptr = channel;
     }
 
     ptr
