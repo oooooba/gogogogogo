@@ -4,6 +4,7 @@ mod global_context;
 mod light_weight_thread;
 mod object;
 mod type_id;
+mod word_chunk;
 
 use std::ffi;
 use std::mem;

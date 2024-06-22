@@ -1,5 +1,6 @@
 use crate::create_light_weight_thread_context;
 use crate::light_weight_thread::LightWeightThreadContext;
+use crate::word_chunk::WordChunk;
 use crate::FunctionObject;
 use crate::StackFrameCommon;
 use crate::UserFunction;
@@ -9,21 +10,18 @@ struct StackFrameLwtSpawn {
     common: StackFrameCommon,
     func: FunctionObject,
     result_size: usize,
-    num_arg_buffer_words: usize,
-    arg_buffer: [*const (); 0],
+    args: WordChunk,
 }
 
 #[no_mangle]
 pub extern "C" fn gox5_lwt_spawn(ctx: &mut LightWeightThreadContext) -> FunctionObject {
     let new_ctx = {
-        let frame = ctx.stack_frame_mut::<StackFrameLwtSpawn>();
+        let global_context = ctx.global_context().dupulicate();
 
+        let frame = ctx.stack_frame_mut::<StackFrameLwtSpawn>();
         let entry_func = frame.func.clone();
         let result_size = frame.result_size;
-        let args = unsafe {
-            std::slice::from_raw_parts(frame.arg_buffer.as_mut_ptr(), frame.num_arg_buffer_words)
-        };
-        let global_context = ctx.global_context().dupulicate();
+        let args = frame.args.as_slice();
 
         let mut new_ctx = create_light_weight_thread_context(global_context, entry_func);
         new_ctx.call::<StackFrameCommon>(

@@ -1,5 +1,6 @@
 use std::ptr;
 
+use crate::word_chunk::WordChunk;
 use crate::FunctionObject;
 
 #[repr(C)]
@@ -7,23 +8,20 @@ pub(crate) struct DeferStackEntry {
     next: Option<ptr::NonNull<DeferStackEntry>>,
     func: FunctionObject,
     result_size: usize,
-    num_arg_buffer_words: usize,
-    arg_buffer: *const *const (),
+    args: ptr::NonNull<WordChunk>,
 }
 
 impl DeferStackEntry {
     pub(crate) fn new(
         func: FunctionObject,
         result_size: usize,
-        num_arg_buffer_words: usize,
-        arg_buffer: *const *const (),
+        args: ptr::NonNull<WordChunk>,
     ) -> Self {
         Self {
             next: None,
             func,
             result_size,
-            num_arg_buffer_words,
-            arg_buffer,
+            args,
         }
     }
 
@@ -36,7 +34,7 @@ impl DeferStackEntry {
     }
 
     pub(crate) fn args(&self) -> &[*const ()] {
-        unsafe { std::slice::from_raw_parts(self.arg_buffer, self.num_arg_buffer_words) }
+        unsafe { self.args.as_ref().as_slice() }
     }
 }
 

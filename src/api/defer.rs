@@ -1,8 +1,8 @@
-use core::slice;
 use std::mem;
 use std::ptr;
 
 use crate::defer_stack::DeferStackEntry;
+use crate::word_chunk::WordChunk;
 use crate::FunctionObject;
 use crate::LightWeightThreadContext;
 use crate::StackFrameCommon;
@@ -13,42 +13,25 @@ struct StackFrameDeferRegister {
     common: StackFrameCommon,
     func: FunctionObject,
     result_size: usize,
-    num_arg_buffer_words: usize,
-    arg_buffer: [*const (); 0],
+    args: WordChunk,
 }
 
 #[no_mangle]
 pub extern "C" fn gox5_defer_register(ctx: &mut LightWeightThreadContext) -> FunctionObject {
     let frame = ctx.stack_frame::<StackFrameDeferRegister>();
 
-    let dst_arg_buffer = ctx.global_context().process(|mut global_context| {
-        global_context.allocator().allocate(
-            mem::size_of::<*const ()>() * frame.num_arg_buffer_words,
-            |_| {},
-        ) as *mut *const ()
+    let (args, entry_ptr) = ctx.global_context().process(|mut global_context| {
+        let allocator = global_context.allocator();
+        let args = frame.args.duplicate(allocator);
+        let entry_ptr =
+            allocator.allocate(mem::size_of::<DeferStackEntry>(), |_| {}) as *mut DeferStackEntry;
+        (args, entry_ptr)
     });
-
-    let entry_ptr = ctx.global_context().process(|mut global_context| {
-        global_context
-            .allocator()
-            .allocate(mem::size_of::<DeferStackEntry>(), |_| {}) as *mut DeferStackEntry
-    });
-
-    unsafe {
-        let src = slice::from_raw_parts(frame.arg_buffer.as_ptr(), frame.num_arg_buffer_words);
-        let dst = slice::from_raw_parts_mut(dst_arg_buffer, frame.num_arg_buffer_words);
-        dst.copy_from_slice(src);
-    }
 
     let frame = ctx.stack_frame_mut::<StackFrameDeferRegister>();
     let prev_frame = frame.common.prev_stack_frame_mut::<StackFrameCommon>();
 
-    let entry = DeferStackEntry::new(
-        frame.func.clone(),
-        frame.result_size,
-        frame.num_arg_buffer_words,
-        dst_arg_buffer,
-    );
+    let entry = DeferStackEntry::new(frame.func.clone(), frame.result_size, args);
     unsafe {
         *entry_ptr = entry;
         prev_frame

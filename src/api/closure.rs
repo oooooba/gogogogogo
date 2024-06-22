@@ -1,10 +1,10 @@
 use std::mem;
 use std::ptr;
 
+use crate::word_chunk::WordChunk;
 use crate::ClosureLayout;
 use crate::FunctionObject;
 use crate::LightWeightThreadContext;
-use crate::ObjectPtr;
 use crate::StackFrameCommon;
 use crate::UserFunction;
 
@@ -13,8 +13,7 @@ struct StackFrameClosureNew<'a> {
     common: StackFrameCommon,
     result_ptr: &'a mut FunctionObject,
     user_function: UserFunction,
-    num_object_ptrs: usize,
-    object_ptrs: [ObjectPtr; 0],
+    free_vars: WordChunk,
 }
 
 #[no_mangle]
@@ -27,9 +26,7 @@ pub extern "C" fn gox5_closure_new(ctx: &mut LightWeightThreadContext) -> Functi
             .allocate(mem::size_of::<ClosureLayout>(), |_ptr| {}) as *mut ClosureLayout
     });
 
-    let object_ptrs =
-        unsafe { std::slice::from_raw_parts(frame.object_ptrs.as_ptr(), frame.num_object_ptrs) }
-            .to_vec();
+    let object_ptrs = frame.free_vars.as_slice().to_vec();
     let closure_layout = ClosureLayout::new(frame.user_function.clone(), object_ptrs);
     unsafe {
         ptr::copy_nonoverlapping(&closure_layout, ptr, 1);
