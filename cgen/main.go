@@ -353,6 +353,51 @@ func (ctx *Context) emitPrint(value ssa.Value) {
 	}
 }
 
+func (ctx *Context) emitCallCommon(callCommon *ssa.CallCommon, nextFunction string, nextFunctionFrame string, resumeFunction string) {
+	if callCommon.Method != nil {
+		panic("method not supported")
+	}
+
+	var functionObject string
+	switch callee := callCommon.Value.(type) {
+	case *ssa.Function:
+		functionObject = createValueName(callee)
+	case ssa.Value:
+		functionObject = createValueRelName(callee)
+	default:
+		panic(fmt.Sprintf("unknown callee: %s, %s, %T, %T", callCommon, callee, callCommon, callee))
+	}
+
+	signature := callCommon.Value.Type().(*types.Signature)
+
+	resultSize := "0"
+	switch signature.Results().Len() {
+	case 0:
+		// do nothing
+	case 1:
+		resultSize = fmt.Sprintf("sizeof(%s)", createTypeName(signature.Results().At(0).Type()))
+	default:
+		resultSize = fmt.Sprintf("sizeof(%s)", createTypeName(signature.Results()))
+	}
+
+	ctx.switchFunctionToCallRuntimeApi(nextFunction, nextFunctionFrame, resumeFunction, nil,
+		func() {
+			fmt.Fprintf(ctx.stream, "intptr_t num_arg_buffer_words = 0;\n")
+			for i, arg := range callCommon.Args {
+				argValue := createValueRelName(arg)
+				argType := createTypeName(arg.Type())
+				argPtr := fmt.Sprintf("ptr%d", i)
+				fmt.Fprintf(ctx.stream, "%s* %s = (void*)&next_frame->arg_buffer[num_arg_buffer_words]; // param[%d]\n", argType, argPtr, i)
+				fmt.Fprintf(ctx.stream, "*%s = %s;\n", argPtr, argValue)
+				fmt.Fprintf(ctx.stream, "num_arg_buffer_words += sizeof(%s) / sizeof(next_frame->arg_buffer[0]);\n", argType)
+			}
+			fmt.Fprintf(ctx.stream, "next_frame->num_arg_buffer_words = num_arg_buffer_words;\n")
+		},
+		paramArgPair{param: "function_object", arg: functionObject},
+		paramArgPair{param: "result_size", arg: resultSize},
+	)
+}
+
 func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 	fmt.Fprintf(ctx.stream, "\t// %T (%s): %s\n", instruction, instruction.Parent(), instruction)
 	fmt.Fprintf(ctx.stream, "\t{\n")
@@ -742,50 +787,7 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 		}
 
 	case *ssa.Defer:
-		callCommon := instr.Common()
-		if callCommon.Method != nil {
-			panic("method not supported")
-		}
-
-		var functionObject string
-		var signature *types.Signature
-		switch callee := callCommon.Value.(type) {
-		case *ssa.Function:
-			functionObject = createValueName(callee)
-			signature = callee.Signature
-		case ssa.Value:
-			functionObject = createValueRelName(callee)
-			signature = callee.Type().(*types.Signature)
-		default:
-			panic(fmt.Sprintf("unknown callee: %s, %s, %T, %T", instr, callee, instr, callee))
-		}
-
-		resultSize := "0"
-		switch signature.Results().Len() {
-		case 0:
-			// do nothing
-		case 1:
-			resultSize = fmt.Sprintf("sizeof(%s)", createTypeName(signature.Results().At(0).Type()))
-		default:
-			resultSize = fmt.Sprintf("sizeof(%s)", createTypeName(signature.Results()))
-		}
-
-		ctx.switchFunctionToCallRuntimeApi("gox5_defer_register", "StackFrameDeferRegister", createInstructionName(instr), nil,
-			func() {
-				fmt.Fprintf(ctx.stream, "intptr_t num_arg_buffer_words = 0;\n")
-				for i, arg := range callCommon.Args {
-					argValue := createValueRelName(arg)
-					argType := createTypeName(arg.Type())
-					argPtr := fmt.Sprintf("ptr%d", i)
-					fmt.Fprintf(ctx.stream, "%s* %s = (void*)&next_frame->arg_buffer[num_arg_buffer_words]; // param[%d]\n", argType, argPtr, i)
-					fmt.Fprintf(ctx.stream, "*%s = %s;\n", argPtr, argValue)
-					fmt.Fprintf(ctx.stream, "num_arg_buffer_words += sizeof(%s) / sizeof(next_frame->arg_buffer[0]);\n", argType)
-				}
-				fmt.Fprintf(ctx.stream, "next_frame->num_arg_buffer_words = num_arg_buffer_words;\n")
-			},
-			paramArgPair{param: "function_object", arg: functionObject},
-			paramArgPair{param: "result_size", arg: resultSize},
-		)
+		ctx.emitCallCommon(instr.Common(), "gox5_defer_register", "StackFrameDeferRegister", createInstructionName(instr))
 
 	case *ssa.Extract:
 		fmt.Fprintf(ctx.stream, "%s = %s.raw.e%d;\n", createValueRelName(instr), createValueRelName(instr.Tuple), instr.Index)
@@ -825,50 +827,7 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 		fmt.Fprintf(ctx.stream, "%s = %s;\n", createValueRelName(instr), wrapInObject("raw", instr.Type()))
 
 	case *ssa.Go:
-		callCommon := instr.Common()
-		if callCommon.Method != nil {
-			panic("method not supported")
-		}
-
-		var functionObject string
-		var signature *types.Signature
-		switch callee := callCommon.Value.(type) {
-		case *ssa.Function:
-			functionObject = createValueName(callee)
-			signature = callee.Signature
-		case ssa.Value:
-			functionObject = createValueRelName(callee)
-			signature = callee.Type().(*types.Signature)
-		default:
-			panic(fmt.Sprintf("unknown callee: %s, %s, %T, %T", instr, callee, instr, callee))
-		}
-
-		resultSize := "0"
-		switch signature.Results().Len() {
-		case 0:
-			// do nothing
-		case 1:
-			resultSize = fmt.Sprintf("sizeof(%s)", createTypeName(signature.Results().At(0).Type()))
-		default:
-			resultSize = fmt.Sprintf("sizeof(%s)", createTypeName(signature.Results()))
-		}
-
-		ctx.switchFunctionToCallRuntimeApi("gox5_lwt_spawn", "StackFrameLwtSpawn", createInstructionName(instr), nil,
-			func() {
-				fmt.Fprintf(ctx.stream, "intptr_t num_arg_buffer_words = 0;\n")
-				for i, arg := range callCommon.Args {
-					argValue := createValueRelName(arg)
-					argType := createTypeName(arg.Type())
-					argPtr := fmt.Sprintf("ptr%d", i)
-					fmt.Fprintf(ctx.stream, "%s* %s = (void*)&next_frame->arg_buffer[num_arg_buffer_words]; // param[%d]\n", argType, argPtr, i)
-					fmt.Fprintf(ctx.stream, "*%s = %s;\n", argPtr, argValue)
-					fmt.Fprintf(ctx.stream, "num_arg_buffer_words += sizeof(%s) / sizeof(next_frame->arg_buffer[0]);\n", argType)
-				}
-				fmt.Fprintf(ctx.stream, "next_frame->num_arg_buffer_words = num_arg_buffer_words;\n")
-			},
-			paramArgPair{param: "function_object", arg: functionObject},
-			paramArgPair{param: "result_size", arg: resultSize},
-		)
+		ctx.emitCallCommon(instr.Common(), "gox5_lwt_spawn", "StackFrameLwtSpawn", createInstructionName(instr))
 
 	case *ssa.If:
 		fmt.Fprintf(ctx.stream, "\treturn %s.raw ? %s : %s;\n", createValueRelName(instr.Cond),
