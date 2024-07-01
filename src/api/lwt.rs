@@ -31,7 +31,7 @@ pub extern "C" fn gox5_lwt_spawn(ctx: &mut LightWeightThreadContext) -> Function
             None
         };
         new_ctx.grow_stack(result_size);
-        new_ctx.call(
+        new_ctx.push_frame(
             prev_stack_pointer,
             result_pointer,
             args,
@@ -43,11 +43,11 @@ pub extern "C" fn gox5_lwt_spawn(ctx: &mut LightWeightThreadContext) -> Function
         global_context.push_light_weight_thread(new_ctx);
     });
     ctx.suspend();
-    ctx.leave()
+    ctx.pop_frame()
 }
 
 #[no_mangle]
 pub extern "C" fn gox5_lwt_yield(ctx: &mut LightWeightThreadContext) -> FunctionObject {
     ctx.suspend();
-    ctx.leave()
+    ctx.pop_frame()
 }

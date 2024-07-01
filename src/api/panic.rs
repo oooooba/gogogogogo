@@ -28,7 +28,7 @@ extern "C" fn panic_raise_body(ctx: &mut LightWeightThreadContext) -> FunctionOb
                 None
             };
             ctx.grow_stack(entry.result_size());
-            ctx.call(
+            ctx.push_frame(
                 prev_stack_pointer,
                 result_pointer,
                 entry.args(),
@@ -37,7 +37,7 @@ extern "C" fn panic_raise_body(ctx: &mut LightWeightThreadContext) -> FunctionOb
             entry.func()
         }
         None => {
-            ctx.leave();
+            ctx.pop_frame();
             if ctx.is_panicking() {
                 if ctx.is_stack_empty() {
                     ctx.exit_panic().panic_print();
@@ -45,7 +45,7 @@ extern "C" fn panic_raise_body(ctx: &mut LightWeightThreadContext) -> FunctionOb
                 }
                 FunctionObject::from_user_function(UserFunction::new(panic_raise_body))
             } else {
-                ctx.leave()
+                ctx.pop_frame()
             }
         }
     }
@@ -74,5 +74,5 @@ pub extern "C" fn gox5_panic_recover(ctx: &mut LightWeightThreadContext) -> Func
     };
     let frame = ctx.stack_frame_mut::<StackFramePanicRecover>();
     *frame.result_ptr = result;
-    ctx.leave()
+    ctx.pop_frame()
 }

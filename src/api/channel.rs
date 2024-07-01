@@ -51,7 +51,7 @@ pub extern "C" fn gox5_channel_new(ctx: &mut LightWeightThreadContext) -> Functi
     let frame = ctx.stack_frame_mut::<StackFrameChannelNew>();
     *frame.result_ptr = result;
 
-    ctx.leave()
+    ctx.pop_frame()
 }
 
 fn load_send_data(src: ObjectPtr, size: usize, ctx: &mut LightWeightThreadContext) -> ObjectPtr {
@@ -126,7 +126,7 @@ pub extern "C" fn gox5_channel_select(ctx: &mut LightWeightThreadContext) -> Fun
             let data = load_send_data(entry.send_data.clone(), entry.type_id.size(), ctx);
             channel.send(id, data).unwrap();
             set_result(ctx, Some(i), false);
-            return ctx.leave();
+            return ctx.pop_frame();
         }
         if !entry.receive_data.is_null() && channel.can_complete_receive(id) {
             match channel.receive(id) {
@@ -137,7 +137,7 @@ pub extern "C" fn gox5_channel_select(ctx: &mut LightWeightThreadContext) -> Fun
                         entry.type_id.size(),
                     );
                     set_result(ctx, Some(i), true);
-                    return ctx.leave();
+                    return ctx.pop_frame();
                 }
                 _ => unreachable!(),
             };
@@ -155,7 +155,7 @@ pub extern "C" fn gox5_channel_select(ctx: &mut LightWeightThreadContext) -> Fun
                 ReceiveStatus::Closed => {
                     store_receive_data(entry.receive_data.clone(), None, entry.type_id.size());
                     set_result(ctx, Some(i), false);
-                    return ctx.leave();
+                    return ctx.pop_frame();
                 }
             };
         }
@@ -163,7 +163,7 @@ pub extern "C" fn gox5_channel_select(ctx: &mut LightWeightThreadContext) -> Fun
 
     if frame.need_block == 0 {
         set_result(ctx, None, false);
-        ctx.leave()
+        ctx.pop_frame()
     } else {
         ctx.suspend();
         FunctionObject::from_user_function(UserFunction::new(gox5_channel_select))
@@ -185,7 +185,7 @@ pub extern "C" fn gox5_channel_close(ctx: &mut LightWeightThreadContext) -> Func
 
     channel.close(id);
 
-    ctx.leave()
+    ctx.pop_frame()
 }
 
 #[repr(C)]
@@ -219,7 +219,7 @@ pub extern "C" fn gox5_channel_receive(ctx: &mut LightWeightThreadContext) -> Fu
     }
     store_receive_data(frame.data.clone(), data, frame.type_id.size());
 
-    ctx.leave()
+    ctx.pop_frame()
 }
 
 #[repr(C)]
@@ -241,7 +241,7 @@ pub extern "C" fn gox5_channel_send(ctx: &mut LightWeightThreadContext) -> Funct
     let data = load_send_data(frame.data.clone(), frame.type_id.size(), ctx);
 
     if channel.send(id, data).is_some() {
-        ctx.leave()
+        ctx.pop_frame()
     } else {
         ctx.suspend();
         FunctionObject::from_user_function(UserFunction::new(gox5_channel_send))

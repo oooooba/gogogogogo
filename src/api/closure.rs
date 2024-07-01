@@ -34,5 +34,5 @@ pub extern "C" fn gox5_closure_new(ctx: &mut LightWeightThreadContext) -> Functi
     let frame = ctx.stack_frame_mut::<StackFrameClosureNew>();
     *frame.result_ptr = FunctionObject::from_closure_layout_ptr(ptr as *const ());
 
-    ctx.leave()
+    ctx.pop_frame()
 }

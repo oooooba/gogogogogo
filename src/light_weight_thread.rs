@@ -50,7 +50,7 @@ impl LightWeightThreadContext {
         self.stack_pointer = unsafe { p.add(size) } as *mut StackFrame;
     }
 
-    pub(crate) fn call(
+    pub(crate) fn push_frame(
         &mut self,
         prev_stack_pointer: *mut StackFrame,
         result_pointer: Option<*const ()>,
@@ -83,7 +83,7 @@ impl LightWeightThreadContext {
         self.stack_pointer = next_stack_pointer;
     }
 
-    pub(crate) fn leave(&mut self) -> FunctionObject {
+    pub(crate) fn pop_frame(&mut self) -> FunctionObject {
         let (prev_stack_pointer, resume_func) = {
             let stack_frame = self.stack_frame::<StackFrameCommon>();
             (

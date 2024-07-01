@@ -37,5 +37,5 @@ pub extern "C" fn gox5_interface_new(ctx: &mut LightWeightThreadContext) -> Func
     let frame = ctx.stack_frame_mut::<StackFrameInterfaceNew>();
     *frame.result_ptr = interface;
 
-    ctx.leave()
+    ctx.pop_frame()
 }

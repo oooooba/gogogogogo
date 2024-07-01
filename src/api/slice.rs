@@ -52,7 +52,7 @@ pub extern "C" fn gox5_slice_from_string(ctx: &mut LightWeightThreadContext) -> 
     let frame = ctx.stack_frame_mut::<StackFrameSliceFromString>();
     *frame.result_ptr = result;
 
-    ctx.leave()
+    ctx.pop_frame()
 }
 
 fn reallocate_slice(
@@ -118,7 +118,7 @@ pub extern "C" fn gox5_slice_append(ctx: &mut LightWeightThreadContext) -> Funct
     let frame = ctx.stack_frame_mut::<StackFrameSliceAppend>();
     *frame.result_ptr = result;
 
-    ctx.leave()
+    ctx.pop_frame()
 }
 
 #[repr(C)]
@@ -148,7 +148,7 @@ pub extern "C" fn gox5_slice_append_string(ctx: &mut LightWeightThreadContext) -
     let frame = ctx.stack_frame_mut::<StackFrameSliceAppendString>();
     *frame.result_ptr = result;
 
-    ctx.leave()
+    ctx.pop_frame()
 }
 
 fn copy_slice(dst: &mut SliceObject, elem_size: usize, src: &[u8]) -> usize {
@@ -180,7 +180,7 @@ pub extern "C" fn gox5_slice_copy(ctx: &mut LightWeightThreadContext) -> Functio
     let elem_size = frame.type_id.size();
     let copy_count = copy_slice(&mut frame.dst, elem_size, frame.src.as_bytes(elem_size));
     *frame.result_ptr = isize::try_from(copy_count).unwrap();
-    ctx.leave()
+    ctx.pop_frame()
 }
 
 #[repr(C)]
@@ -197,7 +197,7 @@ pub extern "C" fn gox5_slice_copy_string(ctx: &mut LightWeightThreadContext) -> 
     let elem_size = mem::size_of::<u8>();
     let copy_count = copy_slice(&mut frame.dst, elem_size, frame.src.as_bytes());
     *frame.result_ptr = isize::try_from(copy_count).unwrap();
-    ctx.leave()
+    ctx.pop_frame()
 }
 
 #[repr(C)]
@@ -215,7 +215,7 @@ pub extern "C" fn gox5_slice_capacity(ctx: &mut LightWeightThreadContext) -> Fun
     let frame = ctx.stack_frame_mut::<StackFrameSliceCapacity>();
     *frame.result_ptr = result;
 
-    ctx.leave()
+    ctx.pop_frame()
 }
 
 #[repr(C)]
@@ -233,5 +233,5 @@ pub extern "C" fn gox5_slice_size(ctx: &mut LightWeightThreadContext) -> Functio
     let frame = ctx.stack_frame_mut::<StackFrameSliceSize>();
     *frame.result_ptr = result;
 
-    ctx.leave()
+    ctx.pop_frame()
 }

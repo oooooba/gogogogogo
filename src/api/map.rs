@@ -47,7 +47,7 @@ pub extern "C" fn gox5_map_new(ctx: &mut LightWeightThreadContext) -> FunctionOb
     let frame = ctx.stack_frame_mut::<StackFrameMapNew>();
     *frame.result_ptr = ptr;
 
-    ctx.leave()
+    ctx.pop_frame()
 }
 
 #[repr(C)]
@@ -62,7 +62,7 @@ pub extern "C" fn gox5_map_delete(ctx: &mut LightWeightThreadContext) -> Functio
     let frame = ctx.stack_frame::<StackFrameMapDelete>();
 
     if frame.map.is_null() {
-        return ctx.leave();
+        return ctx.pop_frame();
     }
 
     let mut map = frame.map.clone();
@@ -70,7 +70,7 @@ pub extern "C" fn gox5_map_delete(ctx: &mut LightWeightThreadContext) -> Functio
     let map = map.as_mut::<MapObject>();
     map.delete(key);
 
-    ctx.leave()
+    ctx.pop_frame()
 }
 
 #[repr(C)]
@@ -102,7 +102,7 @@ pub extern "C" fn gox5_map_get(ctx: &mut LightWeightThreadContext) -> FunctionOb
         *frame.found.as_mut() = found;
     }
 
-    ctx.leave()
+    ctx.pop_frame()
 }
 
 #[repr(C)]
@@ -126,7 +126,7 @@ pub extern "C" fn gox5_map_len(ctx: &mut LightWeightThreadContext) -> FunctionOb
     let frame = ctx.stack_frame_mut::<StackFrameMapLen>();
     *frame.result_ptr = len;
 
-    ctx.leave()
+    ctx.pop_frame()
 }
 
 #[repr(C)]
@@ -159,7 +159,7 @@ pub extern "C" fn gox5_map_next(ctx: &mut LightWeightThreadContext) -> FunctionO
         *frame.count.as_mut() = nth + 1;
     }
 
-    ctx.leave()
+    ctx.pop_frame()
 }
 
 #[repr(C)]
@@ -188,5 +188,5 @@ pub extern "C" fn gox5_map_set(ctx: &mut LightWeightThreadContext) -> FunctionOb
         map.set(key, value, allocator);
     });
 
-    ctx.leave()
+    ctx.pop_frame()
 }

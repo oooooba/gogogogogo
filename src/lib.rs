@@ -230,7 +230,7 @@ fn create_light_weight_thread_context(
 
 extern "C" fn enter_main(ctx: &mut LightWeightThreadContext) -> FunctionObject {
     let prev_stack_pointer = ctx.stack_pointer();
-    ctx.call(
+    ctx.push_frame(
         prev_stack_pointer,
         None,
         &[],
@@ -259,7 +259,7 @@ fn main() {
     let mut ctx = create_light_weight_thread_context(global_context.dupulicate(), init_func);
     let prev_stack_pointer = ctx.stack_pointer();
     ctx.grow_stack(mem::size_of::<isize>());
-    ctx.call(
+    ctx.push_frame(
         prev_stack_pointer,
         Some(prev_stack_pointer as *const ()),
         &[],

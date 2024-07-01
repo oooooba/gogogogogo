@@ -30,7 +30,7 @@ pub extern "C" fn gox5_string_new_from_byte_slice(
     let frame = ctx.stack_frame_mut::<StackFrameStringNewFromByteSlice>();
     *frame.result_ptr = builder.build();
 
-    ctx.leave()
+    ctx.pop_frame()
 }
 
 #[repr(C)]
@@ -58,7 +58,7 @@ pub extern "C" fn gox5_string_new_from_rune(ctx: &mut LightWeightThreadContext) 
     let frame = ctx.stack_frame_mut::<StackFrameStringNewFromRune>();
     *frame.result_ptr = builder.build();
 
-    ctx.leave()
+    ctx.pop_frame()
 }
 
 #[repr(C)]
@@ -104,7 +104,7 @@ pub extern "C" fn gox5_string_new_from_rune_slice(
     let frame = ctx.stack_frame_mut::<StackFrameStringNewFromRuneSlice>();
     *frame.result_ptr = builder.build();
 
-    ctx.leave()
+    ctx.pop_frame()
 }
 
 #[repr(C)]
@@ -130,7 +130,7 @@ pub extern "C" fn gox5_string_append(ctx: &mut LightWeightThreadContext) -> Func
     let frame = ctx.stack_frame_mut::<StackFrameStringAppend>();
     *frame.result_ptr = builder.build();
 
-    ctx.leave()
+    ctx.pop_frame()
 }
 
 #[repr(C)]
@@ -148,7 +148,7 @@ pub extern "C" fn gox5_string_length(ctx: &mut LightWeightThreadContext) -> Func
     let frame = ctx.stack_frame_mut::<StackFrameStringLength>();
     *frame.result_ptr = result;
 
-    ctx.leave()
+    ctx.pop_frame()
 }
 
 #[repr(C)]
@@ -180,7 +180,7 @@ pub extern "C" fn gox5_string_next(ctx: &mut LightWeightThreadContext) -> Functi
         *frame.found = false;
     }
 
-    ctx.leave()
+    ctx.pop_frame()
 }
 
 #[repr(C)]
@@ -228,5 +228,5 @@ pub extern "C" fn gox5_string_substr(ctx: &mut LightWeightThreadContext) -> Func
     let frame = ctx.stack_frame_mut::<StackFrameStringSubstr>();
     *frame.result_ptr = builder.build();
 
-    ctx.leave()
+    ctx.pop_frame()
 }

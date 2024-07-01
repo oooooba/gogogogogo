@@ -39,7 +39,7 @@ pub extern "C" fn gox5_defer_register(ctx: &mut LightWeightThreadContext) -> Fun
             .push(ptr::NonNull::new_unchecked(entry_ptr));
     }
 
-    ctx.leave()
+    ctx.pop_frame()
 }
 
 #[repr(C)]
@@ -54,7 +54,7 @@ pub extern "C" fn gox5_defer_execute(ctx: &mut LightWeightThreadContext) -> Func
 
     let entry = match prev_frame.defer_stack_mut().pop() {
         Some(mut entry) => unsafe { entry.as_mut() },
-        None => return ctx.leave(),
+        None => return ctx.pop_frame(),
     };
 
     // Keep the stack frame at the time it is called by user function.
@@ -68,7 +68,7 @@ pub extern "C" fn gox5_defer_execute(ctx: &mut LightWeightThreadContext) -> Func
     };
     ctx.grow_stack(entry.result_size());
 
-    ctx.call(
+    ctx.push_frame(
         prev_stack_pointer,
         result_pointer,
         entry.args(),

@@ -27,5 +27,5 @@ pub extern "C" fn gox5_new(ctx: &mut LightWeightThreadContext) -> FunctionObject
     let frame = ctx.stack_frame_mut::<StackFrameNew>();
     *frame.result_ptr = ObjectPtr(ptr);
 
-    ctx.leave()
+    ctx.pop_frame()
 }
