@@ -57,8 +57,20 @@ pub extern "C" fn gox5_defer_execute(ctx: &mut LightWeightThreadContext) -> Func
         None => return ctx.leave(),
     };
 
-    ctx.call::<StackFrameDeferExecute>(
-        entry.result_size(),
+    // Keep the stack frame at the time it is called by user function.
+    let prev_stack_pointer = ctx.stack_pointer();
+    ctx.grow_stack(mem::size_of::<StackFrameDeferExecute>());
+
+    let result_pointer = if entry.result_size() > 0 {
+        Some(ctx.stack_pointer() as *const ())
+    } else {
+        None
+    };
+    ctx.grow_stack(entry.result_size());
+
+    ctx.call(
+        prev_stack_pointer,
+        result_pointer,
         entry.args(),
         FunctionObject::from_user_function(UserFunction::new(gox5_defer_execute)),
     );

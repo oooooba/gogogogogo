@@ -229,8 +229,10 @@ fn create_light_weight_thread_context(
 }
 
 extern "C" fn enter_main(ctx: &mut LightWeightThreadContext) -> FunctionObject {
-    ctx.call::<StackFrameCommon>(
-        0,
+    let prev_stack_pointer = ctx.stack_pointer();
+    ctx.call(
+        prev_stack_pointer,
+        None,
         &[],
         FunctionObject::from_user_function(UserFunction::new(terminate)),
     );
@@ -255,8 +257,11 @@ fn main() {
     let init_func = unsafe { runtime_info_get_init_point() };
     let init_func = FunctionObject::from_user_function(init_func);
     let mut ctx = create_light_weight_thread_context(global_context.dupulicate(), init_func);
-    ctx.call::<StackFrameCommon>(
-        mem::size_of::<isize>(),
+    let prev_stack_pointer = ctx.stack_pointer();
+    ctx.grow_stack(mem::size_of::<isize>());
+    ctx.call(
+        prev_stack_pointer,
+        Some(prev_stack_pointer as *const ()),
         &[],
         FunctionObject::from_user_function(UserFunction::new(enter_main)),
     );

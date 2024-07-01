@@ -1,3 +1,4 @@
+use std::mem;
 use std::process;
 
 use crate::object::interface::Interface;
@@ -13,13 +14,23 @@ struct StackFramePanicRaise {
 }
 
 extern "C" fn panic_raise_body(ctx: &mut LightWeightThreadContext) -> FunctionObject {
+    let prev_stack_pointer = ctx.stack_pointer();
     let frame = ctx.stack_frame_mut::<StackFramePanicRaise>();
     let prev_frame = frame.common.prev_stack_frame_mut::<StackFrameCommon>();
     match prev_frame.defer_stack_mut().pop() {
         Some(mut entry) => {
+            // Keep the stack frame at the time it is called by user function.
+            ctx.grow_stack(mem::size_of::<StackFramePanicRaise>());
             let entry = unsafe { entry.as_mut() };
-            ctx.call::<StackFramePanicRaise>(
-                entry.result_size(),
+            let result_pointer = if entry.result_size() > 0 {
+                Some(ctx.stack_pointer() as *const ())
+            } else {
+                None
+            };
+            ctx.grow_stack(entry.result_size());
+            ctx.call(
+                prev_stack_pointer,
+                result_pointer,
                 entry.args(),
                 FunctionObject::from_user_function(UserFunction::new(panic_raise_body)),
             );

@@ -44,29 +44,28 @@ impl LightWeightThreadContext {
         }
     }
 
-    pub(crate) fn call<T>(
+    pub(crate) fn grow_stack(&mut self, size: usize) {
+        let size = size.next_multiple_of(mem::size_of::<*const ()>());
+        let p = self.stack_pointer as *mut u8;
+        self.stack_pointer = unsafe { p.add(size) } as *mut StackFrame;
+    }
+
+    pub(crate) fn call(
         &mut self,
-        result_size: usize,
+        prev_stack_pointer: *mut StackFrame,
+        result_pointer: Option<*const ()>,
         args: &[*const ()],
         resume_func: FunctionObject,
     ) {
-        let result_size = result_size.next_multiple_of(mem::size_of::<*const ()>());
-
-        let p = self.stack_pointer as *mut u8;
-        let p = unsafe { p.add(mem::size_of::<T>()) };
-        let result_pointer = p as *const ();
-
-        let p = unsafe { p.add(result_size) };
-        let next_stack_pointer = p as *mut StackFrame;
+        let next_stack_pointer = self.stack_pointer;
         let next_frame = unsafe { &mut (*next_stack_pointer) };
 
         next_frame.common.resume_func = resume_func;
-        next_frame.common.prev_stack_pointer = self.stack_pointer;
+        next_frame.common.prev_stack_pointer = prev_stack_pointer;
         next_frame.common.free_vars = ptr::null_mut();
         next_frame.common.defer_stack = DeferStack::new();
 
-        let has_result = result_size > 0;
-        let params_offset = usize::from(has_result);
+        let params_offset = usize::from(result_pointer.is_some());
         let additional_words = unsafe {
             slice::from_raw_parts_mut(
                 next_frame.additional_words.as_mut_ptr(),
@@ -74,7 +73,7 @@ impl LightWeightThreadContext {
             )
         };
 
-        if has_result {
+        if let Some(result_pointer) = result_pointer {
             additional_words[0] = result_pointer;
         }
 
@@ -122,6 +121,10 @@ impl LightWeightThreadContext {
 
     pub(crate) fn global_context(&self) -> &GlobalContextPtr {
         &self.global_context
+    }
+
+    pub(crate) fn stack_pointer(&self) -> *mut StackFrame {
+        self.stack_pointer
     }
 
     pub(crate) fn stack_frame<T>(&self) -> &T {

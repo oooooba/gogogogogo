@@ -24,8 +24,16 @@ pub extern "C" fn gox5_lwt_spawn(ctx: &mut LightWeightThreadContext) -> Function
         let args = frame.args.as_slice();
 
         let mut new_ctx = create_light_weight_thread_context(global_context, entry_func);
-        new_ctx.call::<StackFrameCommon>(
-            result_size,
+        let prev_stack_pointer = new_ctx.stack_pointer();
+        let result_pointer = if result_size > 0 {
+            Some(prev_stack_pointer as *const ())
+        } else {
+            None
+        };
+        new_ctx.grow_stack(result_size);
+        new_ctx.call(
+            prev_stack_pointer,
+            result_pointer,
             args,
             FunctionObject::from_user_function(UserFunction::new(crate::terminate)),
         );
