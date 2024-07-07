@@ -490,23 +490,30 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 	case *ssa.Call:
 		callCommon := instr.Common()
 		if callCommon.Method != nil {
-			fmt.Fprintf(ctx.stream,
-				"FunctionObject next_function = gox5_search_method(&%s, (StringObject){\"%s\"});\n",
-				createValueRelName(callCommon.Value), callCommon.Method.Name())
-			fmt.Fprintf(ctx.stream, "assert(next_function.raw != NULL);\n")
-			nextFunction := "next_function"
 			signature := callCommon.Method.Type().(*types.Signature)
-			signatureName := createSignatureName(signature, false, true)
-			ctx.switchFunction(nextFunction, signature, signatureName, createValueRelName(instr), createInstructionName(instr), func() {
-				receiver := fmt.Sprintf("*(void**)(%s.receiver)", createValueRelName(callCommon.Value))
-				fmt.Fprintf(ctx.stream, "signature->param0 = %s; // receiver: %s\n", receiver, signature.Recv())
-				paramBase := 1
-				for i := 0; i < signature.Params().Len(); i++ {
-					arg := callCommon.Args[i]
-					fmt.Fprintf(ctx.stream, "signature->param%d = %s; // %s\n",
-						paramBase+i, createValueRelName(arg), signature.Params().At(i))
-				}
-			})
+			result_ptr := "NULL"
+			if signature.Results().Len() > 0 {
+				result_ptr = fmt.Sprintf("&%s", createValueRelName(instr))
+			}
+			ctx.switchFunctionToCallRuntimeApi("gox5_interface_invoke", "StackFrameInterfaceInvoke", createInstructionName(instr), nil,
+				func() {
+					receiver := fmt.Sprintf("*(void**)(%s.receiver)", createValueRelName(callCommon.Value))
+					fmt.Fprintf(ctx.stream, "next_frame->arg_buffer[0] = %s; // receiver: %s\n", receiver, signature.Recv())
+					fmt.Fprintf(ctx.stream, "intptr_t num_arg_buffer_words = 1;\n")
+					for i, arg := range callCommon.Args {
+						argValue := createValueRelName(arg)
+						argType := createTypeName(arg.Type())
+						argPtr := fmt.Sprintf("ptr%d", i)
+						fmt.Fprintf(ctx.stream, "%s* %s = (void*)&next_frame->arg_buffer[num_arg_buffer_words]; // param[%d]\n", argType, argPtr, i)
+						fmt.Fprintf(ctx.stream, "*%s = %s;\n", argPtr, argValue)
+						fmt.Fprintf(ctx.stream, "num_arg_buffer_words += sizeof(%s) / sizeof(next_frame->arg_buffer[0]);\n", argType)
+					}
+					fmt.Fprintf(ctx.stream, "next_frame->num_arg_buffer_words = num_arg_buffer_words;\n")
+				},
+				paramArgPair{param: "result_ptr", arg: result_ptr},
+				paramArgPair{param: "interface", arg: fmt.Sprintf("&%s", createValueRelName(callCommon.Value))},
+				paramArgPair{param: "method_name", arg: fmt.Sprintf("(StringObject){\"%s\"}", callCommon.Method.Name())},
+			)
 		} else {
 			switch callee := callCommon.Value.(type) {
 			case *ssa.Builtin:
@@ -2474,6 +2481,16 @@ typedef struct {
 	TypeId type_id;
 } StackFrameInterfaceNew;
 DECLARE_RUNTIME_API(interface_new, StackFrameInterfaceNew);
+
+typedef struct {
+	StackFrameCommon common;
+	void* result_ptr;
+	Interface* interface;
+	StringObject method_name;
+	uintptr_t num_arg_buffer_words;
+	void* arg_buffer[0];
+} StackFrameInterfaceInvoke;
+DECLARE_RUNTIME_API(interface_invoke, StackFrameInterfaceInvoke);
 
 typedef struct {
 	StackFrameCommon common;
