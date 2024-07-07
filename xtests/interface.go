@@ -679,6 +679,24 @@ func Test29() int {
 	return 29
 }
 
+type I4 interface {
+	h(n int)
+}
+
+func (s *S0) h(n int) {
+	s.n = n
+}
+
+func Test30() int {
+	s := S0{n: 42}
+	var i I4 = &s
+	i.h(43)
+	if s.n != 43 {
+		return 0
+	}
+	return 30
+}
+
 func main() {
 	runTest := func(testName string, test func() int) {
 		println(testName+":", test())
@@ -712,4 +730,5 @@ func main() {
 	runTest("Test27", Test27)
 	runTest("Test28", Test28)
 	runTest("Test29", Test29)
+	runTest("Test30", Test30)
 }
