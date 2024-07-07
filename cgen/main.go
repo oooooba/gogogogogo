@@ -498,12 +498,9 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 			signature := callCommon.Method.Type().(*types.Signature)
 			signatureName := createSignatureName(signature, false, true)
 			ctx.switchFunction(nextFunction, signature, signatureName, createValueRelName(instr), createInstructionName(instr), func() {
-				paramBase := 0
-				if signature.Recv() != nil {
-					receiver := fmt.Sprintf("*(void**)(%s.receiver)", createValueRelName(callCommon.Value))
-					fmt.Fprintf(ctx.stream, "signature->param0 = %s; // receiver: %s\n", receiver, signature.Recv())
-					paramBase++
-				}
+				receiver := fmt.Sprintf("*(void**)(%s.receiver)", createValueRelName(callCommon.Value))
+				fmt.Fprintf(ctx.stream, "signature->param0 = %s; // receiver: %s\n", receiver, signature.Recv())
+				paramBase := 1
 				for i := 0; i < signature.Params().Len(); i++ {
 					arg := callCommon.Args[i]
 					fmt.Fprintf(ctx.stream, "signature->param%d = %s; // %s\n",
