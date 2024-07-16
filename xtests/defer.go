@@ -97,6 +97,69 @@ func Test5() int {
 	}
 	return 5
 }
+
+func test6_f(x *int) int {
+	f := func() {
+		if *x == 2 {
+			*x = 3
+		}
+	}
+	g := func() {
+		defer f()
+		if *x == 1 {
+			*x = 2
+		}
+	}
+	defer g()
+	*x = 1
+	return 6
+}
+
+func Test6() int {
+	x := 0
+	if test6_f(&x) != 6 {
+		return 0
+	}
+	if x != 3 {
+		return 1
+	}
+	return 6
+}
+
+type I interface {
+	f(n int)
+}
+
+type S0 struct {
+	n int
+}
+
+func (s *S0) f(n int) {
+	s.n = n
+}
+
+func test7_f(s *S0) int {
+	defer func() {
+		if s.n == 43 {
+			s.f(44)
+		} else {
+			s.n = 45
+		}
+	}()
+	s.f(43)
+	return 7
+}
+
+func Test7() int {
+	s := S0{42}
+	if test7_f(&s) != 7 {
+		return 0
+	}
+	if s.n != 44 {
+		return 1
+	}
+	return 7
+}
 func main() {
 	runTest := func(testName string, test func() int) {
 		println(testName+":", test())
@@ -106,4 +169,6 @@ func main() {
 	runTest("Test3", Test3)
 	runTest("Test4", Test4)
 	runTest("Test5", Test5)
+	runTest("Test6", Test6)
+	runTest("Test7", Test7)
 }
