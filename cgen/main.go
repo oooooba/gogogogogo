@@ -263,6 +263,7 @@ func createFieldName(field *types.Var, index int) string {
 func (ctx *Context) switchFunction(nextFunction string, signature *types.Signature, signatureName string, result string, resumeFunction string, paramAndArgsHandler func()) {
 	fmt.Fprintf(ctx.stream, "StackFrameCommon* next_frame = (StackFrameCommon*)(frame + 1);\n")
 	fmt.Fprintf(ctx.stream, "assert(((uintptr_t)next_frame) %% sizeof(uintptr_t) == 0);\n")
+	fmt.Fprintf(ctx.stream, "*next_frame = (StackFrameCommon){ 0 };\n")
 	fmt.Fprintf(ctx.stream, "next_frame->resume_func = %s;\n", wrapInFunctionObject(resumeFunction))
 	fmt.Fprintf(ctx.stream, "next_frame->prev_stack_pointer = ctx->stack_pointer;\n")
 

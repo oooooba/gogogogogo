@@ -128,6 +128,7 @@ func Test6() int {
 
 type I interface {
 	f(n int)
+	g(n int)
 }
 
 type S0 struct {
@@ -160,6 +161,36 @@ func Test7() int {
 	}
 	return 7
 }
+
+func (s *S0) g(n int) {
+	defer func() {
+		s.n = n + 1
+	}()
+}
+
+func test8_f(s *S0) int {
+	defer func() {
+		if s.n == 44 {
+			s.g(44)
+		} else {
+			s.n = 46
+		}
+	}()
+	s.g(43)
+	return 8
+}
+
+func Test8() int {
+	s := S0{42}
+	if test8_f(&s) != 8 {
+		return 0
+	}
+	if s.n != 45 {
+		return 1
+	}
+	return 8
+}
+
 func main() {
 	runTest := func(testName string, test func() int) {
 		println(testName+":", test())
@@ -171,4 +202,5 @@ func main() {
 	runTest("Test5", Test5)
 	runTest("Test6", Test6)
 	runTest("Test7", Test7)
+	runTest("Test8", Test8)
 }
