@@ -2,6 +2,8 @@ use std::mem;
 use std::ptr;
 
 use crate::defer_stack::DeferStackEntry;
+use crate::object::interface::Interface;
+use crate::object::string::StringObject;
 use crate::word_chunk::WordChunk;
 use crate::FunctionObject;
 use crate::LightWeightThreadContext;
@@ -48,6 +50,27 @@ pub extern "C" fn gox5_defer_register(ctx: &mut LightWeightThreadContext) -> Fun
     register(ctx, |ctx| {
         let frame = ctx.stack_frame::<StackFrameDeferRegister>();
         let func = frame.func.clone();
+        let result_size = frame.result_size;
+        let args = &frame.args;
+        (func, result_size, args)
+    })
+}
+
+#[repr(C)]
+struct StackFrameDeferRegisterInvoke<'a> {
+    common: StackFrameCommon,
+    interface: &'a Interface,
+    method_name: StringObject,
+    result_size: usize,
+    args: WordChunk,
+}
+
+#[no_mangle]
+pub extern "C" fn gox5_defer_register_invoke(ctx: &mut LightWeightThreadContext) -> FunctionObject {
+    register(ctx, |ctx| {
+        let frame = ctx.stack_frame::<StackFrameDeferRegisterInvoke>();
+        let method = frame.interface.search(frame.method_name.clone());
+        let func = method.unwrap();
         let result_size = frame.result_size;
         let args = &frame.args;
         (func, result_size, args)

@@ -129,6 +129,7 @@ func Test6() int {
 type I interface {
 	f(n int)
 	g(n int)
+	h() int
 }
 
 type S0 struct {
@@ -191,6 +192,69 @@ func Test8() int {
 	return 8
 }
 
+func test9_f(i I) int {
+	defer func() {
+		s := i.(*S0)
+		if s.n == 44 {
+			s.g(44)
+		} else {
+			s.n = 46
+		}
+	}()
+	i.g(43)
+	return 9
+}
+
+func Test9() int {
+	s := S0{42}
+	if test9_f(&s) != 9 {
+		return 0
+	}
+	if s.n != 45 {
+		return 1
+	}
+	return 9
+}
+
+func test10_f(i I) int {
+	defer i.g(43)
+	return 10
+}
+
+func Test10() int {
+	s := S0{42}
+	if test10_f(&s) != 10 {
+		return 0
+	}
+	if s.n != 44 {
+		return 1
+	}
+	return 10
+}
+
+func (s *S0) h() int {
+	defer func() {
+		s.n += 1
+	}()
+	return s.n
+}
+
+func test11_f(i I) int {
+	defer i.h()
+	return 11
+}
+
+func Test11() int {
+	s := S0{42}
+	if test11_f(&s) != 11 {
+		return 0
+	}
+	if s.n != 43 {
+		return 1
+	}
+	return 11
+}
+
 func main() {
 	runTest := func(testName string, test func() int) {
 		println(testName+":", test())
@@ -203,4 +267,7 @@ func main() {
 	runTest("Test6", Test6)
 	runTest("Test7", Test7)
 	runTest("Test8", Test8)
+	runTest("Test9", Test9)
+	runTest("Test10", Test10)
+	runTest("Test11", Test11)
 }

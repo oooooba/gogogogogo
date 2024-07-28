@@ -399,6 +399,44 @@ func (ctx *Context) emitCallCommon(callCommon *ssa.CallCommon, nextFunction stri
 	)
 }
 
+func (ctx *Context) emitCallCommonForMethod(callCommon *ssa.CallCommon, nextFunction string, nextFunctionFrame string, resumeFunction string) {
+	if callCommon.Method == nil {
+		panic("only method supported")
+	}
+
+	signature := callCommon.Method.Type().(*types.Signature)
+
+	resultSize := "0"
+	switch signature.Results().Len() {
+	case 0:
+		// do nothing
+	case 1:
+		resultSize = fmt.Sprintf("sizeof(%s)", createTypeName(signature.Results().At(0).Type()))
+	default:
+		resultSize = fmt.Sprintf("sizeof(%s)", createTypeName(signature.Results()))
+	}
+
+	ctx.switchFunctionToCallRuntimeApi(nextFunction, nextFunctionFrame, resumeFunction, nil,
+		func() {
+			receiver := fmt.Sprintf("*(void**)(%s.receiver)", createValueRelName(callCommon.Value))
+			fmt.Fprintf(ctx.stream, "next_frame->arg_buffer[0] = %s; // receiver: %s\n", receiver, signature.Recv())
+			fmt.Fprintf(ctx.stream, "intptr_t num_arg_buffer_words = 1;\n")
+			for i, arg := range callCommon.Args {
+				argValue := createValueRelName(arg)
+				argType := createTypeName(arg.Type())
+				argPtr := fmt.Sprintf("ptr%d", i)
+				fmt.Fprintf(ctx.stream, "%s* %s = (void*)&next_frame->arg_buffer[num_arg_buffer_words]; // param[%d]\n", argType, argPtr, i)
+				fmt.Fprintf(ctx.stream, "*%s = %s;\n", argPtr, argValue)
+				fmt.Fprintf(ctx.stream, "num_arg_buffer_words += sizeof(%s) / sizeof(next_frame->arg_buffer[0]);\n", argType)
+			}
+			fmt.Fprintf(ctx.stream, "next_frame->num_arg_buffer_words = num_arg_buffer_words;\n")
+		},
+		paramArgPair{param: "interface", arg: fmt.Sprintf("&%s", createValueRelName(callCommon.Value))},
+		paramArgPair{param: "method_name", arg: fmt.Sprintf("(StringObject){\"%s\"}", callCommon.Method.Name())},
+		paramArgPair{param: "result_size", arg: resultSize},
+	)
+}
+
 func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 	fmt.Fprintf(ctx.stream, "\t// %T (%s): %s\n", instruction, instruction.Parent(), instruction)
 	fmt.Fprintf(ctx.stream, "\t{\n")
@@ -792,7 +830,13 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 		}
 
 	case *ssa.Defer:
-		ctx.emitCallCommon(instr.Common(), "gox5_defer_register", "StackFrameDeferRegister", createInstructionName(instr))
+		callCommon := instr.Common()
+		resumeFunction := createInstructionName(instr)
+		if callCommon.Method == nil {
+			ctx.emitCallCommon(callCommon, "gox5_defer_register", "StackFrameDeferRegister", resumeFunction)
+		} else {
+			ctx.emitCallCommonForMethod(callCommon, "gox5_defer_register_invoke", "StackFrameDeferRegisterInvoke", resumeFunction)
+		}
 
 	case *ssa.Extract:
 		fmt.Fprintf(ctx.stream, "%s = %s.raw.e%d;\n", createValueRelName(instr), createValueRelName(instr.Tuple), instr.Index)
@@ -2442,6 +2486,16 @@ typedef struct {
 	void* arg_buffer[0];
 } StackFrameDeferRegister;
 DECLARE_RUNTIME_API(defer_register, StackFrameDeferRegister);
+
+typedef struct {
+	StackFrameCommon common;
+	Interface* interface;
+	StringObject method_name;
+	uintptr_t result_size;
+	uintptr_t num_arg_buffer_words;
+	void* arg_buffer[0];
+} StackFrameDeferRegisterInvoke;
+DECLARE_RUNTIME_API(defer_register_invoke, StackFrameDeferRegisterInvoke);
 
 typedef struct {
 	StackFrameCommon common;
