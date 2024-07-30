@@ -876,7 +876,13 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 		fmt.Fprintf(ctx.stream, "%s = %s;\n", createValueRelName(instr), wrapInObject("raw", instr.Type()))
 
 	case *ssa.Go:
-		ctx.emitCallCommon(instr.Common(), "gox5_lwt_spawn", "StackFrameLwtSpawn", createInstructionName(instr))
+		callCommon := instr.Common()
+		resumeFunction := createInstructionName(instr)
+		if callCommon.Method == nil {
+			ctx.emitCallCommon(callCommon, "gox5_lwt_spawn", "StackFrameLwtSpawn", resumeFunction)
+		} else {
+			ctx.emitCallCommonForMethod(callCommon, "gox5_lwt_spawn_invoke", "StackFrameLwtSpawnInvoke", resumeFunction)
+		}
 
 	case *ssa.If:
 		fmt.Fprintf(ctx.stream, "\treturn %s.raw ? %s : %s;\n", createValueRelName(instr.Cond),
@@ -2679,6 +2685,16 @@ typedef struct {
 	void* arg_buffer[0];
 } StackFrameLwtSpawn;
 DECLARE_RUNTIME_API(lwt_spawn, StackFrameLwtSpawn);
+
+typedef struct {
+	StackFrameCommon common;
+	Interface* interface;
+	StringObject method_name;
+	uintptr_t result_size;
+	uintptr_t num_arg_buffer_words;
+	void* arg_buffer[0];
+} StackFrameLwtSpawnInvoke;
+DECLARE_RUNTIME_API(lwt_spawn_invoke, StackFrameLwtSpawnInvoke);
 
 typedef struct {
 	StackFrameCommon common;

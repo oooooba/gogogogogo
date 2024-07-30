@@ -1,5 +1,7 @@
 use crate::create_light_weight_thread_context;
 use crate::light_weight_thread::LightWeightThreadContext;
+use crate::object::interface::Interface;
+use crate::object::string::StringObject;
 use crate::word_chunk::WordChunk;
 use crate::FunctionObject;
 use crate::StackFrameCommon;
@@ -48,6 +50,27 @@ pub extern "C" fn gox5_lwt_spawn(ctx: &mut LightWeightThreadContext) -> Function
     spawn(ctx, |ctx| {
         let frame = ctx.stack_frame::<StackFrameLwtSpawn>();
         let entry_func = frame.func.clone();
+        let result_size = frame.result_size;
+        let args = &frame.args;
+        (entry_func, result_size, args)
+    })
+}
+
+#[repr(C)]
+struct StackFrameLwtSpawnInvoke<'a> {
+    common: StackFrameCommon,
+    interface: &'a Interface,
+    method_name: StringObject,
+    result_size: usize,
+    args: WordChunk,
+}
+
+#[no_mangle]
+pub extern "C" fn gox5_lwt_spawn_invoke(ctx: &mut LightWeightThreadContext) -> FunctionObject {
+    spawn(ctx, |ctx| {
+        let frame = ctx.stack_frame::<StackFrameLwtSpawnInvoke>();
+        let method = frame.interface.search(frame.method_name.clone());
+        let entry_func = method.unwrap();
         let result_size = frame.result_size;
         let args = &frame.args;
         (entry_func, result_size, args)

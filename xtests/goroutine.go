@@ -183,6 +183,42 @@ L:
 	return 13
 }
 
+type I0 interface {
+	f(n int)
+	g() int
+}
+
+type S0 struct {
+	ch chan int
+}
+
+func (s *S0) f(n int) {
+	s.ch <- n
+}
+
+func (s *S0) g() int {
+	return <-s.ch
+}
+
+func Test14() int {
+	ch := make(chan int)
+	s := S0{ch: ch}
+	go s.f(14)
+	v := s.g()
+	return v
+}
+
+func Test15() int {
+	ch := make(chan int)
+	i := func() I0 {
+		s := S0{ch: ch}
+		return &s
+	}()
+	go i.f(15)
+	v := i.g()
+	return v
+}
+
 func main() {
 	runTest := func(testName string, test func() int) {
 		println(testName+":", test())
@@ -200,4 +236,6 @@ func main() {
 	runTest("Test11", Test11)
 	runTest("Test12", Test12)
 	runTest("Test13", Test13)
+	runTest("Test14", Test14)
+	runTest("Test15", Test15)
 }
