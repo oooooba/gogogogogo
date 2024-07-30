@@ -8,6 +8,33 @@ use crate::LightWeightThreadContext;
 use crate::StackFrameCommon;
 use crate::UserFunction;
 
+fn register<F>(ctx: &mut LightWeightThreadContext, param: F) -> FunctionObject
+where
+    F: FnOnce(&LightWeightThreadContext) -> (FunctionObject, usize, &WordChunk),
+{
+    let (func, result_size, args) = param(ctx);
+    let (args, entry_ptr) = ctx.global_context().process(|mut global_context| {
+        let allocator = global_context.allocator();
+        let args = args.duplicate(allocator);
+        let entry_ptr =
+            allocator.allocate(mem::size_of::<DeferStackEntry>(), |_| {}) as *mut DeferStackEntry;
+        (args, entry_ptr)
+    });
+
+    let frame = ctx.stack_frame_mut::<StackFrameCommon>();
+    let prev_frame = frame.prev_stack_frame_mut::<StackFrameCommon>();
+
+    let entry = DeferStackEntry::new(func, result_size, args);
+    unsafe {
+        *entry_ptr = entry;
+        prev_frame
+            .defer_stack_mut()
+            .push(ptr::NonNull::new_unchecked(entry_ptr));
+    }
+
+    ctx.pop_frame()
+}
+
 #[repr(C)]
 struct StackFrameDeferRegister {
     common: StackFrameCommon,
@@ -18,28 +45,13 @@ struct StackFrameDeferRegister {
 
 #[no_mangle]
 pub extern "C" fn gox5_defer_register(ctx: &mut LightWeightThreadContext) -> FunctionObject {
-    let frame = ctx.stack_frame::<StackFrameDeferRegister>();
-
-    let (args, entry_ptr) = ctx.global_context().process(|mut global_context| {
-        let allocator = global_context.allocator();
-        let args = frame.args.duplicate(allocator);
-        let entry_ptr =
-            allocator.allocate(mem::size_of::<DeferStackEntry>(), |_| {}) as *mut DeferStackEntry;
-        (args, entry_ptr)
-    });
-
-    let frame = ctx.stack_frame_mut::<StackFrameDeferRegister>();
-    let prev_frame = frame.common.prev_stack_frame_mut::<StackFrameCommon>();
-
-    let entry = DeferStackEntry::new(frame.func.clone(), frame.result_size, args);
-    unsafe {
-        *entry_ptr = entry;
-        prev_frame
-            .defer_stack_mut()
-            .push(ptr::NonNull::new_unchecked(entry_ptr));
-    }
-
-    ctx.pop_frame()
+    register(ctx, |ctx| {
+        let frame = ctx.stack_frame::<StackFrameDeferRegister>();
+        let func = frame.func.clone();
+        let result_size = frame.result_size;
+        let args = &frame.args;
+        (func, result_size, args)
+    })
 }
 
 #[repr(C)]
