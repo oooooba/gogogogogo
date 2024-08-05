@@ -605,14 +605,14 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 
 				case "copy":
 					result := createValueRelName(instr)
-					if t, ok := callCommon.Args[1].Type().(*types.Basic); ok && t.Kind() == types.String {
+					if t, ok := callCommon.Args[1].Type().Underlying().(*types.Basic); ok && t.Kind() == types.String {
 						ctx.switchFunctionToCallRuntimeApi("gox5_slice_copy_string", "StackFrameSliceCopyString", createInstructionName(instr), &result, nil,
 							paramArgPair{param: "src", arg: createValueRelName(callCommon.Args[1])},
 							paramArgPair{param: "dst", arg: fmt.Sprintf("%s.raw", createValueRelName(callCommon.Args[0]))},
 						)
 					} else {
 						ctx.switchFunctionToCallRuntimeApi("gox5_slice_copy", "StackFrameSliceCopy", createInstructionName(instr), &result, nil,
-							paramArgPair{param: "type_id", arg: wrapInTypeId(callCommon.Args[0].Type().(*types.Slice).Elem())},
+							paramArgPair{param: "type_id", arg: wrapInTypeId(callCommon.Args[0].Type().Underlying().(*types.Slice).Elem())},
 							paramArgPair{param: "src", arg: fmt.Sprintf("%s.raw", createValueRelName(callCommon.Args[1]))},
 							paramArgPair{param: "dst", arg: fmt.Sprintf("%s.raw", createValueRelName(callCommon.Args[0]))},
 						)

@@ -555,6 +555,16 @@ func Test32() int {
 	if len(s) != 6 {
 		return 6
 	}
+	y := S("xyz")
+	n := copy(s, y)
+	if n != 3 {
+		return 7
+	}
+	for i := 0; i < 3; i++ {
+		if y[i] != byte('x'+i) {
+			return 7 + i
+		}
+	}
 	return 32
 }
 
@@ -568,6 +578,16 @@ func Test33() int {
 	}
 	if len(s) != 6 {
 		return 6
+	}
+	y := BS("xyz")
+	n := copy(s, y)
+	if n != 3 {
+		return 7
+	}
+	for i := 0; i < 3; i++ {
+		if y[i] != byte('x'+i) {
+			return 7 + i
+		}
 	}
 	return 33
 }
