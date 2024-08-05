@@ -1707,8 +1707,13 @@ func (ctx *Context) emitConstant(cst *ssa.Const) {
 				inner = fmt.Sprintf("%su", inner)
 			case types.Int, types.Int64:
 				inner = fmt.Sprintf("%slu", inner)
-			case types.String:
-				inner = strconv.Quote(constant.StringVal(cst.Value))
+			case types.String, types.UntypedString:
+				inner = "\""
+				fullString := constant.StringVal(cst.Value)
+				for i := 0; i < len(fullString); i++ {
+					inner += fmt.Sprintf("\\x%02x", fullString[i])
+				}
+				inner += "\""
 			case types.UnsafePointer:
 				inner = fmt.Sprintf("(void*)%su", inner)
 			}
