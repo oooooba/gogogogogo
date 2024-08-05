@@ -573,8 +573,8 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 				case "append":
 					result := createValueRelName(instr)
 					result += ".raw"
-					if t, ok := callCommon.Args[1].Type().(*types.Basic); ok && t.Kind() == types.String {
-						if instr.Type().(*types.Slice).Elem().(*types.Basic).Kind() != types.Byte {
+					if t, ok := callCommon.Args[1].Type().Underlying().(*types.Basic); ok && t.Kind() == types.String {
+						if instr.Type().Underlying().(*types.Slice).Elem().(*types.Basic).Kind() != types.Byte {
 							panic(instr.String())
 						}
 						ctx.switchFunctionToCallRuntimeApi("gox5_slice_append_string", "StackFrameSliceAppendString", createInstructionName(instr), &result, nil,
@@ -1257,7 +1257,7 @@ func requireSwitchFunction(instruction ssa.Instruction) bool {
 		if dstType, ok := t.Type().(*types.Basic); ok && dstType.Kind() == types.String {
 			return true
 		}
-		if _, ok := t.Type().(*types.Slice); ok {
+		if _, ok := t.Type().Underlying().(*types.Slice); ok {
 			return true
 		}
 		return false

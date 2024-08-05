@@ -543,6 +543,35 @@ func Test31() int {
 	return 31
 }
 
+func Test32() int {
+	type S string
+	x := S("def")
+	s := append([]byte("abc"), x...)
+	for i := 0; i < 6; i++ {
+		if s[i] != byte('a'+i) {
+			return i
+		}
+	}
+	if len(s) != 6 {
+		return 6
+	}
+	return 32
+}
+
+func Test33() int {
+	type BS []byte
+	s := append(BS("abc"), "def"...)
+	for i := 0; i < 6; i++ {
+		if s[i] != byte('a'+i) {
+			return i
+		}
+	}
+	if len(s) != 6 {
+		return 6
+	}
+	return 33
+}
+
 func main() {
 	runTest := func(testName string, test func() int) {
 		println(testName+":", test())
@@ -578,4 +607,6 @@ func main() {
 	runTest("Test29", Test29)
 	runTest("Test30", Test30)
 	runTest("Test31", Test31)
+	runTest("Test32", Test32)
+	runTest("Test33", Test33)
 }
