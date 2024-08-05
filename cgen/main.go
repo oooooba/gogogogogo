@@ -1150,35 +1150,29 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 		fmt.Fprintf(ctx.stream, "*(%s.raw) = %s;\n", createValueRelName(instr.Addr), createValueRelName(instr.Val))
 
 	case *ssa.TypeAssert:
-		srcObj := func() string {
-			if _, ok := instr.AssertedType.Underlying().(*types.Interface); ok {
-				return fmt.Sprintf("%s", createValueRelName(instr.X))
-			} else {
-				return fmt.Sprintf("*((%s*)%s.receiver)", createTypeName(instr.AssertedType), createValueRelName(instr.X))
-			}
-		}()
-		dstObj := createValueRelName(instr)
+		result := createValueRelName(instr)
+		var value, success string
 		if instr.CommaOk {
-			if t, ok := instr.AssertedType.Underlying().(*types.Interface); ok {
-				fmt.Fprintf(ctx.stream, "bool can_convert = true;\n")
-				fmt.Fprintf(ctx.stream, "Interface* interface = &%s;\n", srcObj)
-				for i := 0; i < t.NumExplicitMethods(); i++ {
-					fmt.Fprintf(ctx.stream,
-						"can_convert = can_convert && (gox5_search_method(interface, (StringObject){\"%s\"}).raw != NULL);\n",
-						t.ExplicitMethod(i).Name())
-				}
-			} else {
-				fmt.Fprintf(ctx.stream, "TypeId type_id = %s;\n", wrapInTypeId(instr.AssertedType))
-				fmt.Fprintf(ctx.stream, "bool can_convert = %s.type_id.id == type_id.id;\n", createValueRelName(instr.X))
-			}
-			fmt.Fprintf(ctx.stream, "%s = %s;\n", dstObj, wrapInObject("0", instr.Type()))
-			fmt.Fprintf(ctx.stream, "if (can_convert) {\n")
-			fmt.Fprintf(ctx.stream, "%s.raw.e0 = %s;\n", dstObj, srcObj)
-			fmt.Fprintf(ctx.stream, "}\n")
-			fmt.Fprintf(ctx.stream, "%s.raw.e1 = (BoolObject){.raw=can_convert};\n", dstObj)
+			value = fmt.Sprintf("&%s.raw.e0", result)
+			success = fmt.Sprintf("&%s.raw.e1.raw", result)
 		} else {
-			fmt.Fprintf(ctx.stream, "%s = %s;\n", dstObj, srcObj)
+			value = fmt.Sprintf("&%s", result)
+			success = "NULL"
 		}
+		var nextFunction, nextFunctionFrame string
+		if _, ok := instr.AssertedType.Underlying().(*types.Interface); ok {
+			nextFunction = "gox5_interface_convert_to_interface"
+			nextFunctionFrame = "StackFrameInterfaceConvertToInterface"
+		} else {
+			nextFunction = "gox5_interface_convert_to_concrete_type"
+			nextFunctionFrame = "StackFrameInterfaceConvertToConcreteType"
+		}
+		ctx.switchFunctionToCallRuntimeApi(nextFunction, nextFunctionFrame, createInstructionName(instr), nil, nil,
+			paramArgPair{param: "interface", arg: fmt.Sprintf("&%s", createValueRelName(instr.X))},
+			paramArgPair{param: "to_type", arg: wrapInTypeId(instr.AssertedType)},
+			paramArgPair{param: "value", arg: value},
+			paramArgPair{param: "success", arg: success},
+		)
 
 	case *ssa.UnOp:
 		if instr.Op == token.ARROW {
@@ -1267,7 +1261,7 @@ func requireSwitchFunction(instruction ssa.Instruction) bool {
 			return true
 		}
 		return false
-	case *ssa.Defer, *ssa.Go, *ssa.MakeChan, *ssa.MakeClosure, *ssa.MakeInterface, *ssa.MakeMap, *ssa.MakeSlice, *ssa.MapUpdate, *ssa.RunDefers, *ssa.Select, *ssa.Send:
+	case *ssa.Defer, *ssa.Go, *ssa.MakeChan, *ssa.MakeClosure, *ssa.MakeInterface, *ssa.MakeMap, *ssa.MakeSlice, *ssa.MapUpdate, *ssa.RunDefers, *ssa.Select, *ssa.Send, *ssa.TypeAssert:
 		return true
 	case *ssa.Lookup:
 		_, ok := t.X.Type().Underlying().(*types.Map)
@@ -2552,6 +2546,24 @@ typedef struct {
 	void* arg_buffer[0];
 } StackFrameInterfaceInvoke;
 DECLARE_RUNTIME_API(interface_invoke, StackFrameInterfaceInvoke);
+
+typedef struct {
+	StackFrameCommon common;
+	Interface* interface;
+	TypeId to_type;
+	void* value;
+	bool* success;
+} StackFrameInterfaceConvertToConcreteType;
+DECLARE_RUNTIME_API(interface_convert_to_concrete_type, StackFrameInterfaceConvertToConcreteType);
+
+typedef struct {
+	StackFrameCommon common;
+	Interface* interface;
+	TypeId to_type;
+	void* value;
+	bool* success;
+} StackFrameInterfaceConvertToInterface;
+DECLARE_RUNTIME_API(interface_convert_to_interface, StackFrameInterfaceConvertToInterface);
 
 typedef struct {
 	StackFrameCommon common;

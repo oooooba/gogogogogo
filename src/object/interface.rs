@@ -12,6 +12,12 @@ pub(crate) struct InterfaceTableEntry {
     method: FunctionObject,
 }
 
+impl InterfaceTableEntry {
+    pub(crate) fn method_name(&self) -> &StringObject {
+        &self.method_name
+    }
+}
+
 #[derive(Debug, Clone)]
 #[repr(C)]
 pub(crate) struct Interface {
@@ -28,6 +34,14 @@ impl Interface {
         let receiver = ObjectPtr(ptr::null_mut());
         let type_id = TypeId::new_invalid();
         Self { receiver, type_id }
+    }
+
+    pub fn receiver(&self) -> &ObjectPtr {
+        &self.receiver
+    }
+
+    pub fn type_id(&self) -> &TypeId {
+        &self.type_id
     }
 
     pub fn search(&self, method_name: StringObject) -> Option<FunctionObject> {

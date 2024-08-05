@@ -43,6 +43,86 @@ pub extern "C" fn gox5_interface_new(ctx: &mut LightWeightThreadContext) -> Func
 }
 
 #[repr(C)]
+struct StackFrameInterfaceConvertToConcreteType<'a> {
+    common: StackFrameCommon,
+    interface: &'a Interface,
+    to_type: TypeId,
+    value: ObjectPtr,
+    success: ObjectPtr,
+}
+
+#[no_mangle]
+pub extern "C" fn gox5_interface_convert_to_concrete_type(
+    ctx: &mut LightWeightThreadContext,
+) -> FunctionObject {
+    let frame = ctx.stack_frame_mut::<StackFrameInterfaceConvertToConcreteType>();
+    let object_size = frame.to_type.size();
+    let success = frame.interface.type_id() == &frame.to_type;
+
+    if success {
+        unsafe {
+            ptr::copy_nonoverlapping(
+                frame.interface.receiver().as_ref() as *const u8,
+                frame.value.as_mut() as *mut u8,
+                object_size,
+            );
+        }
+    } else {
+        if frame.success.is_null() {
+            unimplemented!()
+        }
+
+        unsafe {
+            ptr::write_bytes(frame.value.as_mut() as *mut u8, 0, object_size);
+        }
+    }
+
+    if !frame.success.is_null() {
+        *frame.success.as_mut() = success;
+    }
+
+    ctx.pop_frame()
+}
+
+#[repr(C)]
+struct StackFrameInterfaceConvertToInterface<'a> {
+    common: StackFrameCommon,
+    interface: &'a Interface,
+    to_type: TypeId,
+    value: ObjectPtr,
+    success: ObjectPtr,
+}
+
+#[no_mangle]
+pub extern "C" fn gox5_interface_convert_to_interface(
+    ctx: &mut LightWeightThreadContext,
+) -> FunctionObject {
+    let frame = ctx.stack_frame_mut::<StackFrameInterfaceConvertToInterface>();
+
+    let success = frame.to_type.interface_table().iter().all(|entry| {
+        frame
+            .interface
+            .search(entry.method_name().clone())
+            .is_some()
+    });
+
+    if success {
+        *frame.value.as_mut::<Interface>() = frame.interface.clone();
+    } else {
+        if frame.success.is_null() {
+            unimplemented!()
+        }
+        *frame.value.as_mut::<Interface>() = Interface::nil();
+    }
+
+    if !frame.success.is_null() {
+        *frame.success.as_mut() = success;
+    }
+
+    ctx.pop_frame()
+}
+
+#[repr(C)]
 struct StackFrameInterfaceInvoke<'a> {
     common: StackFrameCommon,
     result_ptr: Option<&'a mut ()>,
