@@ -557,7 +557,7 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 			switch callee := callCommon.Value.(type) {
 			case *ssa.Builtin:
 				complexNumberBitLength := func(v ssa.Value) uint {
-					switch v.Type().(*types.Basic).Kind() {
+					switch v.Type().Underlying().(*types.Basic).Kind() {
 					case types.Complex64:
 						return 64
 					case types.Complex128:

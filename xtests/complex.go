@@ -70,6 +70,26 @@ func Test5() int {
 	return 5
 }
 
+func Test6() int {
+	type C64 complex64
+	c64 := C64(complex(1, 2))
+	if real(c64) != 1 {
+		return 0
+	}
+	if imag(c64) != 2 {
+		return 1
+	}
+	type C128 complex128
+	c128 := C128(complex(3, 4))
+	if real(c128) != 3 {
+		return 2
+	}
+	if imag(c128) != 4 {
+		return 3
+	}
+	return 6
+}
+
 func main() {
 	runTest := func(testName string, test func() int) {
 		println(testName+":", test())
@@ -79,4 +99,5 @@ func main() {
 	runTest("Test3", Test3)
 	runTest("Test4", Test4)
 	runTest("Test5", Test5)
+	runTest("Test6", Test6)
 }
