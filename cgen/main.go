@@ -369,7 +369,7 @@ func (ctx *Context) emitCallCommon(callCommon *ssa.CallCommon, nextFunction stri
 		panic(fmt.Sprintf("unknown callee: %s, %s, %T, %T", callCommon, callee, callCommon, callee))
 	}
 
-	signature := callCommon.Value.Type().(*types.Signature)
+	signature := callCommon.Value.Type().Underlying().(*types.Signature)
 
 	resultSize := "0"
 	switch signature.Results().Len() {
@@ -404,7 +404,7 @@ func (ctx *Context) emitCallCommonForMethod(callCommon *ssa.CallCommon, nextFunc
 		panic("only method supported")
 	}
 
-	signature := callCommon.Method.Type().(*types.Signature)
+	signature := callCommon.Method.Type().Underlying().(*types.Signature)
 
 	resultSize := "0"
 	switch signature.Results().Len() {
@@ -529,7 +529,7 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 	case *ssa.Call:
 		callCommon := instr.Common()
 		if callCommon.Method != nil {
-			signature := callCommon.Method.Type().(*types.Signature)
+			signature := callCommon.Method.Type().Underlying().(*types.Signature)
 			result_ptr := "NULL"
 			if signature.Results().Len() > 0 {
 				result_ptr = fmt.Sprintf("&%s", createValueRelName(instr))
@@ -722,7 +722,7 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 
 			default:
 				nextFunction := createValueRelName(callee)
-				signature := callCommon.Value.Type().(*types.Signature)
+				signature := callCommon.Value.Type().Underlying().(*types.Signature)
 				signatureName := createSignatureName(signature, false, false)
 				ctx.switchFunction(nextFunction, signature, signatureName, createValueRelName(instr), createInstructionName(instr), func() {
 					paramBase := 0

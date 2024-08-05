@@ -211,6 +211,32 @@ func Test16() int {
 	return 16
 }
 
+type F func(int) int
+
+func test17_f(x int) int {
+	return x + 2
+}
+
+func Test17() int {
+	var f F
+	if f != nil {
+		return 0
+	}
+	f = func(x int) int {
+		return x + 1
+	}
+	n := f(2)
+	if n != 3 {
+		return n
+	}
+	f = test17_f
+	n = f(2)
+	if n != 4 {
+		return n
+	}
+	return 17
+}
+
 func main() {
 	runTest := func(testName string, test func() int) {
 		println(testName+":", test())
@@ -231,4 +257,5 @@ func main() {
 	runTest("Test14", Test14)
 	runTest("Test15", Test15)
 	runTest("Test16", Test16)
+	runTest("Test17", Test17)
 }
