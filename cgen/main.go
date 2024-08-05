@@ -2724,8 +2724,6 @@ typedef struct {
 } StackFrameStringSubstr;
 DECLARE_RUNTIME_API(string_substr, StackFrameStringSubstr);
 
-FunctionObject gox5_search_method(Interface* interface, StringObject method_name);
-
 __attribute__((unused)) static void builtin_print_float(double val) {
 	char buf[20];
 	int len = snprintf(buf, sizeof(buf) / sizeof(buf[0]), "%+.6e", val);

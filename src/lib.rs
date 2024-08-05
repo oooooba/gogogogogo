@@ -14,8 +14,6 @@ use std::ptr;
 use defer_stack::DeferStack;
 use global_context::GlobalContextPtr;
 use light_weight_thread::LightWeightThreadContext;
-use object::interface::Interface;
-use object::string::StringObject;
 
 #[derive(Clone, PartialEq, Eq, Debug)]
 #[repr(C)]
@@ -135,16 +133,6 @@ impl ObjectPtr {
 extern "C" {
     fn runtime_info_get_entry_point() -> UserFunction;
     fn runtime_info_get_init_point() -> UserFunction;
-}
-
-#[no_mangle]
-pub extern "C" fn gox5_search_method(
-    interface: *const (),
-    method_name: StringObject,
-) -> FunctionObject {
-    let interface = unsafe { &*(interface as *const Interface) };
-    let method = interface.search(method_name);
-    method.unwrap_or_else(FunctionObject::new_null)
 }
 
 extern "C" fn terminate(ctx: &mut LightWeightThreadContext) -> FunctionObject {
