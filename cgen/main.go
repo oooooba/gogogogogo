@@ -754,7 +754,7 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 			switch dstType.Kind() {
 			case types.String:
 				result := createValueRelName(instr)
-				switch srcType := instr.X.Type().(type) {
+				switch srcType := instr.X.Type().Underlying().(type) {
 				case *types.Basic:
 					arg := fmt.Sprintf("(IntObject){%s.raw}", createValueRelName(instr.X))
 					ctx.switchFunctionToCallRuntimeApi("gox5_string_new_from_rune", "StackFrameStringNewFromRune", createInstructionName(instr), &result, nil,
@@ -1254,7 +1254,7 @@ func requireSwitchFunction(instruction ssa.Instruction) bool {
 	case *ssa.Call:
 		return true
 	case *ssa.Convert:
-		if dstType, ok := t.Type().(*types.Basic); ok && dstType.Kind() == types.String {
+		if dstType, ok := t.Type().Underlying().(*types.Basic); ok && dstType.Kind() == types.String {
 			return true
 		}
 		if _, ok := t.Type().Underlying().(*types.Slice); ok {

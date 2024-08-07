@@ -173,6 +173,12 @@ func Test13() int {
 	if s != "A" {
 		return 0
 	}
+	type Rune rune
+	n1 := Rune('B')
+	s1 := string(n1)
+	if s1 != "B" {
+		return 1
+	}
 	return 13
 }
 
@@ -183,6 +189,13 @@ func Test14() int {
 	if s != "A" {
 		return 0
 	}
+	type ByteSlice []byte
+	var v1 [1]byte
+	v1[0] = 'B'
+	s1 := string(ByteSlice(v1[:]))
+	if s1 != "B" {
+		return 1
+	}
 	return 14
 }
 
@@ -191,6 +204,12 @@ func Test15() int {
 	s := string(v[:])
 	if s != "" {
 		return 0
+	}
+	type ByteSlice []byte
+	var v1 []byte
+	s1 := string(ByteSlice(v1[:]))
+	if s1 != "" {
+		return 1
 	}
 	return 15
 }
@@ -202,6 +221,13 @@ func Test16() int {
 	if s != "A" {
 		return 0
 	}
+	type RuneSlice []rune
+	var v1 [1]rune
+	v1[0] = 'B'
+	s1 := string(RuneSlice(v1[:]))
+	if s1 != "B" {
+		return 1
+	}
 	return 16
 }
 
@@ -210,6 +236,12 @@ func Test17() int {
 	s := string(v[:])
 	if s != "" {
 		return 0
+	}
+	type RuneSlice []rune
+	var v1 [0]rune
+	s1 := string(RuneSlice(v1[:]))
+	if s1 != "" {
+		return 1
 	}
 	return 17
 }
@@ -220,6 +252,12 @@ func Test18() int {
 	if s != "\u1234" {
 		return 0
 	}
+	type Int int
+	n1 := Int(0x1235)
+	s1 := string(n1)
+	if s1 != "\u1235" {
+		return 1
+	}
 	return 18
 }
 
@@ -228,6 +266,12 @@ func Test19() int {
 	s := string(c)
 	if s != "\u1234" {
 		return 0
+	}
+	type Rune rune
+	c1 := Rune('\u1235')
+	s1 := string(c1)
+	if s1 != "\u1235" {
+		return 1
 	}
 	return 19
 }
