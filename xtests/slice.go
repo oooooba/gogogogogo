@@ -592,6 +592,40 @@ func Test33() int {
 	return 33
 }
 
+func Test34() int {
+	type Byte byte
+	s0 := []Byte("abc")
+	if len(s0) != 3 {
+		return 0
+	}
+	for i := 0; i < 3; i++ {
+		if s0[i] != Byte('a'+i) {
+			return 1 + i
+		}
+	}
+	type Rune rune
+	s1 := []Rune("defg")
+	if len(s1) != 4 {
+		return 4
+	}
+	for i := 0; i < 4; i++ {
+		if s1[i] != Rune('d'+i) {
+			return 5 + i
+		}
+	}
+	type String string
+	s2 := []byte(String("hi"))
+	if len(s2) != 2 {
+		return 9
+	}
+	for i := 0; i < 2; i++ {
+		if s2[i] != byte('h'+i) {
+			return 10 + i
+		}
+	}
+	return 34
+}
+
 func main() {
 	runTest := func(testName string, test func() int) {
 		println(testName+":", test())
@@ -629,4 +663,5 @@ func main() {
 	runTest("Test31", Test31)
 	runTest("Test32", Test32)
 	runTest("Test33", Test33)
+	runTest("Test34", Test34)
 }

@@ -807,14 +807,14 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 			}
 
 		case *types.Slice:
-			elemType := dstType.Elem().(*types.Basic)
+			elemType := dstType.Elem().Underlying().(*types.Basic)
 			switch elemType.Kind() {
 			case types.Byte, types.Rune:
 				// valid conversion
 			default:
 				panic(instr.String())
 			}
-			srcType := instr.X.Type().(*types.Basic)
+			srcType := instr.X.Type().Underlying().(*types.Basic)
 			if srcType.Kind() != types.String {
 				panic(instr.String())
 			}
