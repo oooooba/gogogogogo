@@ -334,6 +334,20 @@ func Test23() int {
 	return 23
 }
 
+func Test24() int {
+	type S struct{ x int }
+	type P *S
+	f := func(s P) {
+		s.x = 1
+	}
+	s0 := S{0}
+	f(P(&s0))
+	if s0.x != 1 {
+		return 0
+	}
+	return 24
+}
+
 func main() {
 	runTest := func(testName string, test func() int) {
 		println(testName+":", test())
@@ -361,4 +375,5 @@ func main() {
 	runTest("Test21", Test21)
 	runTest("Test22", Test22)
 	runTest("Test23", Test23)
+	runTest("Test24", Test24)
 }

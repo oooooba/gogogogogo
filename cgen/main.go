@@ -849,7 +849,7 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 
 	case *ssa.FieldAddr:
 		index := instr.Field
-		name := createFieldName(instr.X.Type().(*types.Pointer).Elem().Underlying().(*types.Struct).Field(index), index)
+		name := createFieldName(instr.X.Type().Underlying().(*types.Pointer).Elem().Underlying().(*types.Struct).Field(index), index)
 		fmt.Fprintf(ctx.stream, "%s* raw = &(%s.raw->%s);\n", createTypeName(instr.Type().(*types.Pointer).Elem()), createValueRelName(instr.X), name)
 		fmt.Fprintf(ctx.stream, "%s = %s;\n", createValueRelName(instr), wrapInObject("raw", instr.Type()))
 
