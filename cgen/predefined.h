@@ -233,6 +233,70 @@ DECLARE_RUNTIME_API(closure_new, StackFrameClosureNew);
 
 typedef struct {
     StackFrameCommon common;
+    Complex64Object *result_ptr;
+    Float32Object real;
+    Float32Object imaginary;
+} StackFrameComplex64New;
+
+__attribute__((unused)) static FunctionObject
+gox5_complex64_new(LightWeightThreadContext *ctx) {
+    StackFrameComplex64New *frame = (void *)ctx->stack_pointer;
+    *frame->result_ptr =
+        (Complex64Object){.raw = frame->real.raw + frame->imaginary.raw * I};
+    ctx->stack_pointer = frame->common.prev_stack_pointer;
+    return frame->common.resume_func;
+}
+
+typedef struct {
+    StackFrameCommon common;
+    Float32Object *result_ptr;
+    Complex64Object value;
+    uintptr_t is_real;
+} StackFrameComplex64Component;
+
+__attribute__((unused)) static FunctionObject
+gox5_complex64_component(LightWeightThreadContext *ctx) {
+    StackFrameComplex64Component *frame = (void *)ctx->stack_pointer;
+    *frame->result_ptr = (Float32Object){
+        .raw = (frame->is_real ? creal : cimag)(frame->value.raw)};
+    ctx->stack_pointer = frame->common.prev_stack_pointer;
+    return frame->common.resume_func;
+}
+
+typedef struct {
+    StackFrameCommon common;
+    Complex128Object *result_ptr;
+    Float64Object real;
+    Float64Object imaginary;
+} StackFrameComplex128New;
+
+__attribute__((unused)) static FunctionObject
+gox5_complex128_new(LightWeightThreadContext *ctx) {
+    StackFrameComplex128New *frame = (void *)ctx->stack_pointer;
+    *frame->result_ptr =
+        (Complex128Object){.raw = frame->real.raw + frame->imaginary.raw * I};
+    ctx->stack_pointer = frame->common.prev_stack_pointer;
+    return frame->common.resume_func;
+}
+
+typedef struct {
+    StackFrameCommon common;
+    Float64Object *result_ptr;
+    Complex128Object value;
+    uintptr_t is_real;
+} StackFrameComplex128Component;
+
+__attribute__((unused)) static FunctionObject
+gox5_complex128_component(LightWeightThreadContext *ctx) {
+    StackFrameComplex128Component *frame = (void *)ctx->stack_pointer;
+    *frame->result_ptr = (Float64Object){
+        .raw = (frame->is_real ? creal : cimag)(frame->value.raw)};
+    ctx->stack_pointer = frame->common.prev_stack_pointer;
+    return frame->common.resume_func;
+}
+
+typedef struct {
+    StackFrameCommon common;
     Interface *result_ptr;
     const void *receiver;
     TypeId type_id;

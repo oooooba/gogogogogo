@@ -1895,78 +1895,6 @@ UserFunction runtime_info_get_init_point(void) {
 `, mainFunctionName, initFunctionName)
 }
 
-func (ctx *Context) emitComplexNumberBuiltinFunctions() {
-	for _, bitLength := range []int{64, 128} {
-		elemBitLength := bitLength / 2
-
-		fmt.Fprintf(ctx.stream, `
-typedef struct {
-	StackFrameCommon common;
-	Complex%dObject* result_ptr;
-	Float%dObject real;
-	Float%dObject imaginary;
-} StackFrameComplex%dNew;
-
-__attribute__((unused)) static
-FunctionObject gox5_complex%d_new(LightWeightThreadContext* ctx) {
-	StackFrameComplex%dNew* frame = (void*)ctx->stack_pointer;
-	*frame->result_ptr = (Complex%dObject){.raw = frame->real.raw + frame->imaginary.raw * I};
-	ctx->stack_pointer = frame->common.prev_stack_pointer;
-	return frame->common.resume_func;
-}
-`, bitLength, elemBitLength, elemBitLength, bitLength, bitLength, bitLength, bitLength)
-
-		fmt.Fprintf(ctx.stream, `
-typedef struct {
-	StackFrameCommon common;
-	Float%dObject* result_ptr;
-	Complex%dObject value;
-} StackFrameComplex%dReal;
-
-__attribute__((unused)) static
-FunctionObject gox5_complex%d_real(LightWeightThreadContext* ctx) {
-	StackFrameComplex%dReal* frame = (void*)ctx->stack_pointer;
-	*frame->result_ptr = (Float%dObject){.raw = creal(frame->value.raw)};
-	ctx->stack_pointer = frame->common.prev_stack_pointer;
-	return frame->common.resume_func;
-}
-`, elemBitLength, bitLength, bitLength, bitLength, bitLength, elemBitLength)
-
-		fmt.Fprintf(ctx.stream, `
-typedef struct {
-	StackFrameCommon common;
-	Float%dObject* result_ptr;
-	Complex%dObject value;
-} StackFrameComplex%dImaginary;
-
-__attribute__((unused)) static
-FunctionObject gox5_complex%d_imaginary(LightWeightThreadContext* ctx) {
-	StackFrameComplex%dImaginary* frame = (void*)ctx->stack_pointer;
-	*frame->result_ptr = (Float%dObject){.raw = cimag(frame->value.raw)};
-	ctx->stack_pointer = frame->common.prev_stack_pointer;
-	return frame->common.resume_func;
-}
-`, elemBitLength, bitLength, bitLength, bitLength, bitLength, elemBitLength)
-
-		fmt.Fprintf(ctx.stream, `
-typedef struct {
-	StackFrameCommon common;
-	Float%dObject* result_ptr;
-	Complex%dObject value;
-	uintptr_t is_real;
-} StackFrameComplex%dComponent;
-
-__attribute__((unused)) static
-FunctionObject gox5_complex%d_component(LightWeightThreadContext* ctx) {
-	StackFrameComplex%dComponent* frame = (void*)ctx->stack_pointer;
-	*frame->result_ptr = (Float%dObject){.raw = (frame->is_real ? creal : cimag)(frame->value.raw)};
-	ctx->stack_pointer = frame->common.prev_stack_pointer;
-	return frame->common.resume_func;
-}
-`, elemBitLength, bitLength, bitLength, bitLength, bitLength, elemBitLength)
-	}
-}
-
 func findMainPackage(program *ssa.Program) *ssa.Package {
 	for _, pkg := range program.AllPackages() {
 		if pkg.Pkg.Name() == "main" {
@@ -2322,7 +2250,6 @@ func (ctx *Context) traversePackageMember(pkg *ssa.Package, procedure func(membe
 
 func (ctx *Context) emitCommon() {
 	fmt.Fprintln(ctx.stream, `#include "predefined.h"`)
-	ctx.emitComplexNumberBuiltinFunctions()
 }
 
 func (ctx *Context) emitTypeDeclarationAndDefinition(pkg *ssa.Package) {
