@@ -19,6 +19,7 @@ go run main.go -b ../$build_directory -i $src
 cd ..
 
 cd $build_directory
+ln -s ../cgen/predefined.h predefined.h
 make -j
 cd ..
 
