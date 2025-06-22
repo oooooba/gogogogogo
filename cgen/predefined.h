@@ -224,6 +224,21 @@ DECLARE_RUNTIME_API(channel_select, StackFrameChannelSelect);
 
 typedef struct {
     StackFrameCommon common;
+    void *result_ptr;
+    void *pointer;
+} StackFrameCheckNonNil;
+
+__attribute__((unused)) static FunctionObject
+gox5_check_non_nil(LightWeightThreadContext *ctx) {
+    StackFrameCheckNonNil *frame = (void *)ctx->stack_pointer;
+    assert(frame->pointer != NULL);
+    *((void **)frame->result_ptr) = frame->pointer;
+    ctx->stack_pointer = frame->common.prev_stack_pointer;
+    return frame->common.resume_func;
+}
+
+typedef struct {
+    StackFrameCommon common;
     FunctionObject *result_ptr;
     UserFunction user_function;
     uintptr_t num_object_ptrs;

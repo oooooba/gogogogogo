@@ -678,9 +678,7 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 					default:
 						panic(fmt.Sprintf("unsuported argument for len: %s", callCommon.Args[0]))
 					}
-				case "ssa:wrapnilchk":
-					fmt.Fprintf(ctx.stream, "assert(%s.raw); // ssa:wrapnilchk\n", createValueRelName(callCommon.Args[0]))
-					raw = fmt.Sprintf("%s.raw", createValueRelName(callCommon.Args[0]))
+
 				case "print":
 					for _, arg := range callCommon.Args {
 						ctx.emitPrint(arg)
@@ -710,6 +708,13 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 				case "recover":
 					result := createValueRelName(instr)
 					ctx.switchFunctionToCallRuntimeApi("gox5_panic_recover", "StackFramePanicRecover", createInstructionName(instr), &result, nil)
+					needToCallRuntimeApi = true
+
+				case "ssa:wrapnilchk":
+					result := createValueRelName(instr)
+					ctx.switchFunctionToCallRuntimeApi("gox5_check_non_nil", "StackFrameCheckNonNil", createInstructionName(instr), &result, nil,
+						paramArgPair{param: "pointer", arg: fmt.Sprintf("%s.raw", createValueRelName(callCommon.Args[0]))},
+					)
 					needToCallRuntimeApi = true
 
 				default:
