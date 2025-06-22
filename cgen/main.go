@@ -642,10 +642,11 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 					bitLength := complexNumberBitLength(callCommon.Args[0])
 					result := createValueRelName(instr)
 					ctx.switchFunctionToCallRuntimeApi(
-						fmt.Sprintf("gox5_complex%d_imaginary", bitLength),
-						fmt.Sprintf("StackFrameComplex%dImaginary", bitLength),
+						fmt.Sprintf("gox5_complex%d_component", bitLength),
+						fmt.Sprintf("StackFrameComplex%dComponent", bitLength),
 						createInstructionName(instr), &result, nil,
 						paramArgPair{param: "value", arg: createValueRelName(callCommon.Args[0])},
+						paramArgPair{param: "is_real", arg: "false"},
 					)
 					needToCallRuntimeApi = true
 
@@ -698,10 +699,11 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 					bitLength := complexNumberBitLength(callCommon.Args[0])
 					result := createValueRelName(instr)
 					ctx.switchFunctionToCallRuntimeApi(
-						fmt.Sprintf("gox5_complex%d_real", bitLength),
-						fmt.Sprintf("StackFrameComplex%dReal", bitLength),
+						fmt.Sprintf("gox5_complex%d_component", bitLength),
+						fmt.Sprintf("StackFrameComplex%dComponent", bitLength),
 						createInstructionName(instr), &result, nil,
 						paramArgPair{param: "value", arg: createValueRelName(callCommon.Args[0])},
+						paramArgPair{param: "is_real", arg: "true"},
 					)
 					needToCallRuntimeApi = true
 
@@ -1941,6 +1943,23 @@ __attribute__((unused)) static
 FunctionObject gox5_complex%d_imaginary(LightWeightThreadContext* ctx) {
 	StackFrameComplex%dImaginary* frame = (void*)ctx->stack_pointer;
 	*frame->result_ptr = (Float%dObject){.raw = cimag(frame->value.raw)};
+	ctx->stack_pointer = frame->common.prev_stack_pointer;
+	return frame->common.resume_func;
+}
+`, elemBitLength, bitLength, bitLength, bitLength, bitLength, elemBitLength)
+
+		fmt.Fprintf(ctx.stream, `
+typedef struct {
+	StackFrameCommon common;
+	Float%dObject* result_ptr;
+	Complex%dObject value;
+	uintptr_t is_real;
+} StackFrameComplex%dComponent;
+
+__attribute__((unused)) static
+FunctionObject gox5_complex%d_component(LightWeightThreadContext* ctx) {
+	StackFrameComplex%dComponent* frame = (void*)ctx->stack_pointer;
+	*frame->result_ptr = (Float%dObject){.raw = (frame->is_real ? creal : cimag)(frame->value.raw)};
 	ctx->stack_pointer = frame->common.prev_stack_pointer;
 	return frame->common.resume_func;
 }
