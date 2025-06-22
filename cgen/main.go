@@ -2939,7 +2939,9 @@ func (ctx *Context) emitPackage(pkg *ssa.Package) {
 }
 
 func generateMakefile(makefile *os.File, program *ssa.Program) {
-	cc := "gcc"
+	cCompiler := "gcc"
+	cCompilerWrapper := "ccache"
+	cc := fmt.Sprintf("$(shell command -v %s >/dev/null 2>&1 && echo %s %s || echo %s)", cCompilerWrapper, cCompilerWrapper, cCompiler, cCompiler)
 	cflags := []string{
 		"-Wall", "-Wextra", "-Werror", "-std=c11", "-g",
 		"-fstrict-aliasing", "-Wstrict-aliasing",
