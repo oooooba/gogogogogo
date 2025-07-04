@@ -523,8 +523,6 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 					}
 				}
 
-				needToCallRuntimeApi := false
-				raw := ""
 				switch callee.Name() {
 				case "append":
 					result := createValueRelName(instr)
@@ -544,20 +542,17 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 							paramArgPair{param: "rhs", arg: fmt.Sprintf("%s.raw", createValueRelName(callCommon.Args[1]))},
 						)
 					}
-					needToCallRuntimeApi = true
 
 				case "cap":
 					result := createValueRelName(instr)
 					ctx.switchFunctionToCallRuntimeApi("gox5_slice_capacity", "StackFrameSliceCapacity", createInstructionName(instr), &result, nil,
 						paramArgPair{param: "slice", arg: fmt.Sprintf("%s.raw", createValueRelName(callCommon.Args[0]))},
 					)
-					needToCallRuntimeApi = true
 
 				case "close":
 					ctx.switchFunctionToCallRuntimeApi("gox5_channel_close", "StackFrameChannelClose", createInstructionName(instr), nil, nil,
 						paramArgPair{param: "channel", arg: fmt.Sprintf("%s.raw", createValueRelName(callCommon.Args[0]))},
 					)
-					needToCallRuntimeApi = true
 
 				case "copy":
 					result := createValueRelName(instr)
@@ -573,7 +568,6 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 							paramArgPair{param: "dst", arg: fmt.Sprintf("%s.raw", createValueRelName(callCommon.Args[0]))},
 						)
 					}
-					needToCallRuntimeApi = true
 
 				case "complex":
 					bitLength := complexNumberBitLength(instr)
@@ -585,14 +579,12 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 						paramArgPair{param: "real", arg: createValueRelName(callCommon.Args[0])},
 						paramArgPair{param: "imaginary", arg: createValueRelName(callCommon.Args[1])},
 					)
-					needToCallRuntimeApi = true
 
 				case "delete":
 					ctx.switchFunctionToCallRuntimeApi("gox5_map_delete", "StackFrameMapDelete", createInstructionName(instr), nil, nil,
 						paramArgPair{param: "map", arg: fmt.Sprintf("%s.raw", createValueRelName(callCommon.Args[0]))},
 						paramArgPair{param: "key", arg: fmt.Sprintf("&%s", createValueRelName(callCommon.Args[1]))},
 					)
-					needToCallRuntimeApi = true
 
 				case "imag":
 					bitLength := complexNumberBitLength(callCommon.Args[0])
@@ -604,7 +596,6 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 						paramArgPair{param: "value", arg: createValueRelName(callCommon.Args[0])},
 						paramArgPair{param: "is_real", arg: "false"},
 					)
-					needToCallRuntimeApi = true
 
 				case "len":
 					switch t := callCommon.Args[0].Type().(type) {
@@ -615,7 +606,6 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 							ctx.switchFunctionToCallRuntimeApi("gox5_string_length", "StackFrameStringLength", createInstructionName(instr), &result, nil,
 								paramArgPair{param: "string", arg: createValueRelName(callCommon.Args[0])},
 							)
-							needToCallRuntimeApi = true
 						default:
 							panic(fmt.Sprintf("unsuported argument for len: %s (%s)", callCommon.Args[0], t))
 						}
@@ -624,13 +614,11 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 						ctx.switchFunctionToCallRuntimeApi("gox5_map_len", "StackFrameMapLen", createInstructionName(instr), &result, nil,
 							paramArgPair{param: "map", arg: fmt.Sprintf("%s.raw", createValueRelName(callCommon.Args[0]))},
 						)
-						needToCallRuntimeApi = true
 					case *types.Slice:
 						result := createValueRelName(instr)
 						ctx.switchFunctionToCallRuntimeApi("gox5_slice_size", "StackFrameSliceSize", createInstructionName(instr), &result, nil,
 							paramArgPair{param: "slice", arg: fmt.Sprintf("%s.raw", createValueRelName(callCommon.Args[0]))},
 						)
-						needToCallRuntimeApi = true
 					default:
 						panic(fmt.Sprintf("unsuported argument for len: %s", callCommon.Args[0]))
 					}
@@ -691,7 +679,6 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 						paramArgPair{param: "packs", arg: fmt.Sprintf("%t", callee.Name() == "print")},
 						paramArgPair{param: "entry_count", arg: fmt.Sprintf("%d", len(callCommon.Args))},
 					)
-					needToCallRuntimeApi = true
 
 				case "real":
 					bitLength := complexNumberBitLength(callCommon.Args[0])
@@ -703,29 +690,21 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 						paramArgPair{param: "value", arg: createValueRelName(callCommon.Args[0])},
 						paramArgPair{param: "is_real", arg: "true"},
 					)
-					needToCallRuntimeApi = true
 
 				case "recover":
 					result := createValueRelName(instr)
 					ctx.switchFunctionToCallRuntimeApi("gox5_panic_recover", "StackFramePanicRecover", createInstructionName(instr), &result, nil)
-					needToCallRuntimeApi = true
 
 				case "ssa:wrapnilchk":
 					result := createValueRelName(instr)
 					ctx.switchFunctionToCallRuntimeApi("gox5_check_non_nil", "StackFrameCheckNonNil", createInstructionName(instr), &result, nil,
 						paramArgPair{param: "pointer", arg: fmt.Sprintf("%s.raw", createValueRelName(callCommon.Args[0]))},
 					)
-					needToCallRuntimeApi = true
 
 				default:
 					panic(fmt.Sprintf("unsuported builtin function: %s", callee.Name()))
 				}
-				if !needToCallRuntimeApi {
-					if t, ok := instr.Type().(*types.Tuple); !ok || t.Len() > 0 {
-						fmt.Fprintf(ctx.stream, "%s = %s;\n", createValueRelName(instr), wrapInObject(raw, instr.Type()))
-					}
-					fmt.Fprintf(ctx.stream, "\treturn %s;\n", wrapInFunctionObject(createInstructionName(instr)))
-				}
+				fmt.Fprintf(ctx.stream, "\treturn %s;\n", wrapInFunctionObject(createInstructionName(instr)))
 
 			default:
 				nextFunction := createValueRelName(callee)
