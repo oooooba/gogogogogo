@@ -310,50 +310,6 @@ func (ctx *Context) switchFunctionToCallRuntimeApi(nextFunction string, nextFunc
 	fmt.Fprintf(ctx.stream, "return %s;\n", wrapInFunctionObject(nextFunction))
 }
 
-func (ctx *Context) emitPrint(value ssa.Value) {
-	switch t := value.Type().(type) {
-	case *types.Basic:
-		var specifier string
-		switch t.Kind() {
-		case types.Bool:
-			fmt.Fprintf(ctx.stream, `fprintf(stderr, "%%s", %s.raw ? "true" : "false");`+"\n", createValueRelName(value))
-			return
-		case types.Complex64, types.Complex128:
-			fmt.Fprintln(ctx.stream, `fprintf(stderr, "(");`)
-			fmt.Fprintf(ctx.stream, "builtin_print_float(creal(%s.raw));\n", createValueRelName(value))
-			fmt.Fprintf(ctx.stream, "builtin_print_float(cimag(%s.raw));\n", createValueRelName(value))
-			fmt.Fprintln(ctx.stream, `fprintf(stderr, "i)");`)
-			return
-		case types.Int:
-			specifier = "ld"
-		case types.Int8, types.Int16, types.Int32:
-			specifier = "d"
-		case types.Int64:
-			specifier = "ld"
-		case types.Uint:
-			specifier = "lu"
-		case types.Uint8, types.Uint16, types.Uint32:
-			specifier = "u"
-		case types.Uint64:
-			specifier = "lu"
-		case types.Uintptr:
-			specifier = "lu"
-		case types.Float32, types.Float64:
-			fmt.Fprintf(ctx.stream, "builtin_print_float(%s.raw);\n", createValueRelName(value))
-			return
-		case types.String:
-			specifier = "s"
-		case types.UnsafePointer:
-			specifier = "p"
-		default:
-			panic(fmt.Sprintf("%s, %s (%T)", value, t, t))
-		}
-		fmt.Fprintf(ctx.stream, "fprintf(stderr, \"%%%s\", %s.raw);\n", specifier, createValueRelName(value))
-	default:
-		fmt.Fprintf(ctx.stream, "assert(false); // not supported\n")
-	}
-}
-
 func (ctx *Context) emitCallCommon(callCommon *ssa.CallCommon, nextFunction string, nextFunctionFrame string, resumeFunction string) {
 	if callCommon.Method != nil {
 		panic("method not supported")
@@ -679,19 +635,63 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 						panic(fmt.Sprintf("unsuported argument for len: %s", callCommon.Args[0]))
 					}
 
-				case "print":
-					for _, arg := range callCommon.Args {
-						ctx.emitPrint(arg)
-					}
-
-				case "println":
-					for i, arg := range callCommon.Args {
-						if i != 0 {
-							fmt.Fprintf(ctx.stream, "fprintf(stderr, \" \");\n")
-						}
-						ctx.emitPrint(arg)
-					}
-					fmt.Fprintf(ctx.stream, "fprintf(stderr, \"\\n\");\n")
+				case "print", "println":
+					ctx.switchFunctionToCallRuntimeApi("gox5_print", "StackFramePrint", createInstructionName(instr), nil,
+						func() {
+							for i, arg := range callCommon.Args {
+								var format string
+								field := "as_integer"
+								data0 := fmt.Sprintf("%s.raw", createValueRelName(arg))
+								data1 := "0"
+								switch t := arg.Type().(type) {
+								case *types.Basic:
+									switch t.Kind() {
+									case types.Bool:
+										format = "b"
+									case types.Complex64, types.Complex128:
+										format = "i"
+										field = "as_float"
+										data0 = fmt.Sprintf("creal(%s.raw)", createValueRelName(arg))
+										data1 = fmt.Sprintf("cimag(%s.raw)", createValueRelName(arg))
+									case types.Int:
+										format = "ld"
+									case types.Int8, types.Int16, types.Int32:
+										format = "d"
+									case types.Int64:
+										format = "ld"
+									case types.Uint:
+										format = "lu"
+									case types.Uint8, types.Uint16, types.Uint32:
+										format = "u"
+									case types.Uint64:
+										format = "lu"
+									case types.Uintptr:
+										format = "lu"
+									case types.Float32, types.Float64:
+										format = "f"
+										field = "as_float"
+									case types.String:
+										format = "s"
+										field = "as_pointer"
+									case types.UnsafePointer:
+										format = "p"
+										field = "as_pointer"
+									default:
+										panic(fmt.Sprintf("%s, %s (%T)", arg, t, t))
+									}
+								default:
+									fmt.Fprintf(ctx.stream, "assert(false); // not supported\n")
+									continue
+								}
+								fmt.Fprintf(ctx.stream, `next_frame->entry_buffer[%d].format = "%%%s";`, i, format)
+								fmt.Fprintf(ctx.stream, "next_frame->entry_buffer[%d].data[0].%s = %s;\n", i, field, data0)
+								fmt.Fprintf(ctx.stream, "next_frame->entry_buffer[%d].data[1].%s = %s;\n", i, field, data1)
+							}
+						},
+						paramArgPair{param: "packs", arg: fmt.Sprintf("%t", callee.Name() == "print")},
+						paramArgPair{param: "entry_count", arg: fmt.Sprintf("%d", len(callCommon.Args))},
+					)
+					needToCallRuntimeApi = true
 
 				case "real":
 					bitLength := complexNumberBitLength(callCommon.Args[0])
