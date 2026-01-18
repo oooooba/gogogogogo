@@ -1,0 +1,12 @@
+= gogogogogo - A Go Compiler and Runtime
+
+cgen is a compiler component written in Go that converts Go programs into C code.
+Using the official gc compiler as a frontend, cgen operates on its intermediate representation.
+It produces continuation-passing style C code to handle sophisticated Go features like goroutines and defer statements.
+
+
+The runtime is implemented in Rust and is capable of running multiple goroutines on a single thread.
+It supports Go features such as channels and defer, as well as data structures like slices and maps.
+While dynamic memory allocation is supported, the garbage collection (GC) functionality remains unimplemented at this time.
+
+image::architecture.svg[architecture]
