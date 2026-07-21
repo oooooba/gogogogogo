@@ -1,5 +1,6 @@
 #include <assert.h>
 #include <complex.h>
+#include <math.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -442,26 +443,10 @@ typedef struct {
 } StackFramePrint;
 
 static void gox5_print_helper(double val) {
-    char buf[20];
-    int len = snprintf(buf, sizeof(buf) / sizeof(buf[0]), "%+.6e", val);
-    int len_e = 0;
-    for (int i = len - 1; i > 0; --i) {
-        char c = buf[i];
-        if (c == '+' || c == '-')
-            break;
-        ++len_e;
+    if (val == 0.0 && signbit(val)) {
+        val = 0.0;
     }
-    if (len_e < 3) {
-        for (; len > 0; --len) {
-            char c = buf[len];
-            if (c == '+' || c == '-')
-                break;
-            buf[len + 1] = c;
-        }
-        assert(len > 0);
-        buf[len + 1] = '0';
-    }
-    fprintf(stderr, "%s", buf);
+    fprintf(stderr, "%.15g", val);
 }
 
 __attribute__((unused)) static FunctionObject
@@ -480,6 +465,9 @@ gox5_print(LightWeightThreadContext *ctx) {
         } else if(strcmp(format, "%i")==0){
             fprintf(stderr, "(");
             gox5_print_helper(frame->entry_buffer[i].data[0].as_float);
+            if (!signbit(frame->entry_buffer[i].data[1].as_float)) {
+                fprintf(stderr, "+");
+            }
             gox5_print_helper(frame->entry_buffer[i].data[1].as_float);
             fprintf(stderr, "i)");
         } else{

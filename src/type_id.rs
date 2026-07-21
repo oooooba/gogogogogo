@@ -23,6 +23,10 @@ impl TypeId {
         TypeId(0)
     }
 
+    pub(crate) fn from_raw(val: usize) -> Self {
+        TypeId(val)
+    }
+
     fn type_info(&self) -> &TypeInfo {
         unsafe { &*(self.0 as *const TypeInfo) }
     }

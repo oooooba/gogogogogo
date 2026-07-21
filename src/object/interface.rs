@@ -5,6 +5,9 @@ use crate::type_id::TypeId;
 use crate::FunctionObject;
 use crate::ObjectPtr;
 
+static PANIC_NIL_ERROR_DUMMY: u8 = 0;
+static PANIC_NIL_ERROR_TYPE_ID_DUMMY: u8 = 0;
+
 #[derive(Debug)]
 #[repr(C)]
 pub(crate) struct InterfaceTableEntry {
@@ -36,6 +39,20 @@ impl Interface {
         Self { receiver, type_id }
     }
 
+    pub fn panic_nil_error() -> Self {
+        let receiver = ObjectPtr(&PANIC_NIL_ERROR_DUMMY as *const u8 as *mut ());
+        let type_id = TypeId::from_raw(&PANIC_NIL_ERROR_TYPE_ID_DUMMY as *const u8 as usize);
+        Self { receiver, type_id }
+    }
+
+    pub fn is_nil(&self) -> bool {
+        self.receiver.is_null() && self.type_id == TypeId::new_invalid()
+    }
+
+    pub fn is_panic_nil_error(&self) -> bool {
+        self.type_id == TypeId::from_raw(&PANIC_NIL_ERROR_TYPE_ID_DUMMY as *const u8 as usize)
+    }
+
     pub fn receiver(&self) -> &ObjectPtr {
         &self.receiver
     }
@@ -55,7 +72,12 @@ impl Interface {
     }
 
     pub fn panic_print(&self) {
-        assert!(self.receiver.is_null());
-        eprintln!("panic: nil");
+        if self.is_panic_nil_error() {
+            eprintln!("panic: panic called with nil argument");
+        } else if self.receiver.is_null() {
+            eprintln!("panic: nil");
+        } else {
+            eprintln!("panic: {:?}", self);
+        }
     }
 }

@@ -55,6 +55,11 @@ extern "C" fn panic_raise_body(ctx: &mut LightWeightThreadContext) -> FunctionOb
 pub extern "C" fn gox5_panic_raise(ctx: &mut LightWeightThreadContext) -> FunctionObject {
     let frame = ctx.stack_frame::<StackFramePanicRaise>();
     let data = frame.value.clone();
+    let data = if data.is_nil() {
+        Interface::panic_nil_error()
+    } else {
+        data
+    };
     ctx.enter_panic(data);
     FunctionObject::from_user_function(UserFunction::new(panic_raise_body))
 }

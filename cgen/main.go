@@ -598,7 +598,7 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 					)
 
 				case "len":
-					switch t := callCommon.Args[0].Type().(type) {
+					switch t := callCommon.Args[0].Type().Underlying().(type) {
 					case *types.Basic:
 						switch t.Kind() {
 						case types.String:
@@ -841,9 +841,15 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 
 	case *ssa.Index:
 		fmt.Fprintf(ctx.stream, "uintptr_t index = %s.raw;\n", createValueRelName(instr.Index))
-		switch t := instr.X.Type().(type) {
+		switch t := instr.X.Type().Underlying().(type) {
 		case *types.Array:
 			fmt.Fprintf(ctx.stream, "%s val = %s.raw[index];\n", createTypeName(t.Elem()), createValueRelName(instr.X))
+		case *types.Basic:
+			if t.Kind() == types.String || t.Kind() == types.UntypedString {
+				fmt.Fprintf(ctx.stream, "%s val = { .raw = (uint8_t)%s.raw[index] };\n", createTypeName(instr.Type()), createValueRelName(instr.X))
+			} else {
+				panic(fmt.Sprintf("%s, %s, %s", instr, instr.X, t))
+			}
 		default:
 			panic(fmt.Sprintf("%s, %s, %s", instr, instr.X, t))
 		}
@@ -1681,7 +1687,7 @@ func (ctx *Context) emitTypeInfoDefinition(typ types.Type) {
 
 func (ctx *Context) emitConstant(cst *ssa.Const) {
 	inner := "0"
-	if !cst.IsNil() {
+	if !cst.IsNil() && cst.Value != nil {
 		inner = cst.Value.String()
 		if t, ok := cst.Type().Underlying().(*types.Basic); ok {
 			switch t.Kind() {
@@ -1709,6 +1715,11 @@ func (ctx *Context) emitConstant(cst *ssa.Const) {
 	var value string
 	if t, ok := cst.Type().Underlying().(*types.Interface); ok {
 		value = fmt.Sprintf("(%s){%s}", createTypeName(t), inner)
+	} else if cst.Value == nil {
+		typeName := createTypeName(cst.Type())
+		valueName := createValueName(cst)
+		fmt.Fprintf(ctx.stream, "__attribute__((unused)) static const %s %s; // %s\n", typeName, valueName, cst)
+		return
 	} else {
 		value = wrapInObject(inner, cst.Type())
 	}
