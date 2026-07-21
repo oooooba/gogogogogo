@@ -1,6 +1,6 @@
 package main
 
-import "runtime"
+// import "runtime"
 
 func test1_f() int {
 	return 1
@@ -127,7 +127,7 @@ func Test10() int {
 	go func(ch chan int) {
 		ch <- 10
 	}(ch)
-	runtime.Gosched()
+	// runtime.Gosched()
 	v := <-ch
 	return v
 }
