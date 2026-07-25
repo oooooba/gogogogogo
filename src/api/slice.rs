@@ -159,6 +159,8 @@ fn copy_slice(dst: &mut SliceObject, elem_size: usize, src: &[u8]) -> usize {
     let src = src.as_ptr();
     let dst = dst.as_bytes_mut(elem_size).as_mut_ptr();
     unsafe {
+        let src = core::hint::black_box(src);
+        let dst = core::hint::black_box(dst);
         ptr::copy(src, dst, elem_size * copy_count);
     }
 

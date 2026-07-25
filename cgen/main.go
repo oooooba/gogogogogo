@@ -23,6 +23,7 @@ func main() {
 	filename := flag.String("i", "/dev/stdin", "input file")
 	buildDirname := flag.String("b", "/tmp", "build directory")
 	debugRuntime := flag.Bool("debug-runtime", false, "use debug mode Rust runtime binary")
+	debugUser := flag.Bool("debug-user", false, "use debug mode C binary with sanitizers")
 	flag.Parse()
 
 	cfg := packages.Config{Mode: packages.LoadAllSyntax}
@@ -51,7 +52,7 @@ func main() {
 		}
 	}
 
-	emitProgram(prog, *buildDirname, *debugRuntime)
+	emitProgram(prog, *buildDirname, *debugRuntime, *debugUser)
 }
 
 type Context struct {
@@ -2431,18 +2432,33 @@ func (ctx *Context) emitPackage(pkg *ssa.Package) {
 	})
 }
 
-func generateMakefile(makefile *os.File, program *ssa.Program, debugRuntime bool) {
+func generateMakefile(makefile *os.File, program *ssa.Program, debugRuntime bool, debugUser bool) {
 	cCompiler := "gcc"
 	cCompilerWrapper := "ccache"
 	cc := fmt.Sprintf("$(shell command -v %s >/dev/null 2>&1 && echo %s %s || echo %s)", cCompilerWrapper, cCompilerWrapper, cCompiler, cCompiler)
-	cflags := []string{
-		"-Wall", "-Wextra", "-Werror", "-std=c11", "-g",
-		"-fstrict-aliasing", "-Wstrict-aliasing",
-		"-fsanitize=undefined", "-fno-sanitize-recover=all",
-	}
-	ldflags := []string{
-		"-fsanitize=undefined", "-fno-sanitize-recover=all",
-		"-lpthread", "-ldl", "-lm",
+
+	var cflags []string
+	var ldflags []string
+	if debugUser {
+		cflags = []string{
+			"-Wall", "-Wextra", "-Werror", "-std=c11",
+			"-g", "-O1",
+			"-fsanitize=undefined", "-fsanitize=address",
+			"-fno-omit-frame-pointer", "-fno-sanitize-recover=all",
+			"-fstrict-aliasing", "-Wstrict-aliasing",
+		}
+		ldflags = []string{
+			"-fsanitize=undefined", "-fsanitize=address", "-fno-sanitize-recover=all",
+			"-lpthread", "-ldl", "-lm",
+		}
+	} else {
+		cflags = []string{
+			"-Wall", "-Wextra", "-Werror", "-std=c11", "-O2",
+			"-fstrict-aliasing", "-Wstrict-aliasing",
+		}
+		ldflags = []string{
+			"-lpthread", "-ldl", "-lm",
+		}
 	}
 	rustBuildMode := "release"
 	if debugRuntime {
@@ -2527,16 +2543,16 @@ func handlePackage(program *ssa.Program, pkg *ssa.Package, outputPath string) {
 	ctx.emitPackage(pkg)
 }
 
-func handleMakefile(program *ssa.Program, outputPath string, debugRuntime bool) {
+func handleMakefile(program *ssa.Program, outputPath string, debugRuntime bool, debugUser bool) {
 	makefile, err := os.Create(outputPath)
 	if err != nil {
 		panic(err)
 	}
 	defer makefile.Close()
-	generateMakefile(makefile, program, debugRuntime)
+	generateMakefile(makefile, program, debugRuntime, debugUser)
 }
 
-func emitProgram(program *ssa.Program, buildDirname string, debugRuntime bool) {
+func emitProgram(program *ssa.Program, buildDirname string, debugRuntime bool, debugUser bool) {
 	waitGroup := sync.WaitGroup{}
 
 	waitGroup.Add(1)
@@ -2558,7 +2574,7 @@ func emitProgram(program *ssa.Program, buildDirname string, debugRuntime bool) {
 	waitGroup.Add(1)
 	go func() {
 		makefileName := "Makefile"
-		handleMakefile(program, fmt.Sprintf("%s/%s", buildDirname, makefileName), debugRuntime)
+		handleMakefile(program, fmt.Sprintf("%s/%s", buildDirname, makefileName), debugRuntime, debugUser)
 		waitGroup.Done()
 	}()
 

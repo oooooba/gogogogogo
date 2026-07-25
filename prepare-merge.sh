@@ -11,6 +11,8 @@ cargo test
 cargo +nightly miri test
 bash run_xtests.sh
 bash run_xtests.sh --debug-runtime
+bash run_xtests.sh --debug-user
+bash run_xtests.sh --debug-user --debug-runtime
 
 go_root=$(go env GOROOT)
 if [ ! -d "$go_root/test" ]; then

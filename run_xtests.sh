@@ -2,10 +2,7 @@
 
 set -e
 
-run_args=()
-if [ "$1" = "--debug-runtime" ]; then
-    run_args=("--debug-runtime")
-fi
+run_args=("$@")
 
 exit_status=0
 for path in xtests/*; do
@@ -38,7 +35,7 @@ for path in xtests/*; do
             ;;
         *)
             go run $path >$expect_result 2>&1
-            bash ./run.sh "${run_args[@]}" $path >$actual_result 2>&1
+            bash ./run.sh "${run_args[@]}" $path >$actual_result 2>&1 || true
             compare_result=/tmp/compare_$base.txt
             if diff -y $expect_result $actual_result >$compare_result; then
                 echo PASS
