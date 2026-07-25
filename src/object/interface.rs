@@ -1,9 +1,9 @@
 use std::ptr;
 
-use crate::object::string::StringObject;
-use crate::type_id::TypeId;
 use crate::FunctionObject;
 use crate::ObjectPtr;
+use crate::object::string::StringObject;
+use crate::type_id::TypeId;
 
 static PANIC_NIL_ERROR_DUMMY: u8 = 0;
 static PANIC_NIL_ERROR_TYPE_ID_DUMMY: u8 = 0;

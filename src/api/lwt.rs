@@ -1,13 +1,13 @@
 use std::mem;
 
+use crate::FunctionObject;
+use crate::StackFrameCommon;
+use crate::UserFunction;
 use crate::create_light_weight_thread_context;
 use crate::light_weight_thread::LightWeightThreadContext;
 use crate::object::interface::Interface;
 use crate::object::string::StringObject;
 use crate::word_chunk::WordChunk;
-use crate::FunctionObject;
-use crate::StackFrameCommon;
-use crate::UserFunction;
 
 fn spawn<F>(ctx: &mut LightWeightThreadContext, param: F) -> FunctionObject
 where
@@ -47,7 +47,7 @@ struct StackFrameLwtSpawn {
     args: WordChunk,
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn gox5_lwt_spawn(ctx: &mut LightWeightThreadContext) -> FunctionObject {
     spawn(ctx, |ctx| {
         let frame = ctx.stack_frame::<StackFrameLwtSpawn>();
@@ -70,7 +70,7 @@ struct StackFrameLwtSpawnInvoke<'a> {
     args: WordChunk,
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn gox5_lwt_spawn_invoke(ctx: &mut LightWeightThreadContext) -> FunctionObject {
     spawn(ctx, |ctx| {
         let frame = ctx.stack_frame::<StackFrameLwtSpawnInvoke>();
@@ -85,7 +85,7 @@ pub extern "C" fn gox5_lwt_spawn_invoke(ctx: &mut LightWeightThreadContext) -> F
     })
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn gox5_lwt_yield(ctx: &mut LightWeightThreadContext) -> FunctionObject {
     ctx.suspend();
     ctx.pop_frame()
@@ -94,9 +94,9 @@ pub extern "C" fn gox5_lwt_yield(ctx: &mut LightWeightThreadContext) -> Function
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::global_context;
     use crate::ObjectAllocator;
     use crate::UserFunction;
+    use crate::global_context;
     use std::mem;
 
     struct AllocatedObject {

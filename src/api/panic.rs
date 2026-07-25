@@ -1,11 +1,11 @@
 use std::mem;
 use std::process;
 
-use crate::object::interface::Interface;
 use crate::FunctionObject;
 use crate::LightWeightThreadContext;
 use crate::StackFrameCommon;
 use crate::UserFunction;
+use crate::object::interface::Interface;
 
 #[repr(C)]
 struct StackFramePanicRaise {
@@ -51,7 +51,7 @@ extern "C" fn panic_raise_body(ctx: &mut LightWeightThreadContext) -> FunctionOb
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn gox5_panic_raise(ctx: &mut LightWeightThreadContext) -> FunctionObject {
     let frame = ctx.stack_frame::<StackFramePanicRaise>();
     let data = frame.value.clone();
@@ -70,7 +70,7 @@ struct StackFramePanicRecover<'a> {
     result_ptr: &'a mut Interface,
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn gox5_panic_recover(ctx: &mut LightWeightThreadContext) -> FunctionObject {
     let result = if ctx.is_panicking() {
         ctx.exit_panic()
@@ -85,9 +85,9 @@ pub extern "C" fn gox5_panic_recover(ctx: &mut LightWeightThreadContext) -> Func
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ObjectAllocator;
     use crate::global_context;
     use crate::light_weight_thread::LightWeightThreadContext;
-    use crate::ObjectAllocator;
     use std::mem;
 
     struct AllocatedObject {

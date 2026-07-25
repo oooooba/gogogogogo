@@ -2,14 +2,14 @@ use core::slice;
 use std::mem;
 use std::ptr;
 
-use crate::object::channel::ChannelObject;
-use crate::object::channel::ReceiveStatus;
-use crate::type_id::TypeId;
 use crate::FunctionObject;
 use crate::LightWeightThreadContext;
 use crate::ObjectPtr;
 use crate::StackFrameCommon;
 use crate::UserFunction;
+use crate::object::channel::ChannelObject;
+use crate::object::channel::ReceiveStatus;
+use crate::type_id::TypeId;
 
 #[repr(C)]
 struct StackFrameChannelNew<'a> {
@@ -40,7 +40,7 @@ fn allocate_channel(ctx: &mut LightWeightThreadContext, capacity: usize) -> *mut
     ptr
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn gox5_channel_new(ctx: &mut LightWeightThreadContext) -> FunctionObject {
     let frame = ctx.stack_frame::<StackFrameChannelNew>();
     let capacity = frame.capacity;
@@ -99,7 +99,7 @@ struct StackFrameChannelSelect<'a> {
     entry_buffer: [SelectEntry; 0],
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn gox5_channel_select(ctx: &mut LightWeightThreadContext) -> FunctionObject {
     fn set_result(
         ctx: &mut LightWeightThreadContext,
@@ -176,7 +176,7 @@ struct StackFrameChannelClose {
     channel: ObjectPtr,
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn gox5_channel_close(ctx: &mut LightWeightThreadContext) -> FunctionObject {
     let frame = ctx.stack_frame::<StackFrameChannelClose>();
     let mut channel = frame.channel.clone();
@@ -197,7 +197,7 @@ struct StackFrameChannelReceive {
     available: ObjectPtr,
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn gox5_channel_receive(ctx: &mut LightWeightThreadContext) -> FunctionObject {
     let frame = ctx.stack_frame::<StackFrameChannelReceive>();
     let mut channel = frame.channel.clone();
@@ -230,7 +230,7 @@ struct StackFrameChannelSend {
     type_id: TypeId,
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn gox5_channel_send(ctx: &mut LightWeightThreadContext) -> FunctionObject {
     let frame = ctx.stack_frame::<StackFrameChannelSend>();
 

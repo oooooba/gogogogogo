@@ -1,14 +1,14 @@
 use std::mem;
 use std::ptr;
 
-use crate::defer_stack::DeferStackEntry;
-use crate::object::interface::Interface;
-use crate::object::string::StringObject;
-use crate::word_chunk::WordChunk;
 use crate::FunctionObject;
 use crate::LightWeightThreadContext;
 use crate::StackFrameCommon;
 use crate::UserFunction;
+use crate::defer_stack::DeferStackEntry;
+use crate::object::interface::Interface;
+use crate::object::string::StringObject;
+use crate::word_chunk::WordChunk;
 
 fn register<F>(ctx: &mut LightWeightThreadContext, param: F) -> FunctionObject
 where
@@ -45,7 +45,7 @@ struct StackFrameDeferRegister {
     args: WordChunk,
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn gox5_defer_register(ctx: &mut LightWeightThreadContext) -> FunctionObject {
     register(ctx, |ctx| {
         let frame = ctx.stack_frame::<StackFrameDeferRegister>();
@@ -68,7 +68,7 @@ struct StackFrameDeferRegisterInvoke<'a> {
     args: WordChunk,
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn gox5_defer_register_invoke(ctx: &mut LightWeightThreadContext) -> FunctionObject {
     register(ctx, |ctx| {
         let frame = ctx.stack_frame::<StackFrameDeferRegisterInvoke>();
@@ -88,7 +88,7 @@ struct StackFrameDeferExecute {
     common: StackFrameCommon,
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn gox5_defer_execute(ctx: &mut LightWeightThreadContext) -> FunctionObject {
     let frame = ctx.stack_frame_mut::<StackFrameDeferExecute>();
     let prev_frame = frame.common.prev_stack_frame_mut::<StackFrameCommon>();
@@ -122,9 +122,9 @@ pub extern "C" fn gox5_defer_execute(ctx: &mut LightWeightThreadContext) -> Func
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ObjectAllocator;
     use crate::global_context;
     use crate::light_weight_thread::LightWeightThreadContext;
-    use crate::ObjectAllocator;
     use std::mem;
     use std::ptr;
 

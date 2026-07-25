@@ -1,7 +1,7 @@
 use std::ptr;
 
-use crate::word_chunk::WordChunk;
 use crate::FunctionObject;
+use crate::word_chunk::WordChunk;
 
 #[repr(C)]
 pub(crate) struct DeferStackEntry {

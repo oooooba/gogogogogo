@@ -12,7 +12,7 @@ struct StackFrameNew<'a> {
     size: usize,
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn gox5_new(ctx: &mut LightWeightThreadContext) -> FunctionObject {
     let frame = ctx.stack_frame::<StackFrameNew>();
     let size = frame.size;
@@ -33,9 +33,9 @@ pub extern "C" fn gox5_new(ctx: &mut LightWeightThreadContext) -> FunctionObject
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ObjectAllocator;
     use crate::global_context;
     use crate::light_weight_thread::LightWeightThreadContext;
-    use crate::ObjectAllocator;
     use std::mem;
 
     struct AllocatedObject {

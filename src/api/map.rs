@@ -1,12 +1,12 @@
 use std::mem;
 use std::ptr;
 
-use crate::object::map::MapObject;
-use crate::type_id::TypeId;
 use crate::FunctionObject;
 use crate::LightWeightThreadContext;
 use crate::ObjectPtr;
 use crate::StackFrameCommon;
+use crate::object::map::MapObject;
+use crate::type_id::TypeId;
 
 #[repr(C)]
 struct StackFrameMapNew<'a> {
@@ -37,7 +37,7 @@ fn allocate_map(
     ptr
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn gox5_map_new(ctx: &mut LightWeightThreadContext) -> FunctionObject {
     let frame = ctx.stack_frame::<StackFrameMapNew>();
 
@@ -57,7 +57,7 @@ struct StackFrameMapDelete {
     key: ObjectPtr,
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn gox5_map_delete(ctx: &mut LightWeightThreadContext) -> FunctionObject {
     let frame = ctx.stack_frame::<StackFrameMapDelete>();
 
@@ -82,7 +82,7 @@ struct StackFrameMapGet {
     found: ObjectPtr,
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn gox5_map_get(ctx: &mut LightWeightThreadContext) -> FunctionObject {
     let frame = ctx.stack_frame::<StackFrameMapGet>();
 
@@ -112,7 +112,7 @@ struct StackFrameMapLen<'a> {
     map: ObjectPtr,
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn gox5_map_len(ctx: &mut LightWeightThreadContext) -> FunctionObject {
     let frame = ctx.stack_frame::<StackFrameMapLen>();
 
@@ -139,7 +139,7 @@ struct StackFrameMapNext {
     count: ObjectPtr,
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn gox5_map_next(ctx: &mut LightWeightThreadContext) -> FunctionObject {
     let frame = ctx.stack_frame::<StackFrameMapNext>();
 
@@ -170,7 +170,7 @@ struct StackFrameMapSet {
     value: ObjectPtr,
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn gox5_map_set(ctx: &mut LightWeightThreadContext) -> FunctionObject {
     let frame = ctx.stack_frame::<StackFrameMapSet>();
 
@@ -194,11 +194,11 @@ pub extern "C" fn gox5_map_set(ctx: &mut LightWeightThreadContext) -> FunctionOb
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ObjectAllocator;
     use crate::global_context;
     use crate::light_weight_thread::LightWeightThreadContext;
     use crate::object::string::StringObject;
     use crate::type_id::TypeId;
-    use crate::ObjectAllocator;
     use std::mem;
     use std::ptr;
     use std::sync::OnceLock;

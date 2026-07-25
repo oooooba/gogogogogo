@@ -130,7 +130,7 @@ impl ObjectPtr {
         self.0.is_null()
     }
 }
-extern "C" {
+unsafe extern "C" {
     fn runtime_info_get_entry_point() -> UserFunction;
     fn runtime_info_get_init_point() -> UserFunction;
 }
@@ -237,7 +237,7 @@ fn execute(ctx: &mut LightWeightThreadContext) {
     }
 }
 
-#[cfg_attr(not(test), no_mangle)]
+#[cfg_attr(not(test), unsafe(no_mangle))]
 fn main() {
     let allocator = Box::new(RuntimeObjectAllocator::new());
     let global_context = global_context::create_global_context(allocator);

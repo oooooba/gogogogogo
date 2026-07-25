@@ -2,13 +2,13 @@ use std::mem;
 use std::ptr;
 use std::slice;
 
-use crate::defer_stack::DeferStack;
-use crate::global_context::GlobalContextPtr;
-use crate::object::interface::Interface;
 use crate::FunctionObject;
 use crate::StackFrame;
 use crate::StackFrameCommon;
 use crate::UserFunction;
+use crate::defer_stack::DeferStack;
+use crate::global_context::GlobalContextPtr;
+use crate::object::interface::Interface;
 
 #[repr(C)]
 pub struct LightWeightThreadContext {
@@ -180,8 +180,8 @@ impl LightWeightThreadContext {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::global_context;
     use crate::ObjectAllocator;
+    use crate::global_context;
 
     struct AllocatedObject {
         ptr: *mut (),

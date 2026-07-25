@@ -3,13 +3,13 @@ use std::iter;
 use std::mem;
 use std::ptr;
 
-use crate::object::slice::SliceObject;
-use crate::object::string::StringObject;
-use crate::type_id::TypeId;
 use crate::FunctionObject;
 use crate::LightWeightThreadContext;
 use crate::ObjectAllocator;
 use crate::StackFrameCommon;
+use crate::object::slice::SliceObject;
+use crate::object::string::StringObject;
+use crate::type_id::TypeId;
 
 #[repr(C)]
 struct StackFrameSliceFromString<'a> {
@@ -19,7 +19,7 @@ struct StackFrameSliceFromString<'a> {
     src: StringObject,
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn gox5_slice_from_string(ctx: &mut LightWeightThreadContext) -> FunctionObject {
     let frame = ctx.stack_frame::<StackFrameSliceFromString>();
 
@@ -99,7 +99,7 @@ struct StackFrameSliceAppend<'a> {
     rhs: SliceObject,
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn gox5_slice_append(ctx: &mut LightWeightThreadContext) -> FunctionObject {
     let frame = ctx.stack_frame::<StackFrameSliceAppend>();
     let lhs = &frame.lhs;
@@ -129,7 +129,7 @@ struct StackFrameSliceAppendString<'a> {
     string: StringObject,
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn gox5_slice_append_string(ctx: &mut LightWeightThreadContext) -> FunctionObject {
     let frame = ctx.stack_frame::<StackFrameSliceAppendString>();
     let slice = &frame.slice;
@@ -174,7 +174,7 @@ struct StackFrameSliceCopy<'a> {
     dst: SliceObject,
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn gox5_slice_copy(ctx: &mut LightWeightThreadContext) -> FunctionObject {
     let frame = ctx.stack_frame_mut::<StackFrameSliceCopy>();
     let elem_size = frame.type_id.size();
@@ -191,7 +191,7 @@ struct StackFrameSliceCopyString<'a> {
     dst: SliceObject,
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn gox5_slice_copy_string(ctx: &mut LightWeightThreadContext) -> FunctionObject {
     let frame = ctx.stack_frame_mut::<StackFrameSliceCopyString>();
     let elem_size = mem::size_of::<u8>();
@@ -207,7 +207,7 @@ struct StackFrameSliceCapacity<'a> {
     slice: SliceObject,
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn gox5_slice_capacity(ctx: &mut LightWeightThreadContext) -> FunctionObject {
     let frame = ctx.stack_frame::<StackFrameSliceCapacity>();
     let result = isize::try_from(frame.slice.capacity()).unwrap();
@@ -225,7 +225,7 @@ struct StackFrameSliceSize<'a> {
     slice: SliceObject,
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn gox5_slice_size(ctx: &mut LightWeightThreadContext) -> FunctionObject {
     let frame = ctx.stack_frame::<StackFrameSliceSize>();
     let result = isize::try_from(frame.slice.size()).unwrap();

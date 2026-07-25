@@ -1,13 +1,13 @@
 use std::mem;
 use std::ptr;
 
-use crate::word_chunk::WordChunk;
 use crate::ClosureLayout;
 use crate::FunctionObject;
 use crate::LightWeightThreadContext;
 use crate::ObjectPtr;
 use crate::StackFrameCommon;
 use crate::UserFunction;
+use crate::word_chunk::WordChunk;
 
 #[repr(C)]
 struct StackFrameClosureNew<'a> {
@@ -17,7 +17,7 @@ struct StackFrameClosureNew<'a> {
     free_vars: WordChunk,
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn gox5_closure_new(ctx: &mut LightWeightThreadContext) -> FunctionObject {
     let frame = ctx.stack_frame::<StackFrameClosureNew>();
 
@@ -48,10 +48,10 @@ pub extern "C" fn gox5_closure_new(ctx: &mut LightWeightThreadContext) -> Functi
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::global_context;
-    use crate::light_weight_thread::LightWeightThreadContext;
     use crate::ObjectAllocator;
     use crate::UserFunction;
+    use crate::global_context;
+    use crate::light_weight_thread::LightWeightThreadContext;
     use std::mem;
     use std::ptr;
 

@@ -1,14 +1,14 @@
 use std::mem;
 use std::ptr;
 
-use crate::object::interface::Interface;
-use crate::object::string::StringObject;
-use crate::type_id::TypeId;
-use crate::word_chunk::WordChunk;
 use crate::FunctionObject;
 use crate::LightWeightThreadContext;
 use crate::ObjectPtr;
 use crate::StackFrameCommon;
+use crate::object::interface::Interface;
+use crate::object::string::StringObject;
+use crate::type_id::TypeId;
+use crate::word_chunk::WordChunk;
 
 #[repr(C)]
 struct StackFrameInterfaceNew<'a> {
@@ -18,7 +18,7 @@ struct StackFrameInterfaceNew<'a> {
     type_id: TypeId,
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn gox5_interface_new(ctx: &mut LightWeightThreadContext) -> FunctionObject {
     let frame = ctx.stack_frame::<StackFrameInterfaceNew>();
 
@@ -52,7 +52,7 @@ struct StackFrameInterfaceConvertToConcreteType<'a> {
     success: ObjectPtr,
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn gox5_interface_convert_to_concrete_type(
     ctx: &mut LightWeightThreadContext,
 ) -> FunctionObject {
@@ -94,7 +94,7 @@ struct StackFrameInterfaceConvertToInterface<'a> {
     success: ObjectPtr,
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn gox5_interface_convert_to_interface(
     ctx: &mut LightWeightThreadContext,
 ) -> FunctionObject {
@@ -132,7 +132,7 @@ struct StackFrameInterfaceInvoke<'a> {
     args: WordChunk,
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn gox5_interface_invoke(ctx: &mut LightWeightThreadContext) -> FunctionObject {
     let frame = ctx.stack_frame::<StackFrameInterfaceInvoke>();
     let method = frame.interface.search(frame.method_name.clone());
@@ -167,12 +167,12 @@ pub extern "C" fn gox5_interface_invoke(ctx: &mut LightWeightThreadContext) -> F
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ObjectAllocator;
     use crate::global_context;
     use crate::light_weight_thread::LightWeightThreadContext;
     use crate::object::interface::InterfaceTableEntry;
     use crate::object::string::StringObject;
     use crate::type_id::TypeId;
-    use crate::ObjectAllocator;
     use std::mem;
     use std::sync::OnceLock;
 

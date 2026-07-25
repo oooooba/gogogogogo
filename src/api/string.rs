@@ -1,10 +1,10 @@
 use std::mem;
 
-use crate::object::slice::SliceObject;
-use crate::object::string::StringObject;
 use crate::FunctionObject;
 use crate::LightWeightThreadContext;
 use crate::StackFrameCommon;
+use crate::object::slice::SliceObject;
+use crate::object::string::StringObject;
 
 #[repr(C)]
 struct StackFrameStringNewFromByteSlice<'a> {
@@ -13,7 +13,7 @@ struct StackFrameStringNewFromByteSlice<'a> {
     byte_slice: SliceObject,
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn gox5_string_new_from_byte_slice(
     ctx: &mut LightWeightThreadContext,
 ) -> FunctionObject {
@@ -40,7 +40,7 @@ struct StackFrameStringNewFromRune<'a> {
     rune: usize,
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn gox5_string_new_from_rune(ctx: &mut LightWeightThreadContext) -> FunctionObject {
     let frame = ctx.stack_frame::<StackFrameStringNewFromRune>();
     let rune = frame.rune;
@@ -68,7 +68,7 @@ struct StackFrameStringNewFromRuneSlice<'a> {
     rune_slice: SliceObject,
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn gox5_string_new_from_rune_slice(
     ctx: &mut LightWeightThreadContext,
 ) -> FunctionObject {
@@ -115,7 +115,7 @@ struct StackFrameStringAppend<'a> {
     rhs: StringObject,
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn gox5_string_append(ctx: &mut LightWeightThreadContext) -> FunctionObject {
     let frame = ctx.stack_frame::<StackFrameStringAppend>();
     let len = frame.lhs.len_in_bytes() + frame.rhs.len_in_bytes();
@@ -140,7 +140,7 @@ struct StackFrameStringLength<'a> {
     string: StringObject,
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn gox5_string_length(ctx: &mut LightWeightThreadContext) -> FunctionObject {
     let frame = ctx.stack_frame::<StackFrameStringLength>();
     let result = isize::try_from(frame.string.len_in_bytes()).unwrap();
@@ -161,7 +161,7 @@ struct StackFrameStringNext<'a> {
     count: &'a mut usize,
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn gox5_string_next(ctx: &mut LightWeightThreadContext) -> FunctionObject {
     let frame = ctx.stack_frame_mut::<StackFrameStringNext>();
 
@@ -192,7 +192,7 @@ struct StackFrameStringSubstr<'a> {
     high: isize,
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn gox5_string_substr(ctx: &mut LightWeightThreadContext) -> FunctionObject {
     let frame = ctx.stack_frame::<StackFrameStringSubstr>();
 
@@ -234,9 +234,9 @@ pub extern "C" fn gox5_string_substr(ctx: &mut LightWeightThreadContext) -> Func
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ObjectAllocator;
     use crate::global_context;
     use crate::light_weight_thread::LightWeightThreadContext;
-    use crate::ObjectAllocator;
     use std::mem;
 
     struct AllocatedObject {
