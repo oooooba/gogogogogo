@@ -96,6 +96,13 @@ func Test11() int {
 	return 11
 }
 
+func Test12() int {
+	println(1)
+	defer println(3)
+	println(2)
+	return 12
+}
+
 func main() {
 	runTest := func(testName string, test func() int) {
 		println(testName+":", test())
@@ -111,4 +118,5 @@ func main() {
 	runTest("Test9", Test9)
 	runTest("Test10", Test10)
 	runTest("Test11", Test11)
+	runTest("Test12", Test12)
 }

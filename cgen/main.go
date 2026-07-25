@@ -60,6 +60,8 @@ type Context struct {
 	program               *ssa.Program
 	latestNameMap         map[*ssa.BasicBlock]string
 	orderedPackageMembers []ssa.Member
+	wrapperBuf            strings.Builder
+	deferWrapperNames     map[*ssa.CallCommon]string
 }
 
 func encode(str string) string {
@@ -393,6 +395,92 @@ func (ctx *Context) emitCallCommonForMethod(callCommon *ssa.CallCommon, nextFunc
 		paramArgPair{param: "method_name", arg: fmt.Sprintf("(StringObject){\"%s\"}", callCommon.Method.Name())},
 		paramArgPair{param: "result_size", arg: resultSize},
 	)
+}
+
+func (ctx *Context) emitDeferBuiltinWrapper(builtin *ssa.Builtin, callCommon *ssa.CallCommon) string {
+	if ctx.deferWrapperNames == nil {
+		ctx.deferWrapperNames = make(map[*ssa.CallCommon]string)
+	}
+	if name, ok := ctx.deferWrapperNames[callCommon]; ok {
+		return name
+	}
+
+	wrapperName := fmt.Sprintf("defer_wrapper_%d", len(ctx.deferWrapperNames))
+	ctx.deferWrapperNames[callCommon] = wrapperName
+
+	fmt.Fprintf(&ctx.wrapperBuf, "__attribute__((unused)) static FunctionObject %s(LightWeightThreadContext* ctx) {\n", wrapperName)
+	fmt.Fprintf(&ctx.wrapperBuf, "\tassert(ctx->marker == 0xdeadbeef);\n")
+	fmt.Fprintf(&ctx.wrapperBuf, "\tStackFrameCommon* args_frame = (StackFrameCommon*)ctx->stack_pointer;\n")
+	fmt.Fprintf(&ctx.wrapperBuf, "\tuintptr_t* arg_words = (uintptr_t*)(args_frame + 1);\n")
+	fmt.Fprintf(&ctx.wrapperBuf, "\tStackFrameCommon* prev = (StackFrameCommon*)args_frame->prev_stack_pointer;\n")
+
+	for i, arg := range callCommon.Args {
+		argType := createTypeName(arg.Type())
+		fmt.Fprintf(&ctx.wrapperBuf, "\t%s arg%d_val = *(%s*)&arg_words[%d];\n", argType, i, argType, i)
+	}
+
+	fmt.Fprintf(&ctx.wrapperBuf, "\tStackFramePrint* print_frame = (StackFramePrint*)args_frame;\n")
+	fmt.Fprintf(&ctx.wrapperBuf, "\t*print_frame = (StackFramePrint){ 0 };\n")
+	fmt.Fprintf(&ctx.wrapperBuf, "\tprint_frame->common.resume_func = (FunctionObject){.raw = gox5_defer_execute};\n")
+	fmt.Fprintf(&ctx.wrapperBuf, "\tprint_frame->common.prev_stack_pointer = prev;\n")
+
+	fmt.Fprintf(&ctx.wrapperBuf, "\tprint_frame->packs = %t;\n", builtin.Name() == "print")
+	fmt.Fprintf(&ctx.wrapperBuf, "\tprint_frame->entry_count = %d;\n", len(callCommon.Args))
+
+	for i, arg := range callCommon.Args {
+		var format string
+		field := "as_integer"
+		data0 := fmt.Sprintf("arg%d_val.raw", i)
+		data1 := "0"
+		switch t := arg.Type().(type) {
+		case *types.Basic:
+			switch t.Kind() {
+			case types.Bool:
+				format = "b"
+			case types.Complex64, types.Complex128:
+				format = "i"
+				field = "as_float"
+				data0 = fmt.Sprintf("creal(arg%d_val.raw)", i)
+				data1 = fmt.Sprintf("cimag(arg%d_val.raw)", i)
+			case types.Int:
+				format = "ld"
+			case types.Int8, types.Int16, types.Int32:
+				format = "d"
+			case types.Int64:
+				format = "ld"
+			case types.Uint:
+				format = "lu"
+			case types.Uint8, types.Uint16, types.Uint32:
+				format = "u"
+			case types.Uint64:
+				format = "lu"
+			case types.Uintptr:
+				format = "lu"
+			case types.Float32, types.Float64:
+				format = "f"
+				field = "as_float"
+			case types.String:
+				format = "s"
+				field = "as_pointer"
+			case types.UnsafePointer:
+				format = "p"
+				field = "as_pointer"
+			default:
+				panic(fmt.Sprintf("%s, %s (%T)", arg, t, t))
+			}
+		default:
+			panic(fmt.Sprintf("unsupported arg type for deferred builtin: %s", arg))
+		}
+		fmt.Fprintf(&ctx.wrapperBuf, "\tprint_frame->entry_buffer[%d].format = \"%%%s\";\n", i, format)
+		fmt.Fprintf(&ctx.wrapperBuf, "\tprint_frame->entry_buffer[%d].data[0].%s = %s;\n", i, field, data0)
+		fmt.Fprintf(&ctx.wrapperBuf, "\tprint_frame->entry_buffer[%d].data[1].%s = %s;\n", i, field, data1)
+	}
+
+	fmt.Fprintf(&ctx.wrapperBuf, "\tctx->stack_pointer = (StackFrameCommon*)print_frame;\n")
+	fmt.Fprintf(&ctx.wrapperBuf, "\treturn (FunctionObject){.raw = gox5_print};\n")
+	fmt.Fprintf(&ctx.wrapperBuf, "}\n")
+
+	return wrapperName
 }
 
 func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
@@ -821,7 +909,38 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 		callCommon := instr.Common()
 		resumeFunction := createInstructionName(instr)
 		if callCommon.Method == nil {
-			ctx.emitCallCommon(callCommon, "gox5_defer_register", "StackFrameDeferRegister", resumeFunction)
+			if builtin, ok := callCommon.Value.(*ssa.Builtin); ok && (builtin.Name() == "print" || builtin.Name() == "println") {
+				wrapperName := ctx.emitDeferBuiltinWrapper(builtin, callCommon)
+				functionObject := wrapInFunctionObject(wrapperName)
+				signature := callCommon.Value.Type().Underlying().(*types.Signature)
+				resultSize := "0"
+				switch signature.Results().Len() {
+				case 0:
+					// do nothing
+				case 1:
+					resultSize = fmt.Sprintf("sizeof(%s)", createTypeName(signature.Results().At(0).Type()))
+				default:
+					resultSize = fmt.Sprintf("sizeof(%s)", createTypeName(signature.Results()))
+				}
+				ctx.switchFunctionToCallRuntimeApi("gox5_defer_register", "StackFrameDeferRegister", resumeFunction, nil,
+					func() {
+						fmt.Fprintf(ctx.stream, "intptr_t num_arg_buffer_words = 0;\n")
+						for i, arg := range callCommon.Args {
+							argValue := createValueRelName(arg)
+							argType := createTypeName(arg.Type())
+							argPtr := fmt.Sprintf("ptr%d", i)
+							fmt.Fprintf(ctx.stream, "%s* %s = (void*)&next_frame->arg_buffer[num_arg_buffer_words]; // param[%d]\n", argType, argPtr, i)
+							fmt.Fprintf(ctx.stream, "*%s = %s;\n", argPtr, argValue)
+							fmt.Fprintf(ctx.stream, "num_arg_buffer_words += sizeof(%s) / sizeof(next_frame->arg_buffer[0]);\n", argType)
+						}
+						fmt.Fprintf(ctx.stream, "next_frame->num_arg_buffer_words = num_arg_buffer_words;\n")
+					},
+					paramArgPair{param: "function_object", arg: functionObject},
+					paramArgPair{param: "result_size", arg: resultSize},
+				)
+			} else {
+				ctx.emitCallCommon(callCommon, "gox5_defer_register", "StackFrameDeferRegister", resumeFunction)
+			}
 		} else {
 			ctx.emitCallCommonForMethod(callCommon, "gox5_defer_register_invoke", "StackFrameDeferRegisterInvoke", resumeFunction)
 		}
@@ -2400,6 +2519,30 @@ func (ctx *Context) emitPackage(pkg *ssa.Package) {
 			ctx.emitGlobalVariableDefinition(global)
 		}
 	})
+
+	ctx.traverseFunction(pkg, func(function *ssa.Function) {
+		if function.Blocks == nil {
+			return
+		}
+		for _, basicBlock := range function.Blocks {
+			for _, instr := range basicBlock.Instrs {
+				if deferInstr, ok := instr.(*ssa.Defer); ok {
+					callCommon := deferInstr.Common()
+					if callCommon.Method == nil {
+						if builtin, ok := callCommon.Value.(*ssa.Builtin); ok && (builtin.Name() == "print" || builtin.Name() == "println") {
+							ctx.emitDeferBuiltinWrapper(builtin, callCommon)
+						}
+					}
+				}
+			}
+		}
+	})
+
+	if ctx.wrapperBuf.Len() > 0 {
+		fmt.Fprintln(ctx.stream)
+		fmt.Fprintln(ctx.stream, "// Deferred builtin wrappers")
+		fmt.Fprintln(ctx.stream, ctx.wrapperBuf.String())
+	}
 
 	foundConstValueSet := make(map[string]struct{})
 	ctx.traverseFunction(pkg, func(function *ssa.Function) {
