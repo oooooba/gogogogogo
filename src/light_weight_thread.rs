@@ -66,19 +66,18 @@ impl LightWeightThreadContext {
         next_frame.common.defer_stack = DeferStack::new();
 
         let params_offset = usize::from(result_pointer.is_some());
-        let additional_words = unsafe {
-            slice::from_raw_parts_mut(
-                next_frame.additional_words.as_mut_ptr(),
-                params_offset + args.len(),
-            )
-        };
-
+        let base =
+            unsafe { ptr::addr_of_mut!((*next_stack_pointer).additional_words) as *mut *const () };
         if let Some(result_pointer) = result_pointer {
-            additional_words[0] = result_pointer;
+            unsafe {
+                ptr::write(base, result_pointer);
+            }
         }
 
-        let params = &mut additional_words[params_offset..];
-        params.copy_from_slice(args);
+        unsafe {
+            let dst = base.add(params_offset);
+            ptr::copy_nonoverlapping(args.as_ptr(), dst, args.len());
+        }
 
         self.stack_pointer = next_stack_pointer;
     }

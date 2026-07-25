@@ -66,16 +66,16 @@ fn load_send_data(src: ObjectPtr, size: usize, ctx: &mut LightWeightThreadContex
     ObjectPtr(dst)
 }
 
-fn store_receive_data(mut dst: ObjectPtr, data: Option<ObjectPtr>, size: usize) {
+fn store_receive_data(dst: ObjectPtr, data: Option<ObjectPtr>, size: usize) {
     if let Some(src) = data {
         unsafe {
-            let src = slice::from_raw_parts(src.as_ref::<u8>(), size);
-            let dst = slice::from_raw_parts_mut(dst.as_mut::<u8>(), size);
+            let src = slice::from_raw_parts(src.0 as *const u8, size);
+            let dst = slice::from_raw_parts_mut(dst.0 as *mut u8, size);
             dst.copy_from_slice(src);
         };
     } else {
         unsafe {
-            let dst = dst.as_mut::<u8>();
+            let dst = dst.0 as *mut u8;
             ptr::write_bytes(dst, 0, size);
         }
     }

@@ -1,3 +1,4 @@
+use std::mem;
 use std::ptr;
 
 use crate::object::interface::Interface;
@@ -137,9 +138,13 @@ pub extern "C" fn gox5_interface_invoke(ctx: &mut LightWeightThreadContext) -> F
     let method = frame.interface.search(frame.method_name.clone());
     let next_func = method.unwrap();
 
+    let args_wc_ptr = unsafe {
+        let sp = ctx.stack_pointer() as *const u8;
+        sp.add(mem::offset_of!(StackFrameInterfaceInvoke, args)) as *const WordChunk
+    };
     let args = ctx.global_context().process(|mut global_context| {
         let allocator = global_context.allocator();
-        frame.args.duplicate(allocator)
+        unsafe { WordChunk::duplicate_raw(args_wc_ptr, allocator) }
     });
 
     let result_pointer = frame.result_ptr.as_ref().map(|p| (*p) as *const ());
@@ -152,7 +157,7 @@ pub extern "C" fn gox5_interface_invoke(ctx: &mut LightWeightThreadContext) -> F
     ctx.push_frame(
         prev_stack_pointer,
         result_pointer,
-        unsafe { args.as_ref().as_slice() },
+        unsafe { WordChunk::as_slice_raw(args.as_ptr()) },
         resume_func,
     );
 

@@ -11,21 +11,30 @@ pub struct WordChunk {
 }
 
 impl WordChunk {
-    pub(crate) fn as_slice<T>(&self) -> &[T] {
-        unsafe { slice::from_raw_parts(self.buf.as_ptr() as *const T, self.count) }
+    /// SAFETY: `self_ptr` must point to a valid WordChunk whose buffer data
+    /// (count elements starting at self_ptr + size_of::<usize>()) is accessible
+    /// for the lifetime of the returned slice.
+    pub(crate) unsafe fn as_slice_raw<'a, T>(self_ptr: *const Self) -> &'a [T] {
+        let count = ptr::read(self_ptr as *const usize);
+        let buf_ptr = (self_ptr as *const u8).add(mem::size_of::<usize>()) as *const T;
+        slice::from_raw_parts(buf_ptr, count)
     }
 
-    pub(crate) fn duplicate(&self, allocator: &mut dyn ObjectAllocator) -> ptr::NonNull<Self> {
-        let size = mem::size_of::<WordChunk>() + mem::size_of::<*const ()>() * self.count;
+    /// SAFETY: `self_ptr` must point to a valid WordChunk whose buffer data
+    /// (count elements starting at self_ptr + size_of::<usize>()) is accessible.
+    pub(crate) unsafe fn duplicate_raw(
+        self_ptr: *const Self,
+        allocator: &mut dyn ObjectAllocator,
+    ) -> ptr::NonNull<Self> {
+        let count = ptr::read(self_ptr as *const usize);
+        let size = mem::size_of::<WordChunk>() + mem::size_of::<*const ()>() * count;
         let p = allocator.allocate(size, |_| {}) as *mut Self;
 
-        unsafe {
-            let duplicated = &mut *p;
-            duplicated.count = self.count;
-            slice::from_raw_parts_mut(duplicated.buf.as_mut_ptr(), duplicated.count)
-        }
-        .copy_from_slice(self.as_slice());
+        (*ptr::addr_of_mut!((*p).count)) = count;
+        let src = (self_ptr as *const u8).add(mem::size_of::<usize>()) as *const *const ();
+        let dst = slice::from_raw_parts_mut(ptr::addr_of_mut!((*p).buf) as *mut *const (), count);
+        dst.copy_from_slice(slice::from_raw_parts(src, count));
 
-        unsafe { ptr::NonNull::new_unchecked(p) }
+        ptr::NonNull::new_unchecked(p)
     }
 }

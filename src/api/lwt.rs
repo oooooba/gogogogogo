@@ -1,3 +1,5 @@
+use std::mem;
+
 use crate::create_light_weight_thread_context;
 use crate::light_weight_thread::LightWeightThreadContext;
 use crate::object::interface::Interface;
@@ -9,7 +11,7 @@ use crate::UserFunction;
 
 fn spawn<F>(ctx: &mut LightWeightThreadContext, param: F) -> FunctionObject
 where
-    F: FnOnce(&LightWeightThreadContext) -> (FunctionObject, usize, &WordChunk),
+    F: FnOnce(&LightWeightThreadContext) -> (FunctionObject, usize, *const WordChunk),
 {
     let (entry_func, result_size, args) = param(ctx);
     let new_ctx = {
@@ -25,7 +27,7 @@ where
         new_ctx.push_frame(
             prev_stack_pointer,
             result_pointer,
-            args.as_slice(),
+            unsafe { WordChunk::as_slice_raw(args) },
             FunctionObject::from_user_function(UserFunction::new(crate::terminate)),
         );
         new_ctx
@@ -51,7 +53,10 @@ pub extern "C" fn gox5_lwt_spawn(ctx: &mut LightWeightThreadContext) -> Function
         let frame = ctx.stack_frame::<StackFrameLwtSpawn>();
         let entry_func = frame.func.clone();
         let result_size = frame.result_size;
-        let args = &frame.args;
+        let args = unsafe {
+            let sp = ctx.stack_pointer() as *const u8;
+            sp.add(mem::offset_of!(StackFrameLwtSpawn, args)) as *const WordChunk
+        };
         (entry_func, result_size, args)
     })
 }
@@ -72,7 +77,10 @@ pub extern "C" fn gox5_lwt_spawn_invoke(ctx: &mut LightWeightThreadContext) -> F
         let method = frame.interface.search(frame.method_name.clone());
         let entry_func = method.unwrap();
         let result_size = frame.result_size;
-        let args = &frame.args;
+        let args = unsafe {
+            let sp = ctx.stack_pointer() as *const u8;
+            sp.add(mem::offset_of!(StackFrameLwtSpawnInvoke, args)) as *const WordChunk
+        };
         (entry_func, result_size, args)
     })
 }

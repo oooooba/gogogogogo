@@ -34,7 +34,7 @@ impl DeferStackEntry {
     }
 
     pub(crate) fn args(&self) -> &[*const ()] {
-        unsafe { self.args.as_ref().as_slice() }
+        unsafe { WordChunk::as_slice_raw(self.args.as_ptr()) }
     }
 }
 

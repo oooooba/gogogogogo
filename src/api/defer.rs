@@ -12,12 +12,12 @@ use crate::UserFunction;
 
 fn register<F>(ctx: &mut LightWeightThreadContext, param: F) -> FunctionObject
 where
-    F: FnOnce(&LightWeightThreadContext) -> (FunctionObject, usize, &WordChunk),
+    F: FnOnce(&LightWeightThreadContext) -> (FunctionObject, usize, *const WordChunk),
 {
     let (func, result_size, args) = param(ctx);
     let (args, entry_ptr) = ctx.global_context().process(|mut global_context| {
         let allocator = global_context.allocator();
-        let args = args.duplicate(allocator);
+        let args = unsafe { WordChunk::duplicate_raw(args, allocator) };
         let entry_ptr =
             allocator.allocate(mem::size_of::<DeferStackEntry>(), |_| {}) as *mut DeferStackEntry;
         (args, entry_ptr)
@@ -51,7 +51,10 @@ pub extern "C" fn gox5_defer_register(ctx: &mut LightWeightThreadContext) -> Fun
         let frame = ctx.stack_frame::<StackFrameDeferRegister>();
         let func = frame.func.clone();
         let result_size = frame.result_size;
-        let args = &frame.args;
+        let args = unsafe {
+            let sp = ctx.stack_pointer() as *const u8;
+            sp.add(mem::offset_of!(StackFrameDeferRegister, args)) as *const WordChunk
+        };
         (func, result_size, args)
     })
 }
@@ -72,7 +75,10 @@ pub extern "C" fn gox5_defer_register_invoke(ctx: &mut LightWeightThreadContext)
         let method = frame.interface.search(frame.method_name.clone());
         let func = method.unwrap();
         let result_size = frame.result_size;
-        let args = &frame.args;
+        let args = unsafe {
+            let sp = ctx.stack_pointer() as *const u8;
+            sp.add(mem::offset_of!(StackFrameDeferRegisterInvoke, args)) as *const WordChunk
+        };
         (func, result_size, args)
     })
 }

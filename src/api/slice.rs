@@ -80,7 +80,7 @@ fn reallocate_slice(
 
         result
     } else {
-        base.duplicate_extend(base.size())
+        base.duplicate_extend(extend_bytes.len() / elem_size)
     };
 
     let result_slice = result.as_bytes_mut(elem_size);
