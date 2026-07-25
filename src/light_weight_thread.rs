@@ -176,3 +176,160 @@ impl LightWeightThreadContext {
         self.control_flags & 0b100 > 0
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::global_context;
+    use crate::ObjectAllocator;
+
+    struct AllocatedObject {
+        ptr: *mut (),
+        size: usize,
+        destructor: fn(*mut ()),
+    }
+
+    struct MockObjectAllocator {
+        allocated_objects: Vec<AllocatedObject>,
+    }
+
+    impl MockObjectAllocator {
+        fn new() -> Self {
+            MockObjectAllocator {
+                allocated_objects: Vec::new(),
+            }
+        }
+    }
+
+    impl ObjectAllocator for MockObjectAllocator {
+        fn allocate(&mut self, size: usize, destructor: fn(*mut ())) -> *mut () {
+            let alignment = mem::align_of::<isize>();
+            let size = size.div_ceil(alignment) * alignment;
+            let buf: Vec<isize> = vec![0; size];
+            let ptr = buf.leak().as_mut_ptr() as *mut ();
+            self.allocated_objects.push(AllocatedObject {
+                ptr,
+                size,
+                destructor,
+            });
+            ptr
+        }
+
+        fn allocate_guarded_pages(&mut self, num_pages: usize) -> *mut () {
+            self.allocate(num_pages * 4096, |_| {})
+        }
+    }
+
+    impl Drop for MockObjectAllocator {
+        fn drop(&mut self) {
+            for obj in &self.allocated_objects {
+                (obj.destructor)(obj.ptr);
+                unsafe {
+                    Vec::from_raw_parts(obj.ptr as *mut isize, 0, obj.size);
+                }
+            }
+        }
+    }
+
+    fn create_ctx() -> (LightWeightThreadContext, crate::GlobalContextPtr) {
+        let allocator = Box::new(MockObjectAllocator::new());
+        let gc = global_context::create_global_context(allocator);
+        let func = FunctionObject::new_null();
+        let ctx = crate::create_light_weight_thread_context(gc.dupulicate(), func);
+        (ctx, gc)
+    }
+
+    #[test]
+    fn test_grow_stack_advances_pointer() {
+        let (mut ctx, _gc) = create_ctx();
+        let sp_before = ctx.stack_pointer();
+        ctx.grow_stack(64);
+        let sp_after = ctx.stack_pointer();
+        assert!(sp_after as usize > sp_before as usize);
+        assert_eq!((sp_after as usize) - (sp_before as usize), 64);
+    }
+
+    #[test]
+    fn test_grow_stack_aligns_to_word() {
+        let (mut ctx, _gc) = create_ctx();
+        let sp_before = ctx.stack_pointer();
+        ctx.grow_stack(3);
+        let sp_after = ctx.stack_pointer();
+        let diff = (sp_after as usize) - (sp_before as usize);
+        assert_eq!(diff % mem::size_of::<*const ()>(), 0);
+    }
+
+    #[test]
+    fn test_push_pop_frame_roundtrip() {
+        let (mut ctx, _gc) = create_ctx();
+        let prev_sp = ctx.stack_pointer();
+        ctx.grow_stack(mem::size_of::<StackFrameCommon>() + 128);
+        let resume = FunctionObject::new_null();
+        ctx.push_frame(prev_sp, None, &[], resume.clone());
+        let popped = ctx.pop_frame();
+        assert_eq!(popped, resume);
+        assert_eq!(ctx.stack_pointer(), prev_sp);
+    }
+
+    #[test]
+    fn test_push_pop_frame_with_args() {
+        let (mut ctx, _gc) = create_ctx();
+        let prev_sp = ctx.stack_pointer();
+        ctx.grow_stack(mem::size_of::<StackFrameCommon>() + 128);
+        let arg1 = 0xaaaa as *const ();
+        let arg2 = 0xbbbb as *const ();
+        ctx.push_frame(prev_sp, None, &[arg1, arg2], FunctionObject::new_null());
+        let popped = ctx.pop_frame();
+        assert_eq!(popped, FunctionObject::new_null());
+        assert_eq!(ctx.stack_pointer(), prev_sp);
+    }
+
+    #[test]
+    fn test_suspend_resume() {
+        let (mut ctx, _gc) = create_ctx();
+        assert!(!ctx.is_suspended());
+        ctx.suspend();
+        assert!(ctx.is_suspended());
+        ctx.resume();
+        assert!(!ctx.is_suspended());
+    }
+
+    #[test]
+    fn test_terminate() {
+        let (mut ctx, _gc) = create_ctx();
+        assert!(!ctx.is_terminated());
+        ctx.terminate();
+        assert!(ctx.is_terminated());
+    }
+
+    #[test]
+    fn test_panic_enter_exit() {
+        let (mut ctx, _gc) = create_ctx();
+        assert!(!ctx.is_panicking());
+        let data = Interface::nil();
+        ctx.enter_panic(data);
+        assert!(ctx.is_panicking());
+        let recovered = ctx.exit_panic();
+        assert!(!ctx.is_panicking());
+        assert!(recovered.is_nil());
+    }
+
+    #[test]
+    fn test_stack_frame_read_write() {
+        let (mut ctx, _gc) = create_ctx();
+        let prev_sp = ctx.stack_pointer();
+        ctx.grow_stack(mem::size_of::<StackFrameCommon>() + 128);
+        ctx.push_frame(prev_sp, None, &[], FunctionObject::new_null());
+        {
+            let frame = ctx.stack_frame::<StackFrameCommon>();
+            assert!(!frame.prev_stack_pointer.is_null() || prev_sp == frame.prev_stack_pointer);
+        }
+        ctx.pop_frame();
+    }
+
+    #[test]
+    fn test_global_context_access() {
+        let (ctx, _gc) = create_ctx();
+        let _ = ctx.global_context();
+    }
+}

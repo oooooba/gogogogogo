@@ -82,3 +82,101 @@ pub fn create_global_context(allocator: Box<dyn ObjectAllocator>) -> GlobalConte
     let global_context = Arc::new(Mutex::new(GlobalContext::new(allocator)));
     GlobalContextPtr::from(global_context)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ObjectAllocator;
+
+    struct MockObjectAllocator {
+        allocated: Vec<(*mut (), usize)>,
+    }
+
+    impl MockObjectAllocator {
+        fn new() -> Self {
+            MockObjectAllocator {
+                allocated: Vec::new(),
+            }
+        }
+    }
+
+    impl ObjectAllocator for MockObjectAllocator {
+        fn allocate(&mut self, size: usize, _destructor: fn(*mut ())) -> *mut () {
+            let alignment = std::mem::align_of::<isize>();
+            let size = size.div_ceil(alignment) * alignment;
+            let buf: Vec<isize> = vec![0; size];
+            let ptr = buf.leak().as_mut_ptr() as *mut ();
+            self.allocated.push((ptr, size));
+            ptr
+        }
+
+        fn allocate_guarded_pages(&mut self, num_pages: usize) -> *mut () {
+            self.allocate(num_pages * 4096, |_| {})
+        }
+    }
+
+    impl Drop for MockObjectAllocator {
+        fn drop(&mut self) {
+            for (ptr, size) in &self.allocated {
+                unsafe {
+                    let _ = Vec::from_raw_parts(*ptr as *mut isize, 0, *size);
+                }
+            }
+        }
+    }
+
+    fn make_gc() -> GlobalContextPtr {
+        create_global_context(Box::new(MockObjectAllocator::new()))
+    }
+
+    #[test]
+    fn test_issue_light_weight_thread_id_increments() {
+        let gc = make_gc();
+        gc.process(|mut gc| {
+            let id0 = gc.issue_light_weight_thread_id();
+            let id1 = gc.issue_light_weight_thread_id();
+            let id2 = gc.issue_light_weight_thread_id();
+            assert_eq!(id0, 0);
+            assert_eq!(id1, 1);
+            assert_eq!(id2, 2);
+        });
+    }
+
+    #[test]
+    fn test_global_context_ptr_process() {
+        let gc = make_gc();
+        let result = gc.process(|gc| {
+            drop(gc);
+            42
+        });
+        assert_eq!(result, 42);
+    }
+
+    #[test]
+    fn test_global_context_ptr_duplicate() {
+        let gc = make_gc();
+        let gc2 = gc.dupulicate();
+        assert_eq!(gc, gc2);
+    }
+
+    #[test]
+    fn test_push_pop_light_weight_thread() {
+        let gc = make_gc();
+        gc.process(|mut gc| {
+            assert!(gc.pop_light_weight_thread().is_none());
+        });
+    }
+
+    #[test]
+    fn test_create_global_context() {
+        let _gc = make_gc();
+    }
+
+    #[test]
+    fn test_allocator_access() {
+        let gc = make_gc();
+        gc.process(|mut gc| {
+            let _alloc = gc.allocator();
+        });
+    }
+}

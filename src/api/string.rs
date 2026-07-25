@@ -230,3 +230,271 @@ pub extern "C" fn gox5_string_substr(ctx: &mut LightWeightThreadContext) -> Func
 
     ctx.pop_frame()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::global_context;
+    use crate::light_weight_thread::LightWeightThreadContext;
+    use crate::ObjectAllocator;
+    use std::mem;
+
+    struct AllocatedObject {
+        ptr: *mut (),
+        size: usize,
+        destructor: fn(*mut ()),
+    }
+
+    struct MockObjectAllocator {
+        allocated_objects: Vec<AllocatedObject>,
+    }
+
+    impl MockObjectAllocator {
+        fn new() -> Self {
+            MockObjectAllocator {
+                allocated_objects: Vec::new(),
+            }
+        }
+    }
+
+    impl ObjectAllocator for MockObjectAllocator {
+        fn allocate(&mut self, size: usize, destructor: fn(*mut ())) -> *mut () {
+            let alignment = mem::align_of::<isize>();
+            let size = size.div_ceil(alignment) * alignment;
+            let buf: Vec<isize> = vec![0; size];
+            let ptr = buf.leak().as_mut_ptr() as *mut ();
+            self.allocated_objects.push(AllocatedObject {
+                ptr,
+                size,
+                destructor,
+            });
+            ptr
+        }
+
+        fn allocate_guarded_pages(&mut self, num_pages: usize) -> *mut () {
+            self.allocate(num_pages * 4096, |_| {})
+        }
+    }
+
+    impl Drop for MockObjectAllocator {
+        fn drop(&mut self) {
+            for obj in &self.allocated_objects {
+                (obj.destructor)(obj.ptr);
+                unsafe {
+                    Vec::from_raw_parts(obj.ptr as *mut isize, 0, obj.size);
+                }
+            }
+        }
+    }
+
+    fn create_ctx() -> (
+        LightWeightThreadContext,
+        crate::global_context::GlobalContextPtr,
+    ) {
+        let allocator = Box::new(MockObjectAllocator::new());
+        let gc = global_context::create_global_context(allocator);
+        let func = FunctionObject::new_null();
+        let ctx = crate::create_light_weight_thread_context(gc.dupulicate(), func);
+        (ctx, gc)
+    }
+
+    #[test]
+    fn test_gox5_string_length() {
+        let (mut ctx, _gc) = create_ctx();
+        let prev_sp = ctx.stack_pointer();
+        ctx.grow_stack(mem::size_of::<isize>());
+        let result_raw = ctx.stack_pointer() as *mut isize;
+        ctx.grow_stack(mem::size_of::<StackFrameStringLength>());
+        ctx.push_frame(
+            prev_sp,
+            Some(result_raw as *const ()),
+            &[],
+            FunctionObject::new_null(),
+        );
+
+        let mut allocator = MockObjectAllocator::new();
+        let mut builder = StringObject::builder(5, &mut allocator);
+        builder.append_bytes(b"hello");
+        let s = builder.build();
+
+        let frame = ctx.stack_frame_mut::<StackFrameStringLength>();
+        frame.string = s;
+        frame.result_ptr = unsafe { &mut *result_raw };
+
+        let result = gox5_string_length(&mut ctx);
+        assert_eq!(result, FunctionObject::new_null());
+        let res = unsafe { *result_raw };
+        assert_eq!(res, 5);
+    }
+
+    #[test]
+    fn test_gox5_string_length_empty() {
+        let (mut ctx, _gc) = create_ctx();
+        let prev_sp = ctx.stack_pointer();
+        ctx.grow_stack(mem::size_of::<isize>());
+        let result_raw = ctx.stack_pointer() as *mut isize;
+        ctx.grow_stack(mem::size_of::<StackFrameStringLength>());
+        ctx.push_frame(
+            prev_sp,
+            Some(result_raw as *const ()),
+            &[],
+            FunctionObject::new_null(),
+        );
+
+        let mut allocator = MockObjectAllocator::new();
+        let builder = StringObject::builder(0, &mut allocator);
+        let s = builder.build();
+
+        let frame = ctx.stack_frame_mut::<StackFrameStringLength>();
+        frame.string = s;
+        frame.result_ptr = unsafe { &mut *result_raw };
+
+        let result = gox5_string_length(&mut ctx);
+        assert_eq!(result, FunctionObject::new_null());
+        let res = unsafe { *result_raw };
+        assert_eq!(res, 0);
+    }
+
+    #[test]
+    fn test_gox5_string_new_from_rune() {
+        let (mut ctx, _gc) = create_ctx();
+        let prev_sp = ctx.stack_pointer();
+        ctx.grow_stack(mem::size_of::<StringObject>());
+        let result_raw = ctx.stack_pointer() as *mut StringObject;
+        ctx.grow_stack(mem::size_of::<StackFrameStringNewFromRune>());
+        ctx.push_frame(
+            prev_sp,
+            Some(result_raw as *const ()),
+            &[],
+            FunctionObject::new_null(),
+        );
+
+        let frame = ctx.stack_frame_mut::<StackFrameStringNewFromRune>();
+        frame.rune = 'A' as usize;
+        frame.result_ptr = unsafe { &mut *result_raw };
+
+        let result = gox5_string_new_from_rune(&mut ctx);
+        assert_eq!(result, FunctionObject::new_null());
+        let res = unsafe { &*result_raw };
+        assert_eq!(res.as_bytes(), b"A");
+    }
+
+    #[test]
+    fn test_gox5_string_new_from_rune_multibyte() {
+        let (mut ctx, _gc) = create_ctx();
+        let prev_sp = ctx.stack_pointer();
+        ctx.grow_stack(mem::size_of::<StringObject>());
+        let result_raw = ctx.stack_pointer() as *mut StringObject;
+        ctx.grow_stack(mem::size_of::<StackFrameStringNewFromRune>());
+        ctx.push_frame(
+            prev_sp,
+            Some(result_raw as *const ()),
+            &[],
+            FunctionObject::new_null(),
+        );
+
+        let frame = ctx.stack_frame_mut::<StackFrameStringNewFromRune>();
+        frame.rune = '日' as usize;
+        frame.result_ptr = unsafe { &mut *result_raw };
+
+        let result = gox5_string_new_from_rune(&mut ctx);
+        assert_eq!(result, FunctionObject::new_null());
+        let res = unsafe { &*result_raw };
+        assert_eq!(res.as_bytes(), "日".as_bytes());
+    }
+
+    #[test]
+    fn test_gox5_string_substr() {
+        let (mut ctx, _gc) = create_ctx();
+        let prev_sp = ctx.stack_pointer();
+        ctx.grow_stack(mem::size_of::<StringObject>());
+        let result_raw = ctx.stack_pointer() as *mut StringObject;
+        ctx.grow_stack(mem::size_of::<StackFrameStringSubstr>());
+        ctx.push_frame(
+            prev_sp,
+            Some(result_raw as *const ()),
+            &[],
+            FunctionObject::new_null(),
+        );
+
+        let mut allocator = MockObjectAllocator::new();
+        let mut builder = StringObject::builder(5, &mut allocator);
+        builder.append_bytes(b"hello");
+        let base = builder.build();
+
+        let frame = ctx.stack_frame_mut::<StackFrameStringSubstr>();
+        frame.base = base;
+        frame.low = 1;
+        frame.high = 4;
+        frame.result_ptr = unsafe { &mut *result_raw };
+
+        let result = gox5_string_substr(&mut ctx);
+        assert_eq!(result, FunctionObject::new_null());
+        let res = unsafe { &*result_raw };
+        assert_eq!(res.as_bytes(), b"ell");
+    }
+
+    #[test]
+    fn test_gox5_string_substr_full() {
+        let (mut ctx, _gc) = create_ctx();
+        let prev_sp = ctx.stack_pointer();
+        ctx.grow_stack(mem::size_of::<StringObject>());
+        let result_raw = ctx.stack_pointer() as *mut StringObject;
+        ctx.grow_stack(mem::size_of::<StackFrameStringSubstr>());
+        ctx.push_frame(
+            prev_sp,
+            Some(result_raw as *const ()),
+            &[],
+            FunctionObject::new_null(),
+        );
+
+        let mut allocator = MockObjectAllocator::new();
+        let mut builder = StringObject::builder(5, &mut allocator);
+        builder.append_bytes(b"hello");
+        let base = builder.build();
+
+        let frame = ctx.stack_frame_mut::<StackFrameStringSubstr>();
+        frame.base = base;
+        frame.low = -1;
+        frame.high = -1;
+        frame.result_ptr = unsafe { &mut *result_raw };
+
+        let result = gox5_string_substr(&mut ctx);
+        assert_eq!(result, FunctionObject::new_null());
+        let res = unsafe { &*result_raw };
+        assert_eq!(res.as_bytes(), b"hello");
+    }
+
+    #[test]
+    fn test_gox5_string_append() {
+        let (mut ctx, _gc) = create_ctx();
+        let prev_sp = ctx.stack_pointer();
+        ctx.grow_stack(mem::size_of::<StringObject>());
+        let result_raw = ctx.stack_pointer() as *mut StringObject;
+        ctx.grow_stack(mem::size_of::<StackFrameStringAppend>());
+        ctx.push_frame(
+            prev_sp,
+            Some(result_raw as *const ()),
+            &[],
+            FunctionObject::new_null(),
+        );
+
+        let mut allocator = MockObjectAllocator::new();
+        let mut builder1 = StringObject::builder(5, &mut allocator);
+        builder1.append_bytes(b"hello");
+        let lhs = builder1.build();
+        let mut builder2 = StringObject::builder(5, &mut allocator);
+        builder2.append_bytes(b"world");
+        let rhs = builder2.build();
+
+        let frame = ctx.stack_frame_mut::<StackFrameStringAppend>();
+        frame.lhs = lhs;
+        frame.rhs = rhs;
+        frame.result_ptr = unsafe { &mut *result_raw };
+
+        let result = gox5_string_append(&mut ctx);
+        assert_eq!(result, FunctionObject::new_null());
+        let res = unsafe { &*result_raw };
+        assert_eq!(res.as_bytes(), b"helloworld");
+    }
+}

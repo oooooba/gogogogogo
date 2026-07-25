@@ -235,3 +235,244 @@ pub extern "C" fn gox5_slice_size(ctx: &mut LightWeightThreadContext) -> Functio
 
     ctx.pop_frame()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::mem;
+
+    struct AllocatedObject {
+        ptr: *mut (),
+        size: usize,
+        destructor: fn(*mut ()),
+    }
+
+    struct MockObjectAllocator {
+        allocated_objects: Vec<AllocatedObject>,
+    }
+
+    impl MockObjectAllocator {
+        fn new() -> Self {
+            MockObjectAllocator {
+                allocated_objects: Vec::new(),
+            }
+        }
+    }
+
+    impl ObjectAllocator for MockObjectAllocator {
+        fn allocate(&mut self, size: usize, destructor: fn(*mut ())) -> *mut () {
+            let alignment = mem::align_of::<isize>();
+            let size = size.div_ceil(alignment) * alignment;
+            let buf: Vec<isize> = vec![0; size];
+            let ptr = buf.leak().as_mut_ptr() as *mut ();
+            self.allocated_objects.push(AllocatedObject {
+                ptr,
+                size,
+                destructor,
+            });
+            ptr
+        }
+
+        fn allocate_guarded_pages(&mut self, num_pages: usize) -> *mut () {
+            self.allocate(num_pages * 4096, |_| {})
+        }
+    }
+
+    impl Drop for MockObjectAllocator {
+        fn drop(&mut self) {
+            for obj in &self.allocated_objects {
+                (obj.destructor)(obj.ptr);
+                unsafe {
+                    Vec::from_raw_parts(obj.ptr as *mut isize, 0, obj.size);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_reallocate_slice_within_capacity() {
+        let mut allocator = MockObjectAllocator::new();
+        let mut buf = [0u8; 64];
+        buf[0] = 10;
+        buf[1] = 20;
+        buf[2] = 30;
+        let ptr = buf.as_mut_ptr() as *mut ();
+        let base = SliceObject::new(ptr, 3, 10);
+        let extend = [40u8, 50];
+        let result = reallocate_slice(&base, 1, &extend, &mut allocator);
+        assert_eq!(result.size(), 5);
+        assert_eq!(result.capacity(), 10);
+        let bytes = result.as_bytes(1);
+        assert_eq!(bytes[0], 10);
+        assert_eq!(bytes[1], 20);
+        assert_eq!(bytes[2], 30);
+        assert_eq!(bytes[3], 40);
+        assert_eq!(bytes[4], 50);
+    }
+
+    #[test]
+    fn test_reallocate_slice_overflow_triggers_realloc() {
+        let mut allocator = MockObjectAllocator::new();
+        let mut buf = [0u8; 4];
+        buf[0] = 1;
+        buf[1] = 2;
+        let ptr = buf.as_mut_ptr() as *mut ();
+        let base = SliceObject::new(ptr, 2, 2);
+        let extend = [3u8, 4, 5, 6];
+        let result = reallocate_slice(&base, 1, &extend, &mut allocator);
+        assert_eq!(result.size(), 6);
+        assert_eq!(result.capacity(), 12);
+        let bytes = result.as_bytes(1);
+        assert_eq!(bytes[0], 1);
+        assert_eq!(bytes[1], 2);
+        assert_eq!(bytes[2], 3);
+        assert_eq!(bytes[3], 4);
+        assert_eq!(bytes[4], 5);
+        assert_eq!(bytes[5], 6);
+    }
+
+    #[test]
+    fn test_reallocate_slice_u32_elements() {
+        let mut allocator = MockObjectAllocator::new();
+        let mut buf = [0u32; 4];
+        buf[0] = 100;
+        buf[1] = 200;
+        let ptr = buf.as_mut_ptr() as *mut ();
+        let base = SliceObject::new(ptr, 2, 4);
+        let extend = 300u32.to_le_bytes();
+        let extend2 = 400u32.to_le_bytes();
+        let mut extend_bytes = Vec::new();
+        extend_bytes.extend_from_slice(&extend);
+        extend_bytes.extend_from_slice(&extend2);
+        let result = reallocate_slice(&base, 4, &extend_bytes, &mut allocator);
+        assert_eq!(result.size(), 4);
+        assert_eq!(result.capacity(), 4);
+    }
+
+    #[test]
+    fn test_copy_slice_normal() {
+        let mut dst_buf = [0u8; 8];
+        let mut dst_slice = SliceObject::new(dst_buf.as_mut_ptr() as *mut (), 4, 8);
+        let src = [10u8, 20, 30, 40, 50, 60];
+        let count = copy_slice(&mut dst_slice, 1, &src);
+        assert_eq!(count, 4);
+        assert_eq!(dst_buf[0], 10);
+        assert_eq!(dst_buf[1], 20);
+        assert_eq!(dst_buf[2], 30);
+        assert_eq!(dst_buf[3], 40);
+        assert_eq!(dst_buf[4], 0);
+    }
+
+    #[test]
+    fn test_copy_slice_src_larger_than_dst() {
+        let mut dst_buf = [0u8; 3];
+        let mut dst_slice = SliceObject::new(dst_buf.as_mut_ptr() as *mut (), 3, 3);
+        let src = [10u8, 20, 30, 40, 50];
+        let count = copy_slice(&mut dst_slice, 1, &src);
+        assert_eq!(count, 3);
+        assert_eq!(dst_buf[0], 10);
+        assert_eq!(dst_buf[1], 20);
+        assert_eq!(dst_buf[2], 30);
+    }
+
+    #[test]
+    fn test_copy_slice_dst_larger_than_src() {
+        let mut dst_buf = [0u8; 8];
+        let mut dst_slice = SliceObject::new(dst_buf.as_mut_ptr() as *mut (), 8, 8);
+        let src = [10u8, 20];
+        let count = copy_slice(&mut dst_slice, 1, &src);
+        assert_eq!(count, 2);
+        assert_eq!(dst_buf[0], 10);
+        assert_eq!(dst_buf[1], 20);
+        assert_eq!(dst_buf[2], 0);
+    }
+
+    #[test]
+    fn test_copy_slice_u32_elements() {
+        let mut dst_buf = [0u32; 4];
+        let mut dst_slice = SliceObject::new(dst_buf.as_mut_ptr() as *mut (), 2, 4);
+        let src = [100u32, 200, 300];
+        let mut src_bytes = Vec::new();
+        for v in &src {
+            src_bytes.extend_from_slice(&v.to_le_bytes());
+        }
+        let count = copy_slice(&mut dst_slice, 4, &src_bytes);
+        assert_eq!(count, 2);
+        assert_eq!(dst_buf[0], 100);
+        assert_eq!(dst_buf[1], 200);
+        assert_eq!(dst_buf[2], 0);
+    }
+
+    // --- gox5 function tests ---
+
+    use crate::global_context;
+    use crate::light_weight_thread::LightWeightThreadContext;
+
+    fn create_ctx() -> (
+        LightWeightThreadContext,
+        crate::global_context::GlobalContextPtr,
+    ) {
+        let allocator = Box::new(MockObjectAllocator::new());
+        let gc = global_context::create_global_context(allocator);
+        let func = FunctionObject::new_null();
+        let ctx = crate::create_light_weight_thread_context(gc.dupulicate(), func);
+        (ctx, gc)
+    }
+
+    #[test]
+    fn test_gox5_slice_size() {
+        let (mut ctx, _gc) = create_ctx();
+        let mut buf = [0u8; 64];
+        buf[0] = 1;
+        buf[1] = 2;
+        buf[2] = 3;
+        let slice_obj = SliceObject::new(buf.as_mut_ptr() as *mut (), 3, 10);
+
+        let prev_sp = ctx.stack_pointer();
+        ctx.grow_stack(mem::size_of::<isize>());
+        let result_raw = ctx.stack_pointer() as *mut isize;
+        ctx.grow_stack(mem::size_of::<StackFrameSliceSize>());
+        ctx.push_frame(
+            prev_sp,
+            Some(result_raw as *const ()),
+            &[],
+            FunctionObject::new_null(),
+        );
+
+        let frame = ctx.stack_frame_mut::<StackFrameSliceSize>();
+        frame.slice = slice_obj;
+        frame.result_ptr = unsafe { &mut *result_raw };
+
+        let result = gox5_slice_size(&mut ctx);
+        assert_eq!(result, FunctionObject::new_null());
+        let res = unsafe { *result_raw };
+        assert_eq!(res, 3);
+    }
+
+    #[test]
+    fn test_gox5_slice_capacity() {
+        let (mut ctx, _gc) = create_ctx();
+        let mut buf = [0u8; 64];
+        let slice_obj = SliceObject::new(buf.as_mut_ptr() as *mut (), 3, 10);
+
+        let prev_sp = ctx.stack_pointer();
+        ctx.grow_stack(mem::size_of::<isize>());
+        let result_raw = ctx.stack_pointer() as *mut isize;
+        ctx.grow_stack(mem::size_of::<StackFrameSliceCapacity>());
+        ctx.push_frame(
+            prev_sp,
+            Some(result_raw as *const ()),
+            &[],
+            FunctionObject::new_null(),
+        );
+
+        let frame = ctx.stack_frame_mut::<StackFrameSliceCapacity>();
+        frame.slice = slice_obj;
+        frame.result_ptr = unsafe { &mut *result_raw };
+
+        let result = gox5_slice_capacity(&mut ctx);
+        assert_eq!(result, FunctionObject::new_null());
+        let res = unsafe { *result_raw };
+        assert_eq!(res, 10);
+    }
+}

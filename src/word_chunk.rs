@@ -38,3 +38,109 @@ impl WordChunk {
         ptr::NonNull::new_unchecked(p)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ObjectAllocator;
+
+    struct MockAllocator {
+        allocated: Vec<(*mut (), usize)>,
+    }
+
+    impl MockAllocator {
+        fn new() -> Self {
+            MockAllocator {
+                allocated: Vec::new(),
+            }
+        }
+    }
+
+    impl ObjectAllocator for MockAllocator {
+        fn allocate(&mut self, size: usize, _destructor: fn(*mut ())) -> *mut () {
+            let alignment = mem::align_of::<isize>();
+            let size = size.div_ceil(alignment) * alignment;
+            let buf: Vec<isize> = vec![0; size];
+            let ptr = buf.leak().as_mut_ptr() as *mut ();
+            self.allocated.push((ptr, size));
+            ptr
+        }
+        fn allocate_guarded_pages(&mut self, num_pages: usize) -> *mut () {
+            self.allocate(num_pages * 4096, |_| {})
+        }
+    }
+
+    impl Drop for MockAllocator {
+        fn drop(&mut self) {
+            for (ptr, size) in &self.allocated {
+                unsafe {
+                    let _ = Vec::from_raw_parts(*ptr as *mut isize, 0, *size);
+                }
+            }
+        }
+    }
+
+    fn build_word_chunk(count: usize, values: &[usize]) -> Vec<usize> {
+        assert_eq!(values.len(), count);
+        let mut buf = Vec::with_capacity(1 + count);
+        buf.push(count);
+        buf.extend_from_slice(values);
+        buf
+    }
+
+    #[test]
+    fn test_as_slice_raw_empty() {
+        let buf = build_word_chunk(0, &[]);
+        let ptr = buf.as_ptr() as *const WordChunk;
+        let slice: &[usize] = unsafe { WordChunk::as_slice_raw(ptr) };
+        assert_eq!(slice.len(), 0);
+    }
+
+    #[test]
+    fn test_as_slice_raw_nonempty() {
+        let buf = build_word_chunk(3, &[10, 20, 30]);
+        let ptr = buf.as_ptr() as *const WordChunk;
+        let slice: &[usize] = unsafe { WordChunk::as_slice_raw(ptr) };
+        assert_eq!(slice, &[10, 20, 30]);
+    }
+
+    #[test]
+    fn test_as_slice_raw_single_element() {
+        let buf = build_word_chunk(1, &[42]);
+        let ptr = buf.as_ptr() as *const WordChunk;
+        let slice: &[usize] = unsafe { WordChunk::as_slice_raw(ptr) };
+        assert_eq!(slice, &[42]);
+    }
+
+    #[test]
+    fn test_duplicate_raw_empty() {
+        let mut alloc = MockAllocator::new();
+        let buf = build_word_chunk(0, &[]);
+        let src = buf.as_ptr() as *const WordChunk;
+        let dst = unsafe { WordChunk::duplicate_raw(src, &mut alloc) };
+        let slice: &[usize] = unsafe { WordChunk::as_slice_raw(dst.as_ptr()) };
+        assert_eq!(slice.len(), 0);
+    }
+
+    #[test]
+    fn test_duplicate_raw_nonempty() {
+        let mut alloc = MockAllocator::new();
+        let buf = build_word_chunk(3, &[100, 200, 300]);
+        let src = buf.as_ptr() as *const WordChunk;
+        let dst = unsafe { WordChunk::duplicate_raw(src, &mut alloc) };
+        let slice: &[usize] = unsafe { WordChunk::as_slice_raw(dst.as_ptr()) };
+        assert_eq!(slice, &[100, 200, 300]);
+    }
+
+    #[test]
+    fn test_duplicate_raw_independent_of_source() {
+        let mut alloc = MockAllocator::new();
+        let buf = build_word_chunk(2, &[7, 8]);
+        let src = buf.as_ptr() as *const WordChunk;
+        let dst = unsafe { WordChunk::duplicate_raw(src, &mut alloc) };
+        let slice_src: &[usize] = unsafe { WordChunk::as_slice_raw(src) };
+        let slice_dst: &[usize] = unsafe { WordChunk::as_slice_raw(dst.as_ptr()) };
+        assert_eq!(slice_src, slice_dst);
+        assert_eq!(slice_dst, &[7, 8]);
+    }
+}

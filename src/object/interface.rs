@@ -81,3 +81,83 @@ impl Interface {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_interface_nil() {
+        let iface = Interface::nil();
+        assert!(iface.is_nil());
+        assert!(!iface.is_panic_nil_error());
+    }
+
+    #[test]
+    fn test_interface_nil_receiver_is_null() {
+        let iface = Interface::nil();
+        assert!(iface.receiver().is_null());
+    }
+
+    #[test]
+    fn test_interface_nil_type_id_is_invalid() {
+        let iface = Interface::nil();
+        assert_eq!(*iface.type_id(), TypeId::new_invalid());
+    }
+
+    #[test]
+    fn test_interface_panic_nil_error() {
+        let iface = Interface::panic_nil_error();
+        assert!(!iface.is_nil());
+        assert!(iface.is_panic_nil_error());
+    }
+
+    #[test]
+    fn test_interface_panic_nil_error_receiver_not_null() {
+        let iface = Interface::panic_nil_error();
+        assert!(!iface.receiver().is_null());
+    }
+
+    #[test]
+    fn test_interface_new() {
+        let dummy: u8 = 0;
+        let receiver = ObjectPtr(&dummy as *const u8 as *mut ());
+        let type_id = TypeId::from_raw(42);
+        let iface = Interface::new(receiver, type_id);
+        assert!(!iface.is_nil());
+        assert!(!iface.is_panic_nil_error());
+        assert!(!iface.receiver().is_null());
+        assert_eq!(*iface.type_id(), TypeId::from_raw(42));
+    }
+
+    #[test]
+    fn test_interface_panic_print_nil() {
+        let iface = Interface::nil();
+        iface.panic_print();
+    }
+
+    #[test]
+    fn test_interface_panic_print_panic_nil_error() {
+        let iface = Interface::panic_nil_error();
+        iface.panic_print();
+    }
+
+    #[test]
+    fn test_interface_panic_print_with_receiver() {
+        let dummy: u8 = 0;
+        let receiver = ObjectPtr(&dummy as *const u8 as *mut ());
+        let type_id = TypeId::from_raw(42);
+        let iface = Interface::new(receiver, type_id);
+        iface.panic_print();
+    }
+
+    #[test]
+    fn test_interface_clone() {
+        let dummy: u8 = 0;
+        let receiver = ObjectPtr(&dummy as *const u8 as *mut ());
+        let type_id = TypeId::from_raw(42);
+        let iface = Interface::new(receiver, type_id);
+        let cloned = iface.clone();
+        assert_eq!(*cloned.type_id(), *iface.type_id());
+    }
+}

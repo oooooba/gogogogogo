@@ -51,3 +51,43 @@ impl TypeId {
         type_info.hash
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_type_id_new_invalid() {
+        let id = TypeId::new_invalid();
+        assert_eq!(id.0, 0);
+    }
+
+    #[test]
+    fn test_type_id_from_raw_roundtrip() {
+        let id = TypeId::from_raw(42);
+        assert_eq!(id.0, 42);
+    }
+
+    #[test]
+    fn test_type_id_clone_copy() {
+        let id = TypeId::from_raw(99);
+        let id2 = id;
+        assert_eq!(id, id2);
+    }
+
+    #[test]
+    fn test_type_id_partial_eq() {
+        let a = TypeId::from_raw(10);
+        let b = TypeId::from_raw(10);
+        let c = TypeId::from_raw(20);
+        assert_eq!(a, b);
+        assert_ne!(a, c);
+    }
+
+    #[test]
+    fn test_type_id_debug() {
+        let id = TypeId::from_raw(7);
+        let debug_str = format!("{:?}", id);
+        assert!(debug_str.contains("7"));
+    }
+}

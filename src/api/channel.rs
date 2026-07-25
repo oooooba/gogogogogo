@@ -247,3 +247,60 @@ pub extern "C" fn gox5_channel_send(ctx: &mut LightWeightThreadContext) -> Funct
         FunctionObject::from_user_function(UserFunction::new(gox5_channel_send))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::object::interface::Interface;
+
+    #[test]
+    fn test_store_receive_data_with_data() {
+        let src_raw = Box::into_raw(Box::new([10u8, 20, 30, 40]));
+        let src = ObjectPtr(src_raw as *mut ());
+        let dst_raw = Box::into_raw(Box::new([0u8; 4]));
+        let dst_obj = ObjectPtr(dst_raw as *mut ());
+        store_receive_data(dst_obj, Some(src), 4);
+        let dst_slice = unsafe { &*dst_raw };
+        assert_eq!(dst_slice[0], 10);
+        assert_eq!(dst_slice[1], 20);
+        assert_eq!(dst_slice[2], 30);
+        assert_eq!(dst_slice[3], 40);
+        unsafe {
+            drop(Box::from_raw(src_raw));
+            drop(Box::from_raw(dst_raw));
+        }
+    }
+
+    #[test]
+    fn test_store_receive_data_none() {
+        let dst_raw = Box::into_raw(Box::new([10u8, 20, 30, 40]));
+        let dst_obj = ObjectPtr(dst_raw as *mut ());
+        store_receive_data(dst_obj, None, 4);
+        let dst_slice = unsafe { &*dst_raw };
+        assert_eq!(dst_slice[0], 0);
+        assert_eq!(dst_slice[1], 0);
+        assert_eq!(dst_slice[2], 0);
+        assert_eq!(dst_slice[3], 0);
+        unsafe {
+            drop(Box::from_raw(dst_raw));
+        }
+    }
+
+    #[test]
+    fn test_store_receive_data_empty() {
+        let dst_raw = Box::into_raw(Box::new([10u8]));
+        let dst_obj = ObjectPtr(dst_raw as *mut ());
+        store_receive_data(dst_obj, None, 0);
+        let dst_slice = unsafe { &*dst_raw };
+        assert_eq!(dst_slice[0], 10);
+        unsafe {
+            drop(Box::from_raw(dst_raw));
+        }
+    }
+
+    #[test]
+    fn test_channel_new_null_receiver_interface() {
+        let result = Interface::new(ObjectPtr(ptr::null_mut()), TypeId::new_invalid());
+        assert!(result.is_nil());
+    }
+}
