@@ -433,11 +433,11 @@ typedef struct {
     uintptr_t packs;
     uintptr_t entry_count;
     struct {
-        const char* format;
-        union{
+        const char *format;
+        union {
             int64_t as_integer;
             double as_float;
-            const void* as_pointer;
+            const void *as_pointer;
         } data[2];
     } entry_buffer[0];
 } StackFramePrint;
@@ -452,17 +452,19 @@ static void gox5_print_helper(double val) {
 __attribute__((unused)) static FunctionObject
 gox5_print(LightWeightThreadContext *ctx) {
     StackFramePrint *frame = (void *)ctx->stack_pointer;
-    for(uintptr_t i = 0; i < frame->entry_count; ++i) {
-        if(!frame->packs && i!=0){
+    for (uintptr_t i = 0; i < frame->entry_count; ++i) {
+        if (!frame->packs && i != 0) {
             fprintf(stderr, " ");
         }
 
         const char *format = frame->entry_buffer[i].format;
-        if(strcmp(format, "%b")==0){
-            fprintf(stderr, "%s", frame->entry_buffer[i].data[0].as_integer ? "true" : "false");
-        } else if(strcmp(format, "%f")==0){
+        if (strcmp(format, "%b") == 0) {
+            fprintf(stderr, "%s",
+                    frame->entry_buffer[i].data[0].as_integer ? "true"
+                                                              : "false");
+        } else if (strcmp(format, "%f") == 0) {
             gox5_print_helper(frame->entry_buffer[i].data[0].as_float);
-        } else if(strcmp(format, "%i")==0){
+        } else if (strcmp(format, "%i") == 0) {
             fprintf(stderr, "(");
             gox5_print_helper(frame->entry_buffer[i].data[0].as_float);
             if (!signbit(frame->entry_buffer[i].data[1].as_float)) {
@@ -470,11 +472,11 @@ gox5_print(LightWeightThreadContext *ctx) {
             }
             gox5_print_helper(frame->entry_buffer[i].data[1].as_float);
             fprintf(stderr, "i)");
-        } else{
+        } else {
             fprintf(stderr, format, frame->entry_buffer[i].data[0].as_integer);
         }
     }
-    if(!frame->packs){
+    if (!frame->packs) {
         fprintf(stderr, "\n");
     }
     ctx->stack_pointer = frame->common.prev_stack_pointer;
