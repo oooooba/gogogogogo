@@ -243,11 +243,7 @@ mod tests {
     impl<T> PartialEq for ReceiveStatus<T> {
         fn eq(&self, other: &Self) -> bool {
             use ReceiveStatus::*;
-            match (self, other) {
-                (Blocked, Blocked) => true,
-                (Closed, Closed) => true,
-                _ => false,
-            }
+            matches!((self, other), (Blocked, Blocked) | (Closed, Closed))
         }
     }
 
@@ -274,7 +270,7 @@ mod tests {
     impl ObjectAllocator for MockObjectAllocator {
         fn allocate(&mut self, size: usize, destructor: fn(*mut ())) -> *mut () {
             let alignment = mem::align_of::<isize>();
-            let size = (size + alignment - 1) / alignment * alignment;
+            let size = size.div_ceil(alignment) * alignment;
             let buf: Vec<isize> = vec![0; size];
             let ptr = buf.leak().as_mut_ptr() as *mut ();
             self.allocated_objects.push(AllocatedObject {
@@ -435,7 +431,7 @@ mod tests {
             assert_eq!(*data.as_ref::<isize>(), 42);
         }
         {
-            let data = ObjectPtr(ptr::null_mut() as *mut ());
+            let data = ObjectPtr(ptr::null_mut());
             let result = first.borrow_mut().send(1, data);
             assert_eq!(result, Some(()));
         }

@@ -76,6 +76,8 @@ impl Drop for GlobalContextPtr {
     }
 }
 
+// ToDo: fix
+#[allow(clippy::arc_with_non_send_sync)]
 pub fn create_global_context(allocator: Box<dyn ObjectAllocator>) -> GlobalContextPtr {
     let global_context = Arc::new(Mutex::new(GlobalContext::new(allocator)));
     GlobalContextPtr::from(global_context)

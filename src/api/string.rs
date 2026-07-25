@@ -45,7 +45,7 @@ pub extern "C" fn gox5_string_new_from_rune(ctx: &mut LightWeightThreadContext) 
     let frame = ctx.stack_frame::<StackFrameStringNewFromRune>();
     let rune = frame.rune;
 
-    assert!(rune <= std::u32::MAX as usize);
+    assert!(rune <= u32::MAX as usize);
     let ch = char::from_u32(rune as u32).unwrap();
     let len = ch.len_utf8();
 

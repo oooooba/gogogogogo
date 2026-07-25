@@ -62,7 +62,7 @@ fn reallocate_slice(
     allocator: &mut dyn ObjectAllocator,
 ) -> SliceObject {
     assert!(elem_size > 0);
-    assert!(extend_bytes.len() % elem_size == 0);
+    assert!(extend_bytes.len().is_multiple_of(elem_size));
 
     let new_size = base.size() + extend_bytes.len() / elem_size;
     let mut result = if new_size > base.capacity() {
@@ -153,7 +153,7 @@ pub extern "C" fn gox5_slice_append_string(ctx: &mut LightWeightThreadContext) -
 
 fn copy_slice(dst: &mut SliceObject, elem_size: usize, src: &[u8]) -> usize {
     assert!(elem_size > 0);
-    assert!(src.len() % elem_size == 0);
+    assert!(src.len().is_multiple_of(elem_size));
 
     let copy_count = cmp::min(src.len() / elem_size, dst.size());
     let src = src.as_ptr();

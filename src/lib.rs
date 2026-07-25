@@ -160,7 +160,7 @@ impl RuntimeObjectAllocator {
 impl ObjectAllocator for RuntimeObjectAllocator {
     fn allocate(&mut self, size: usize, _destructor: fn(*mut ())) -> *mut () {
         let alignment = mem::size_of::<isize>();
-        let size = (size + alignment - 1) / alignment * alignment;
+        let size = size.div_ceil(alignment) * alignment;
         let buf: Vec<isize> = vec![0; size];
         let ptr = buf.leak().as_mut_ptr();
         ptr as *mut ()
@@ -297,7 +297,7 @@ mod tests {
     impl ObjectAllocator for MockObjectAllocator {
         fn allocate(&mut self, size: usize, destructor: fn(*mut ())) -> *mut () {
             let alignment = mem::align_of::<isize>();
-            let size = (size + alignment - 1) / alignment * alignment;
+            let size = size.div_ceil(alignment) * alignment;
             let buf: Vec<isize> = vec![0; size];
             let ptr = buf.leak().as_mut_ptr() as *mut ();
             self.allocated_objects.push(AllocatedObject {
