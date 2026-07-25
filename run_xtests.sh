@@ -2,7 +2,10 @@
 
 set -e
 
-cargo build
+run_args=()
+if [ "$1" = "--debug-runtime" ]; then
+    run_args=("--debug-runtime")
+fi
 
 exit_status=0
 for path in xtests/*; do
@@ -20,7 +23,7 @@ for path in xtests/*; do
     case $base in
         panic_*)
             go run $path 2>&1 | head -n 1 >$expect_result || true
-            if ! bash ./run.sh $path >$actual_result 2>&1; then
+            if ! bash ./run.sh "${run_args[@]}" $path >$actual_result 2>&1; then
                 if diff -y $expect_result $actual_result >$compare_result; then
                     echo PASS
                 else
@@ -35,7 +38,7 @@ for path in xtests/*; do
             ;;
         *)
             go run $path >$expect_result 2>&1
-            bash ./run.sh $path >$actual_result 2>&1
+            bash ./run.sh "${run_args[@]}" $path >$actual_result 2>&1
             compare_result=/tmp/compare_$base.txt
             if diff -y $expect_result $actual_result >$compare_result; then
                 echo PASS

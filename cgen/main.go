@@ -22,6 +22,7 @@ import (
 func main() {
 	filename := flag.String("i", "/dev/stdin", "input file")
 	buildDirname := flag.String("b", "/tmp", "build directory")
+	debugRuntime := flag.Bool("debug-runtime", false, "use debug mode Rust runtime binary")
 	flag.Parse()
 
 	cfg := packages.Config{Mode: packages.LoadAllSyntax}
@@ -50,7 +51,7 @@ func main() {
 		}
 	}
 
-	emitProgram(prog, *buildDirname)
+	emitProgram(prog, *buildDirname, *debugRuntime)
 }
 
 type Context struct {
@@ -2430,7 +2431,7 @@ func (ctx *Context) emitPackage(pkg *ssa.Package) {
 	})
 }
 
-func generateMakefile(makefile *os.File, program *ssa.Program) {
+func generateMakefile(makefile *os.File, program *ssa.Program, debugRuntime bool) {
 	cCompiler := "gcc"
 	cCompilerWrapper := "ccache"
 	cc := fmt.Sprintf("$(shell command -v %s >/dev/null 2>&1 && echo %s %s || echo %s)", cCompilerWrapper, cCompilerWrapper, cCompiler, cCompiler)
@@ -2443,7 +2444,11 @@ func generateMakefile(makefile *os.File, program *ssa.Program) {
 		"-fsanitize=undefined", "-fno-sanitize-recover=all",
 		"-lpthread", "-ldl", "-lm",
 	}
-	libs := []string{"../target/debug/libgogogogogo.a"}
+	rustBuildMode := "release"
+	if debugRuntime {
+		rustBuildMode = "debug"
+	}
+	libs := []string{fmt.Sprintf("../target/%s/libgogogogogo.a", rustBuildMode)}
 	fmt.Fprintf(makefile, "CC = %s\n", cc)
 	fmt.Fprintf(makefile, "CFLAGS = %s\n", strings.Join(cflags, " "))
 	fmt.Fprintf(makefile, "LDFLAGS = %s\n", strings.Join(ldflags, " "))
@@ -2522,16 +2527,16 @@ func handlePackage(program *ssa.Program, pkg *ssa.Package, outputPath string) {
 	ctx.emitPackage(pkg)
 }
 
-func handleMakefile(program *ssa.Program, outputPath string) {
+func handleMakefile(program *ssa.Program, outputPath string, debugRuntime bool) {
 	makefile, err := os.Create(outputPath)
 	if err != nil {
 		panic(err)
 	}
 	defer makefile.Close()
-	generateMakefile(makefile, program)
+	generateMakefile(makefile, program, debugRuntime)
 }
 
-func emitProgram(program *ssa.Program, buildDirname string) {
+func emitProgram(program *ssa.Program, buildDirname string, debugRuntime bool) {
 	waitGroup := sync.WaitGroup{}
 
 	waitGroup.Add(1)
@@ -2553,7 +2558,7 @@ func emitProgram(program *ssa.Program, buildDirname string) {
 	waitGroup.Add(1)
 	go func() {
 		makefileName := "Makefile"
-		handleMakefile(program, fmt.Sprintf("%s/%s", buildDirname, makefileName))
+		handleMakefile(program, fmt.Sprintf("%s/%s", buildDirname, makefileName), debugRuntime)
 		waitGroup.Done()
 	}()
 

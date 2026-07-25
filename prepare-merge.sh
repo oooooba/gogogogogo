@@ -10,6 +10,7 @@ clang-format -i cgen/predefined.h
 cargo test
 cargo +nightly miri test
 bash run_xtests.sh
+bash run_xtests.sh --debug-runtime
 
 go_root=$(go env GOROOT)
 if [ ! -d "$go_root/test" ]; then
