@@ -47,7 +47,6 @@ go run main.go $cgen_args
 cd ..
 
 cd $build_directory
-ln -s ../cgen/predefined.h predefined.h
 if [ "$debug_user" = "true" ] && [ "$debug_runtime" = "true" ]; then
     make -j bin-debug-user-debug-runtime.exe
     bin_file_name=bin-debug-user-debug-runtime.exe

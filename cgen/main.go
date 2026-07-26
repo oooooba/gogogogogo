@@ -2563,9 +2563,9 @@ func generateMakefile(makefile *os.File, program *ssa.Program) {
 	cFileRule := func(outputName string) {
 		objRelease := fmt.Sprintf("%s.o", outputName)
 		objDebug := fmt.Sprintf("%s.debug.o", outputName)
-		fmt.Fprintf(makefile, "%s:\n", objRelease)
+		fmt.Fprintf(makefile, "%s: predefined.h\n", objRelease)
 		fmt.Fprintf(makefile, "\t@$(CC) $(CFLAGS) -c -o %s %s\n", objRelease, outputName)
-		fmt.Fprintf(makefile, "%s:\n", objDebug)
+		fmt.Fprintf(makefile, "%s: predefined.h\n", objDebug)
 		fmt.Fprintf(makefile, "\t@$(CC) $(CFLAGS_DEBUG) -c -o %s %s\n", objDebug, outputName)
 		objsRelease = append(objsRelease, objRelease)
 		objsDebug = append(objsDebug, objDebug)
@@ -2577,6 +2577,9 @@ func generateMakefile(makefile *os.File, program *ssa.Program) {
 		cFileRule(outputName)
 	}
 
+	fmt.Fprintf(makefile, "\n")
+	fmt.Fprintf(makefile, "predefined.h:\n")
+	fmt.Fprintf(makefile, "\t@ln -sf ../cgen/predefined.h predefined.h\n")
 	fmt.Fprintf(makefile, "\n")
 	fmt.Fprintf(makefile, "all: bin.exe\n")
 	fmt.Fprintf(makefile, "\n")
