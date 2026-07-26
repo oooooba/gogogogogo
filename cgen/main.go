@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"sort"
@@ -56,12 +57,12 @@ func main() {
 }
 
 type Context struct {
-	stream                *os.File
-	program               *ssa.Program
-	latestNameMap         map[*ssa.BasicBlock]string
-	orderedPackageMembers []ssa.Member
-	wrapperBuf            strings.Builder
-	deferWrapperNames     map[*ssa.CallCommon]string
+	stream                   *os.File
+	program                  *ssa.Program
+	latestNameMap            map[*ssa.BasicBlock]string
+	orderedPackageMembers    []ssa.Member
+	builtinPrintWrapperBuf   strings.Builder
+	builtinPrintWrapperNames map[*ssa.CallCommon]string
 }
 
 func encode(str string) string {
@@ -397,90 +398,89 @@ func (ctx *Context) emitCallCommonForMethod(callCommon *ssa.CallCommon, nextFunc
 	)
 }
 
-func (ctx *Context) emitDeferBuiltinWrapper(builtin *ssa.Builtin, callCommon *ssa.CallCommon) string {
-	if ctx.deferWrapperNames == nil {
-		ctx.deferWrapperNames = make(map[*ssa.CallCommon]string)
+func (ctx *Context) emitBuiltinPrintWrapper(name string, callCommon *ssa.CallCommon, instr ssa.Instruction) string {
+	if ctx.builtinPrintWrapperNames == nil {
+		ctx.builtinPrintWrapperNames = make(map[*ssa.CallCommon]string)
 	}
-	if name, ok := ctx.deferWrapperNames[callCommon]; ok {
-		return name
+	if cached, ok := ctx.builtinPrintWrapperNames[callCommon]; ok {
+		return cached
 	}
 
-	wrapperName := fmt.Sprintf("defer_wrapper_%d", len(ctx.deferWrapperNames))
-	ctx.deferWrapperNames[callCommon] = wrapperName
+	wrapperName := fmt.Sprintf("builtin_print_wrapper_%s", createInstructionName(instr))
+	ctx.builtinPrintWrapperNames[callCommon] = wrapperName
 
-	fmt.Fprintf(&ctx.wrapperBuf, "__attribute__((unused)) static FunctionObject %s(LightWeightThreadContext* ctx) {\n", wrapperName)
-	fmt.Fprintf(&ctx.wrapperBuf, "\tassert(ctx->marker == 0xdeadbeef);\n")
-	fmt.Fprintf(&ctx.wrapperBuf, "\tStackFrameCommon* args_frame = (StackFrameCommon*)ctx->stack_pointer;\n")
-	fmt.Fprintf(&ctx.wrapperBuf, "\tuintptr_t* arg_words = (uintptr_t*)(args_frame + 1);\n")
-	fmt.Fprintf(&ctx.wrapperBuf, "\tStackFrameCommon* prev = (StackFrameCommon*)args_frame->prev_stack_pointer;\n")
+	fmt.Fprintf(&ctx.builtinPrintWrapperBuf, "__attribute__((unused)) static FunctionObject %s(LightWeightThreadContext* ctx) {\n", wrapperName)
+	fmt.Fprintf(&ctx.builtinPrintWrapperBuf, "\tassert(ctx->marker == 0xdeadbeef);\n")
+	fmt.Fprintf(&ctx.builtinPrintWrapperBuf, "\tStackFrameCommon* args_frame = (StackFrameCommon*)ctx->stack_pointer;\n")
+	fmt.Fprintf(&ctx.builtinPrintWrapperBuf, "\tuintptr_t* arg_words = (uintptr_t*)(args_frame + 1);\n")
+	fmt.Fprintf(&ctx.builtinPrintWrapperBuf, "\tStackFrameCommon* prev = (StackFrameCommon*)args_frame->prev_stack_pointer;\n")
 
 	for i, arg := range callCommon.Args {
 		argType := createTypeName(arg.Type())
-		fmt.Fprintf(&ctx.wrapperBuf, "\t%s arg%d_val = *(%s*)&arg_words[%d];\n", argType, i, argType, i)
+		fmt.Fprintf(&ctx.builtinPrintWrapperBuf, "\t%s arg%d_val = *(%s*)&arg_words[%d];\n", argType, i, argType, i)
 	}
 
-	fmt.Fprintf(&ctx.wrapperBuf, "\tStackFramePrint* print_frame = (StackFramePrint*)args_frame;\n")
-	fmt.Fprintf(&ctx.wrapperBuf, "\t*print_frame = (StackFramePrint){ 0 };\n")
-	fmt.Fprintf(&ctx.wrapperBuf, "\tprint_frame->common.resume_func = (FunctionObject){.raw = gox5_defer_execute};\n")
-	fmt.Fprintf(&ctx.wrapperBuf, "\tprint_frame->common.prev_stack_pointer = prev;\n")
+	rawExprs := make([]string, len(callCommon.Args))
+	for i := range callCommon.Args {
+		rawExprs[i] = fmt.Sprintf("arg%d_val.raw", i)
+	}
+	emitInlinePrintBody(&ctx.builtinPrintWrapperBuf, name == "print", callCommon.Args, rawExprs)
 
-	fmt.Fprintf(&ctx.wrapperBuf, "\tprint_frame->packs = %t;\n", builtin.Name() == "print")
-	fmt.Fprintf(&ctx.wrapperBuf, "\tprint_frame->entry_count = %d;\n", len(callCommon.Args))
+	fmt.Fprintf(&ctx.builtinPrintWrapperBuf, "\tctx->stack_pointer = prev;\n")
+	fmt.Fprintf(&ctx.builtinPrintWrapperBuf, "\treturn (FunctionObject){.raw = gox5_defer_execute};\n")
+	fmt.Fprintf(&ctx.builtinPrintWrapperBuf, "}\n")
 
-	for i, arg := range callCommon.Args {
-		var format string
-		field := "as_integer"
-		data0 := fmt.Sprintf("arg%d_val.raw", i)
-		data1 := "0"
-		switch t := arg.Type().(type) {
+	return wrapperName
+}
+
+func emitInlinePrintBody(w io.Writer, packs bool, args []ssa.Value, rawExprs []string) {
+	var emitInlinePrintArgByType func(w io.Writer, t types.Type, rawExpr string)
+	emitInlinePrintArgByType = func(w io.Writer, t types.Type, rawExpr string) {
+		switch t := t.(type) {
 		case *types.Basic:
 			switch t.Kind() {
 			case types.Bool:
-				format = "b"
+				fmt.Fprintf(w, "\tfprintf(stderr, \"%%s\", %s ? \"true\" : \"false\");\n", rawExpr)
 			case types.Complex64, types.Complex128:
-				format = "i"
-				field = "as_float"
-				data0 = fmt.Sprintf("creal(arg%d_val.raw)", i)
-				data1 = fmt.Sprintf("cimag(arg%d_val.raw)", i)
-			case types.Int:
-				format = "ld"
+				fmt.Fprintf(w, "\tfprintf(stderr, \"(\");\n")
+				fmt.Fprintf(w, "\tfprintf(stderr, \"%%.15g\", creal(%s) == 0.0 && signbit(creal(%s)) ? 0.0 : creal(%s));\n", rawExpr, rawExpr, rawExpr)
+				fmt.Fprintf(w, "\tif (!signbit(cimag(%s))) fprintf(stderr, \"+\");\n", rawExpr)
+				fmt.Fprintf(w, "\tfprintf(stderr, \"%%.15g\", cimag(%s) == 0.0 && signbit(cimag(%s)) ? 0.0 : cimag(%s));\n", rawExpr, rawExpr, rawExpr)
+				fmt.Fprintf(w, "\tfprintf(stderr, \"i)\");\n")
+			case types.Int, types.Int64:
+				fmt.Fprintf(w, "\tfprintf(stderr, \"%%ld\", (long)(%s));\n", rawExpr)
 			case types.Int8, types.Int16, types.Int32:
-				format = "d"
-			case types.Int64:
-				format = "ld"
-			case types.Uint:
-				format = "lu"
+				fmt.Fprintf(w, "\tfprintf(stderr, \"%%d\", (int)(%s));\n", rawExpr)
+			case types.Uint, types.Uint64, types.Uintptr:
+				fmt.Fprintf(w, "\tfprintf(stderr, \"%%lu\", (unsigned long)(%s));\n", rawExpr)
 			case types.Uint8, types.Uint16, types.Uint32:
-				format = "u"
-			case types.Uint64:
-				format = "lu"
-			case types.Uintptr:
-				format = "lu"
+				fmt.Fprintf(w, "\tfprintf(stderr, \"%%u\", (unsigned int)(%s));\n", rawExpr)
 			case types.Float32, types.Float64:
-				format = "f"
-				field = "as_float"
+				fmt.Fprintf(w, "\tfprintf(stderr, \"%%.15g\", (%s) == 0.0 && signbit((%s)) ? 0.0 : (%s));\n", rawExpr, rawExpr, rawExpr)
 			case types.String:
-				format = "s"
-				field = "as_pointer"
+				fmt.Fprintf(w, "\tfprintf(stderr, \"%%s\", %s);\n", rawExpr)
 			case types.UnsafePointer:
-				format = "p"
-				field = "as_pointer"
+				fmt.Fprintf(w, "\tfprintf(stderr, \"%%p\", %s);\n", rawExpr)
 			default:
-				panic(fmt.Sprintf("%s, %s (%T)", arg, t, t))
+				panic(fmt.Sprintf("unsupported type for print/println: %s (%T)", t, t))
 			}
+		case *types.Named:
+			emitInlinePrintArgByType(w, t.Underlying(), rawExpr)
+		case *types.Pointer:
+			fmt.Fprintf(w, "\tfprintf(stderr, \"%%p\", (void*)(%s));\n", rawExpr)
 		default:
-			panic(fmt.Sprintf("unsupported arg type for deferred builtin: %s", arg))
+			panic(fmt.Sprintf("unsupported type for print/println: %s (%T)", t, t))
 		}
-		fmt.Fprintf(&ctx.wrapperBuf, "\tprint_frame->entry_buffer[%d].format = \"%%%s\";\n", i, format)
-		fmt.Fprintf(&ctx.wrapperBuf, "\tprint_frame->entry_buffer[%d].data[0].%s = %s;\n", i, field, data0)
-		fmt.Fprintf(&ctx.wrapperBuf, "\tprint_frame->entry_buffer[%d].data[1].%s = %s;\n", i, field, data1)
 	}
-
-	fmt.Fprintf(&ctx.wrapperBuf, "\tctx->stack_pointer = (StackFrameCommon*)print_frame;\n")
-	fmt.Fprintf(&ctx.wrapperBuf, "\treturn (FunctionObject){.raw = gox5_print};\n")
-	fmt.Fprintf(&ctx.wrapperBuf, "}\n")
-
-	return wrapperName
+	for i, arg := range args {
+		if !packs && i != 0 {
+			fmt.Fprintf(w, "\tfprintf(stderr, \" \");\n")
+		}
+		emitInlinePrintArgByType(w, arg.Type(), rawExprs[i])
+	}
+	if !packs {
+		fmt.Fprintf(w, "\tfprintf(stderr, \"\\n\");\n")
+	}
 }
 
 func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
@@ -714,61 +714,11 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 					}
 
 				case "print", "println":
-					ctx.switchFunctionToCallRuntimeApi("gox5_print", "StackFramePrint", createInstructionName(instr), nil,
-						func() {
-							for i, arg := range callCommon.Args {
-								var format string
-								field := "as_integer"
-								data0 := fmt.Sprintf("%s.raw", createValueRelName(arg))
-								data1 := "0"
-								switch t := arg.Type().(type) {
-								case *types.Basic:
-									switch t.Kind() {
-									case types.Bool:
-										format = "b"
-									case types.Complex64, types.Complex128:
-										format = "i"
-										field = "as_float"
-										data0 = fmt.Sprintf("creal(%s.raw)", createValueRelName(arg))
-										data1 = fmt.Sprintf("cimag(%s.raw)", createValueRelName(arg))
-									case types.Int:
-										format = "ld"
-									case types.Int8, types.Int16, types.Int32:
-										format = "d"
-									case types.Int64:
-										format = "ld"
-									case types.Uint:
-										format = "lu"
-									case types.Uint8, types.Uint16, types.Uint32:
-										format = "u"
-									case types.Uint64:
-										format = "lu"
-									case types.Uintptr:
-										format = "lu"
-									case types.Float32, types.Float64:
-										format = "f"
-										field = "as_float"
-									case types.String:
-										format = "s"
-										field = "as_pointer"
-									case types.UnsafePointer:
-										format = "p"
-										field = "as_pointer"
-									default:
-										panic(fmt.Sprintf("%s, %s (%T)", arg, t, t))
-									}
-								default:
-									fmt.Fprintf(ctx.stream, "assert(false); // not supported\n")
-									continue
-								}
-								fmt.Fprintf(ctx.stream, `next_frame->entry_buffer[%d].format = "%%%s";`, i, format)
-								fmt.Fprintf(ctx.stream, "next_frame->entry_buffer[%d].data[0].%s = %s;\n", i, field, data0)
-								fmt.Fprintf(ctx.stream, "next_frame->entry_buffer[%d].data[1].%s = %s;\n", i, field, data1)
-							}
-						},
-						paramArgPair{param: "packs", arg: fmt.Sprintf("%t", callee.Name() == "print")},
-						paramArgPair{param: "entry_count", arg: fmt.Sprintf("%d", len(callCommon.Args))},
-					)
+					rawExprs := make([]string, len(callCommon.Args))
+					for i, arg := range callCommon.Args {
+						rawExprs[i] = fmt.Sprintf("%s.raw", createValueRelName(arg))
+					}
+					emitInlinePrintBody(ctx.stream, callee.Name() == "print", callCommon.Args, rawExprs)
 
 				case "real":
 					bitLength := complexNumberBitLength(callCommon.Args[0])
@@ -910,7 +860,7 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 		resumeFunction := createInstructionName(instr)
 		if callCommon.Method == nil {
 			if builtin, ok := callCommon.Value.(*ssa.Builtin); ok && (builtin.Name() == "print" || builtin.Name() == "println") {
-				wrapperName := ctx.emitDeferBuiltinWrapper(builtin, callCommon)
+				wrapperName := ctx.emitBuiltinPrintWrapper(builtin.Name(), callCommon, instr)
 				functionObject := wrapInFunctionObject(wrapperName)
 				signature := callCommon.Value.Type().Underlying().(*types.Signature)
 				resultSize := "0"
@@ -2530,7 +2480,7 @@ func (ctx *Context) emitPackage(pkg *ssa.Package) {
 					callCommon := deferInstr.Common()
 					if callCommon.Method == nil {
 						if builtin, ok := callCommon.Value.(*ssa.Builtin); ok && (builtin.Name() == "print" || builtin.Name() == "println") {
-							ctx.emitDeferBuiltinWrapper(builtin, callCommon)
+							ctx.emitBuiltinPrintWrapper(builtin.Name(), callCommon, deferInstr)
 						}
 					}
 				}
@@ -2538,10 +2488,10 @@ func (ctx *Context) emitPackage(pkg *ssa.Package) {
 		}
 	})
 
-	if ctx.wrapperBuf.Len() > 0 {
+	if ctx.builtinPrintWrapperBuf.Len() > 0 {
 		fmt.Fprintln(ctx.stream)
 		fmt.Fprintln(ctx.stream, "// Deferred builtin wrappers")
-		fmt.Fprintln(ctx.stream, ctx.wrapperBuf.String())
+		fmt.Fprintln(ctx.stream, ctx.builtinPrintWrapperBuf.String())
 	}
 
 	foundConstValueSet := make(map[string]struct{})
