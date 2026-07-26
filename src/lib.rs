@@ -22,13 +22,7 @@ pub struct FunctionObject(*const ());
 #[repr(C)]
 struct ClosureLayout {
     func: UserFunction,
-    object_ptrs: Vec<ObjectPtr>, // ToDo: fix not to use Vec
-}
-
-impl ClosureLayout {
-    fn new(func: UserFunction, object_ptrs: Vec<ObjectPtr>) -> Self {
-        Self { func, object_ptrs }
-    }
+    object_ptrs: word_chunk::WordChunk,
 }
 
 impl FunctionObject {
@@ -58,7 +52,8 @@ impl FunctionObject {
         unsafe {
             let closure_layout = &mut *ptr;
             let func = closure_layout.func.clone();
-            let object_ptrs = closure_layout.object_ptrs.as_mut_ptr() as *mut ();
+            let wc_ptr = ptr::addr_of!(closure_layout.object_ptrs) as *const u8;
+            let object_ptrs = wc_ptr.add(mem::size_of::<usize>()) as *mut ();
             (func, Some(object_ptrs))
         }
     }

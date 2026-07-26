@@ -4,7 +4,6 @@ use std::ptr;
 use crate::ClosureLayout;
 use crate::FunctionObject;
 use crate::LightWeightThreadContext;
-use crate::ObjectPtr;
 use crate::StackFrameCommon;
 use crate::UserFunction;
 use crate::word_chunk::WordChunk;
@@ -21,22 +20,27 @@ struct StackFrameClosureNew<'a> {
 pub extern "C" fn gox5_closure_new(ctx: &mut LightWeightThreadContext) -> FunctionObject {
     let frame = ctx.stack_frame::<StackFrameClosureNew>();
 
-    let ptr = ctx.global_context().process(|mut global_context| {
-        global_context
-            .allocator()
-            .allocate(mem::size_of::<ClosureLayout>(), |ptr| unsafe {
-                ptr::drop_in_place(ptr as *mut ClosureLayout);
-            }) as *mut ClosureLayout
-    });
-
     let wc_ptr = unsafe {
         let sp = ctx.stack_pointer() as *const u8;
         sp.add(mem::offset_of!(StackFrameClosureNew, free_vars)) as *const WordChunk
     };
-    let object_ptrs = unsafe { WordChunk::as_slice_raw::<ObjectPtr>(wc_ptr) }.to_vec();
-    let closure_layout = ClosureLayout::new(frame.user_function.clone(), object_ptrs);
+    let wc_count = unsafe { ptr::read(wc_ptr as *const usize) };
+    let wc_data_size = wc_count * mem::size_of::<*const ()>();
+
+    let ptr = ctx.global_context().process(|mut global_context| {
+        global_context.allocator().allocate(
+            mem::size_of::<ClosureLayout>() + wc_data_size,
+            |ptr| unsafe {
+                ptr::drop_in_place(ptr as *mut ClosureLayout);
+            },
+        ) as *mut ClosureLayout
+    });
+
     unsafe {
-        ptr::write(ptr, closure_layout);
+        ptr::addr_of_mut!((*ptr).func).write(frame.user_function.clone());
+        let wc_dst = ptr::addr_of_mut!((*ptr).object_ptrs) as *mut u8;
+        let wc_src_size = mem::size_of::<usize>() + wc_data_size;
+        ptr::copy_nonoverlapping(wc_ptr as *const u8, wc_dst, wc_src_size);
     }
 
     let frame = ctx.stack_frame_mut::<StackFrameClosureNew>();
