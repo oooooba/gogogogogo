@@ -28,19 +28,21 @@ impl WordChunk {
         self_ptr: *const Self,
         allocator: &mut dyn ObjectAllocator,
     ) -> ptr::NonNull<Self> {
-        unsafe {
-            let count = ptr::read(self_ptr as *const usize);
-            let size = mem::size_of::<WordChunk>() + mem::size_of::<*const ()>() * count;
-            let p = allocator.allocate(size, |_| {}) as *mut Self;
+        let count = unsafe { ptr::read(self_ptr as *const usize) };
+        let size = mem::size_of::<WordChunk>() + mem::size_of::<*const ()>() * count;
+        let p = allocator.allocate(size, |_| {}) as *mut Self;
 
-            (*ptr::addr_of_mut!((*p).count)) = count;
-            let src = (self_ptr as *const u8).add(mem::size_of::<usize>()) as *const *const ();
-            let dst =
-                slice::from_raw_parts_mut(ptr::addr_of_mut!((*p).buf) as *mut *const (), count);
-            dst.copy_from_slice(slice::from_raw_parts(src, count));
+        unsafe { (*ptr::addr_of_mut!((*p).count)) = count };
+        let src = unsafe {
+            let src_ptr = (self_ptr as *const u8).add(mem::size_of::<usize>()) as *const *const ();
+            slice::from_raw_parts(src_ptr, count)
+        };
+        let dst = unsafe {
+            slice::from_raw_parts_mut(ptr::addr_of_mut!((*p).buf) as *mut *const (), count)
+        };
+        dst.copy_from_slice(src);
 
-            ptr::NonNull::new_unchecked(p)
-        }
+        ptr::NonNull::new(p).expect("allocator returned null pointer")
     }
 }
 

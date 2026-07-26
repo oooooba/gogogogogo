@@ -1,6 +1,5 @@
 use std::mem;
 use std::ptr;
-use std::slice;
 
 use crate::FunctionObject;
 use crate::StackFrame;
@@ -97,10 +96,7 @@ impl LightWeightThreadContext {
     pub(crate) fn prepare_user_function(&mut self) -> UserFunction {
         let (func, object_ptrs) = self.current_func.extract_user_function();
         if let Some(object_ptrs) = object_ptrs {
-            unsafe {
-                let words = slice::from_raw_parts_mut(self.stack_pointer as *mut *mut (), 3);
-                words[2] = object_ptrs; // free_vars
-            }
+            self.stack_frame_mut::<StackFrameCommon>().free_vars = object_ptrs;
         }
         func
     }

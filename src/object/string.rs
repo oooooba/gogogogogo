@@ -29,7 +29,7 @@ impl StringObject {
     }
 
     pub(crate) fn len_in_bytes(&self) -> usize {
-        unsafe { libc::strlen(self.0 as *const libc::c_char) }
+        self.as_bytes().len()
     }
 
     pub(crate) fn as_bytes(&self) -> &[u8] {

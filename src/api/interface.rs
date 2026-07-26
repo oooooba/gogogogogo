@@ -1,5 +1,6 @@
 use std::mem;
 use std::ptr;
+use std::slice;
 
 use crate::FunctionObject;
 use crate::LightWeightThreadContext;
@@ -29,9 +30,9 @@ pub extern "C" fn gox5_interface_new(ctx: &mut LightWeightThreadContext) -> Func
         let ptr = ctx
             .global_context()
             .process(|mut global_context| global_context.allocator().allocate(size, |_ptr| {}));
-        unsafe {
-            ptr::copy_nonoverlapping(frame.receiver.0 as *const u8, ptr as *mut u8, size);
-        }
+        let src = unsafe { slice::from_raw_parts(frame.receiver.0 as *const u8, size) };
+        let dst = unsafe { slice::from_raw_parts_mut(ptr as *mut u8, size) };
+        dst.copy_from_slice(src);
         ObjectPtr(ptr)
     };
 
@@ -60,22 +61,17 @@ pub extern "C" fn gox5_interface_convert_to_concrete_type(
     let object_size = frame.to_type.size();
     let success = frame.interface.type_id() == &frame.to_type;
 
+    let dst = unsafe { slice::from_raw_parts_mut(frame.value.as_mut() as *mut u8, object_size) };
     if success {
-        unsafe {
-            ptr::copy_nonoverlapping(
-                frame.interface.receiver().as_ref() as *const u8,
-                frame.value.as_mut() as *mut u8,
-                object_size,
-            );
-        }
+        let src = unsafe {
+            slice::from_raw_parts(frame.interface.receiver().0 as *const u8, object_size)
+        };
+        dst.copy_from_slice(src);
     } else {
         if frame.success.is_null() {
             unimplemented!()
         }
-
-        unsafe {
-            ptr::write_bytes(frame.value.as_mut() as *mut u8, 0, object_size);
-        }
+        dst.fill(0);
     }
 
     if !frame.success.is_null() {

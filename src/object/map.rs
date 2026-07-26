@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
-use std::ptr;
+use std::slice;
 
 use crate::type_id::TypeId;
 use crate::{ObjectAllocator, ObjectPtr};
@@ -57,15 +57,14 @@ impl MapObject {
         let object_size = self.value_type.size();
         match self.map.get(&key) {
             Some(val) => {
-                unsafe {
-                    ptr::copy_nonoverlapping(val.0 as *const u8, value.0 as *mut u8, object_size);
-                }
+                let src = unsafe { slice::from_raw_parts(val.0 as *const u8, object_size) };
+                let dst = unsafe { slice::from_raw_parts_mut(value.0 as *mut u8, object_size) };
+                dst.copy_from_slice(src);
                 true
             }
             None => {
-                unsafe {
-                    ptr::write_bytes(value.0 as *mut u8, 0, object_size);
-                }
+                let dst = unsafe { slice::from_raw_parts_mut(value.0 as *mut u8, object_size) };
+                dst.fill(0);
                 false
             }
         }
@@ -74,16 +73,16 @@ impl MapObject {
     pub fn set(&mut self, key: ObjectPtr, value: ObjectPtr, allocator: &mut dyn ObjectAllocator) {
         let key_object_size = self.key_type.size();
         let key_ptr = allocator.allocate(key_object_size, |_| {}) as *mut u8;
-        unsafe {
-            ptr::copy_nonoverlapping(key.0 as *const u8, key_ptr, key_object_size);
-        }
+        let src = unsafe { slice::from_raw_parts(key.0 as *const u8, key_object_size) };
+        let dst = unsafe { slice::from_raw_parts_mut(key_ptr, key_object_size) };
+        dst.copy_from_slice(src);
         let key = ObjectPtr(key_ptr as *mut ());
 
         let value_object_size = self.value_type.size();
         let value_ptr = allocator.allocate(value_object_size, |_| {}) as *mut u8;
-        unsafe {
-            ptr::copy_nonoverlapping(value.0 as *const u8, value_ptr, value_object_size);
-        }
+        let src = unsafe { slice::from_raw_parts(value.0 as *const u8, value_object_size) };
+        let dst = unsafe { slice::from_raw_parts_mut(value_ptr, value_object_size) };
+        dst.copy_from_slice(src);
         let value = ObjectPtr(value_ptr as *mut ());
 
         let key = Key::new(key, self.key_type);
@@ -99,20 +98,16 @@ impl MapObject {
         match self.map.iter().nth(nth) {
             Some((k, v)) => {
                 if !key.is_null() {
-                    unsafe {
-                        let object_size = self.key_type.size();
-                        ptr::copy_nonoverlapping(
-                            k.ptr.0 as *const u8,
-                            key.0 as *mut u8,
-                            object_size,
-                        );
-                    }
+                    let object_size = self.key_type.size();
+                    let src = unsafe { slice::from_raw_parts(k.ptr.0 as *const u8, object_size) };
+                    let dst = unsafe { slice::from_raw_parts_mut(key.0 as *mut u8, object_size) };
+                    dst.copy_from_slice(src);
                 }
                 if !value.is_null() {
-                    unsafe {
-                        let object_size = self.value_type.size();
-                        ptr::copy_nonoverlapping(v.0 as *const u8, value.0 as *mut u8, object_size);
-                    }
+                    let object_size = self.value_type.size();
+                    let src = unsafe { slice::from_raw_parts(v.0 as *const u8, object_size) };
+                    let dst = unsafe { slice::from_raw_parts_mut(value.0 as *mut u8, object_size) };
+                    dst.copy_from_slice(src);
                 }
                 true
             }
@@ -125,6 +120,7 @@ impl MapObject {
 mod tests {
     use super::*;
     use std::mem;
+    use std::ptr;
     use std::sync::OnceLock;
 
     extern "C" fn test_is_equal(a: ObjectPtr, b: ObjectPtr) -> bool {

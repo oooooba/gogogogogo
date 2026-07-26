@@ -1,4 +1,4 @@
-use std::ptr;
+use std::slice;
 
 use crate::FunctionObject;
 use crate::LightWeightThreadContext;
@@ -20,9 +20,8 @@ pub extern "C" fn gox5_new(ctx: &mut LightWeightThreadContext) -> FunctionObject
     let ptr = ctx
         .global_context()
         .process(|mut global_context| global_context.allocator().allocate(size, |_ptr| {}));
-    unsafe {
-        ptr::write_bytes(ptr as *mut u8, 0, size);
-    }
+    let bytes = unsafe { slice::from_raw_parts_mut(ptr as *mut u8, size) };
+    bytes.fill(0);
 
     let frame = ctx.stack_frame_mut::<StackFrameNew>();
     *frame.result_ptr = ObjectPtr(ptr);

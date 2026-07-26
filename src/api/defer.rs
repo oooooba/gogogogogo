@@ -27,12 +27,9 @@ where
     let prev_frame = frame.prev_stack_frame_mut::<StackFrameCommon>();
 
     let entry = DeferStackEntry::new(func, result_size, args);
-    unsafe {
-        *entry_ptr = entry;
-        prev_frame
-            .defer_stack_mut()
-            .push(ptr::NonNull::new_unchecked(entry_ptr));
-    }
+    unsafe { *entry_ptr = entry };
+    let entry_nn = ptr::NonNull::new(entry_ptr).expect("allocator returned null");
+    prev_frame.defer_stack_mut().push(entry_nn);
 
     ctx.pop_frame()
 }

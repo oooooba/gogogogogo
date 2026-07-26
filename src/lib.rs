@@ -49,13 +49,11 @@ impl FunctionObject {
             return (func, None);
         }
         let ptr = (addr & !flag) as *mut () as *mut ClosureLayout;
-        unsafe {
-            let closure_layout = &mut *ptr;
-            let func = closure_layout.func.clone();
-            let wc_ptr = ptr::addr_of!(closure_layout.object_ptrs) as *const u8;
-            let object_ptrs = wc_ptr.add(mem::size_of::<usize>()) as *mut ();
-            (func, Some(object_ptrs))
-        }
+        let closure_layout = unsafe { &mut *ptr };
+        let func = closure_layout.func.clone();
+        let wc_ptr = ptr::addr_of!(closure_layout.object_ptrs) as *const u8;
+        let object_ptrs = unsafe { wc_ptr.add(mem::size_of::<usize>()) as *mut () };
+        (func, Some(object_ptrs))
     }
 }
 
