@@ -88,4 +88,10 @@ for target in ${targets[@]}; do
     fi
 done
 
+if [ $exit_status -eq 0 ]; then
+    echo PASS
+else
+    echo FAIL
+fi
+
 exit $exit_status
