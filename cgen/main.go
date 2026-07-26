@@ -23,8 +23,6 @@ import (
 func main() {
 	filename := flag.String("i", "/dev/stdin", "input file")
 	buildDirname := flag.String("b", "/tmp", "build directory")
-	debugRuntime := flag.Bool("debug-runtime", false, "use debug mode Rust runtime binary")
-	debugUser := flag.Bool("debug-user", false, "use debug mode C binary with sanitizers")
 	flag.Parse()
 
 	cfg := packages.Config{Mode: packages.LoadAllSyntax}
@@ -53,7 +51,7 @@ func main() {
 		}
 	}
 
-	emitProgram(prog, *buildDirname, *debugRuntime, *debugUser)
+	emitProgram(prog, *buildDirname)
 }
 
 type Context struct {
@@ -2525,53 +2523,52 @@ func (ctx *Context) emitPackage(pkg *ssa.Package) {
 	})
 }
 
-func generateMakefile(makefile *os.File, program *ssa.Program, debugRuntime bool, debugUser bool) {
+func generateMakefile(makefile *os.File, program *ssa.Program) {
 	cCompiler := "gcc"
 	cCompilerWrapper := "ccache"
 	cc := fmt.Sprintf("$(shell command -v %s >/dev/null 2>&1 && echo %s %s || echo %s)", cCompilerWrapper, cCompilerWrapper, cCompiler, cCompiler)
 
-	var cflags []string
-	var ldflags []string
-	if debugUser {
-		cflags = []string{
-			"-Wall", "-Wextra", "-Werror", "-std=c11",
-			"-g", "-O1",
-			"-fsanitize=undefined", "-fsanitize=address",
-			"-fno-omit-frame-pointer", "-fno-sanitize-recover=all",
-			"-fstrict-aliasing", "-Wstrict-aliasing",
-		}
-		ldflags = []string{
-			"-fsanitize=undefined", "-fsanitize=address", "-fno-sanitize-recover=all",
-			"-lpthread", "-ldl", "-lm",
-		}
-	} else {
-		cflags = []string{
-			"-Wall", "-Wextra", "-Werror", "-std=c11", "-O2",
-			"-fstrict-aliasing", "-Wstrict-aliasing",
-		}
-		ldflags = []string{
-			"-lpthread", "-ldl", "-lm",
-		}
+	cflags := []string{
+		"-Wall", "-Wextra", "-Werror", "-std=c11", "-O2",
+		"-fstrict-aliasing", "-Wstrict-aliasing",
 	}
-	rustBuildMode := "release"
-	if debugRuntime {
-		rustBuildMode = "debug"
+	cflagsDebug := []string{
+		"-Wall", "-Wextra", "-Werror", "-std=c11",
+		"-g", "-O1",
+		"-fsanitize=undefined", "-fsanitize=address",
+		"-fno-omit-frame-pointer", "-fno-sanitize-recover=all",
+		"-fstrict-aliasing", "-Wstrict-aliasing",
 	}
-	libs := []string{fmt.Sprintf("../target/%s/libgogogogogo.a", rustBuildMode)}
+	ldflags := []string{
+		"-lpthread", "-ldl", "-lm",
+	}
+	ldflagsDebug := []string{
+		"-fsanitize=undefined", "-fsanitize=address", "-fno-sanitize-recover=all",
+		"-lpthread", "-ldl", "-lm",
+	}
+	libsRelease := "../target/release/libgogogogogo.a"
+	libsDebug := "../target/debug/libgogogogogo.a"
+
 	fmt.Fprintf(makefile, "CC = %s\n", cc)
 	fmt.Fprintf(makefile, "CFLAGS = %s\n", strings.Join(cflags, " "))
+	fmt.Fprintf(makefile, "CFLAGS_DEBUG = %s\n", strings.Join(cflagsDebug, " "))
 	fmt.Fprintf(makefile, "LDFLAGS = %s\n", strings.Join(ldflags, " "))
-	fmt.Fprintf(makefile, "LIBS = %s\n", strings.Join(libs, " "))
+	fmt.Fprintf(makefile, "LDFLAGS_DEBUG = %s\n", strings.Join(ldflagsDebug, " "))
+	fmt.Fprintf(makefile, "LIBS_RELEASE = %s\n", libsRelease)
+	fmt.Fprintf(makefile, "LIBS_DEBUG = %s\n", libsDebug)
 
-	binaryName := "bin.exe"
-	fmt.Fprintf(makefile, "all: %s\n", binaryName)
+	objsRelease := []string{}
+	objsDebug := []string{}
 
-	objs := []string{}
 	cFileRule := func(outputName string) {
-		objName := fmt.Sprintf("%s.o", outputName)
-		fmt.Fprintf(makefile, "%s:\n", objName)
-		fmt.Fprintf(makefile, "\t@$(CC) $(CFLAGS) -c -o %s %s\n", objName, outputName)
-		objs = append(objs, objName)
+		objRelease := fmt.Sprintf("%s.o", outputName)
+		objDebug := fmt.Sprintf("%s.debug.o", outputName)
+		fmt.Fprintf(makefile, "%s:\n", objRelease)
+		fmt.Fprintf(makefile, "\t@$(CC) $(CFLAGS) -c -o %s %s\n", objRelease, outputName)
+		fmt.Fprintf(makefile, "%s:\n", objDebug)
+		fmt.Fprintf(makefile, "\t@$(CC) $(CFLAGS_DEBUG) -c -o %s %s\n", objDebug, outputName)
+		objsRelease = append(objsRelease, objRelease)
+		objsDebug = append(objsDebug, objDebug)
 	}
 
 	cFileRule("shared_definition.c")
@@ -2580,8 +2577,20 @@ func generateMakefile(makefile *os.File, program *ssa.Program, debugRuntime bool
 		cFileRule(outputName)
 	}
 
-	fmt.Fprintf(makefile, "%s: %s\n", binaryName, strings.Join(objs, " "))
-	fmt.Fprintf(makefile, "\t@$(CC) -o %s %s $(LIBS) $(LDFLAGS)\n", binaryName, strings.Join(objs, " "))
+	fmt.Fprintf(makefile, "\n")
+	fmt.Fprintf(makefile, "all: bin.exe\n")
+	fmt.Fprintf(makefile, "\n")
+	fmt.Fprintf(makefile, "bin.exe: %s\n", strings.Join(objsRelease, " "))
+	fmt.Fprintf(makefile, "\t@$(CC) -o bin.exe %s $(LIBS_RELEASE) $(LDFLAGS)\n", strings.Join(objsRelease, " "))
+	fmt.Fprintf(makefile, "\n")
+	fmt.Fprintf(makefile, "bin-debug-user.exe: %s\n", strings.Join(objsDebug, " "))
+	fmt.Fprintf(makefile, "\t@$(CC) -o bin-debug-user.exe %s $(LIBS_RELEASE) $(LDFLAGS_DEBUG)\n", strings.Join(objsDebug, " "))
+	fmt.Fprintf(makefile, "\n")
+	fmt.Fprintf(makefile, "bin-debug-runtime.exe: %s\n", strings.Join(objsRelease, " "))
+	fmt.Fprintf(makefile, "\t@$(CC) -o bin-debug-runtime.exe %s $(LIBS_DEBUG) $(LDFLAGS)\n", strings.Join(objsRelease, " "))
+	fmt.Fprintf(makefile, "\n")
+	fmt.Fprintf(makefile, "bin-debug-user-debug-runtime.exe: %s\n", strings.Join(objsDebug, " "))
+	fmt.Fprintf(makefile, "\t@$(CC) -o bin-debug-user-debug-runtime.exe %s $(LIBS_DEBUG) $(LDFLAGS_DEBUG)\n", strings.Join(objsDebug, " "))
 }
 
 func handleSharedDefinition(program *ssa.Program, outputPath string) {
@@ -2636,16 +2645,16 @@ func handlePackage(program *ssa.Program, pkg *ssa.Package, outputPath string) {
 	ctx.emitPackage(pkg)
 }
 
-func handleMakefile(program *ssa.Program, outputPath string, debugRuntime bool, debugUser bool) {
+func handleMakefile(program *ssa.Program, outputPath string) {
 	makefile, err := os.Create(outputPath)
 	if err != nil {
 		panic(err)
 	}
 	defer makefile.Close()
-	generateMakefile(makefile, program, debugRuntime, debugUser)
+	generateMakefile(makefile, program)
 }
 
-func emitProgram(program *ssa.Program, buildDirname string, debugRuntime bool, debugUser bool) {
+func emitProgram(program *ssa.Program, buildDirname string) {
 	waitGroup := sync.WaitGroup{}
 
 	waitGroup.Add(1)
@@ -2667,7 +2676,7 @@ func emitProgram(program *ssa.Program, buildDirname string, debugRuntime bool, d
 	waitGroup.Add(1)
 	go func() {
 		makefileName := "Makefile"
-		handleMakefile(program, fmt.Sprintf("%s/%s", buildDirname, makefileName), debugRuntime, debugUser)
+		handleMakefile(program, fmt.Sprintf("%s/%s", buildDirname, makefileName))
 		waitGroup.Done()
 	}()
 

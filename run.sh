@@ -38,25 +38,29 @@ if [ -d $build_directory ]; then
 fi
 mkdir $build_directory
 
-bin_file_name=$build_directory/bin.exe
-
 dir_name=$(cd `dirname $1` && pwd)
 base_name=`basename $1`
 src=$dir_name/$base_name
 cgen_args="-b ../$build_directory -i $src"
-if [ "$debug_runtime" = "true" ]; then
-    cgen_args="$cgen_args --debug-runtime"
-fi
-if [ "$debug_user" = "true" ]; then
-    cgen_args="$cgen_args --debug-user"
-fi
 cd cgen
 go run main.go $cgen_args
 cd ..
 
 cd $build_directory
 ln -s ../cgen/predefined.h predefined.h
-make -j
+if [ "$debug_user" = "true" ] && [ "$debug_runtime" = "true" ]; then
+    make -j bin-debug-user-debug-runtime.exe
+    bin_file_name=bin-debug-user-debug-runtime.exe
+elif [ "$debug_user" = "true" ]; then
+    make -j bin-debug-user.exe
+    bin_file_name=bin-debug-user.exe
+elif [ "$debug_runtime" = "true" ]; then
+    make -j bin-debug-runtime.exe
+    bin_file_name=bin-debug-runtime.exe
+else
+    make -j bin.exe
+    bin_file_name=bin.exe
+fi
 cd ..
 
-$bin_file_name
+$build_directory/$bin_file_name
