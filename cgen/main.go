@@ -2560,12 +2560,16 @@ func generateMakefile(makefile *os.File, program *ssa.Program) {
 	objsRelease := []string{}
 	objsDebug := []string{}
 
-	cFileRule := func(outputName string) {
+	cFileRule := func(outputName string, extraDeps ...string) {
 		objRelease := fmt.Sprintf("%s.o", outputName)
 		objDebug := fmt.Sprintf("%s.debug.o", outputName)
-		fmt.Fprintf(makefile, "%s: predefined.h\n", objRelease)
+		deps := "predefined.h " + outputName
+		for _, d := range extraDeps {
+			deps += " " + d
+		}
+		fmt.Fprintf(makefile, "%s: %s\n", objRelease, deps)
 		fmt.Fprintf(makefile, "\t@$(CC) $(CFLAGS) -c -o %s %s\n", objRelease, outputName)
-		fmt.Fprintf(makefile, "%s: predefined.h\n", objDebug)
+		fmt.Fprintf(makefile, "%s: %s\n", objDebug, deps)
 		fmt.Fprintf(makefile, "\t@$(CC) $(CFLAGS_DEBUG) -c -o %s %s\n", objDebug, outputName)
 		objsRelease = append(objsRelease, objRelease)
 		objsDebug = append(objsDebug, objDebug)
@@ -2574,7 +2578,7 @@ func generateMakefile(makefile *os.File, program *ssa.Program) {
 	cFileRule("shared_definition.c")
 	for _, pkg := range program.AllPackages() {
 		outputName := fmt.Sprintf("package_%s.c", createPackageName(pkg.Pkg))
-		cFileRule(outputName)
+		cFileRule(outputName, "shared_definition.c")
 	}
 
 	fmt.Fprintf(makefile, "\n")
