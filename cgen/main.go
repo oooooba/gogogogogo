@@ -30,7 +30,7 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	prog, _ := ssautil.AllPackages(initPkgs, ssa.SanityCheckFunctions)
+	prog, _ := ssautil.AllPackages(initPkgs, ssa.SanityCheckFunctions|ssa.InstantiateGenerics)
 	prog.Build()
 
 	if false {
@@ -61,6 +61,7 @@ type Context struct {
 	orderedPackageMembers    []ssa.Member
 	builtinPrintWrapperBuf   strings.Builder
 	builtinPrintWrapperNames map[*ssa.CallCommon]string
+	extraFunctions           []*ssa.Function
 }
 
 func encode(str string) string {
@@ -204,6 +205,8 @@ func createTypeName(typ types.Type) string {
 			}
 			name += ">"
 			return name
+		case *types.TypeParam:
+			return fmt.Sprintf("TypeParam<%s>", t.String())
 		default:
 			if typ.String() == "iter" {
 				return "IterObject"
@@ -1565,6 +1568,8 @@ func (ctx *Context) retrieveOrderedTypes(pkg *ssa.Package) []types.Type {
 				f(typ.At(i).Type())
 			}
 
+		case *types.TypeParam: // do nothing
+
 		default:
 			if typ.String() == "iter" {
 				/// iterator of map or string
@@ -1594,7 +1599,7 @@ func (ctx *Context) emitTypeDeclaration(typ types.Type) {
 	case *types.Array, *types.Chan, *types.Map, *types.Pointer, *types.Struct, *types.Tuple:
 		fmt.Fprintf(ctx.stream, "typedef struct %s %s; // %s\n", name, name, typ)
 
-	case *types.Basic, *types.Interface, *types.Signature:
+	case *types.Basic, *types.Interface, *types.Signature, *types.TypeParam:
 		// do nothing
 
 	case *types.Named:
@@ -1621,7 +1626,7 @@ func (ctx *Context) emitTypeDefinition(typ types.Type) {
 		fmt.Fprintf(ctx.stream, "\t%s raw[%d];\n", createTypeName(typ.Elem()), typ.Len())
 		fmt.Fprintf(ctx.stream, "};\n")
 
-	case *types.Basic, *types.Interface, *types.Named, *types.Signature:
+	case *types.Basic, *types.Interface, *types.Named, *types.Signature, *types.TypeParam:
 		// do nothing
 
 	case *types.Chan:
@@ -2153,9 +2158,62 @@ func (ctx *Context) traverseCallCommon(function *ssa.Function, procedure func(ca
 	}
 }
 
+func (ctx *Context) collectInstances(pkg *ssa.Package) {
+	seen := map[*ssa.Function]bool{}
+
+	var walk func(fn *ssa.Function)
+	walk = func(fn *ssa.Function) {
+		if fn == nil || seen[fn] {
+			return
+		}
+		seen[fn] = true
+
+		if fn.Blocks == nil {
+			return
+		}
+
+		for _, block := range fn.Blocks {
+			for _, instr := range block.Instrs {
+				var callee *ssa.Function
+				switch instr := instr.(type) {
+				case *ssa.Call:
+					callee, _ = instr.Common().Value.(*ssa.Function)
+				case *ssa.Defer:
+					callee, _ = instr.Common().Value.(*ssa.Function)
+				case *ssa.Go:
+					callee, _ = instr.Common().Value.(*ssa.Function)
+				}
+				if callee != nil {
+					walk(callee)
+				}
+			}
+		}
+
+		for _, anon := range fn.AnonFuncs {
+			walk(anon)
+		}
+
+		if fn.Pkg == nil && len(fn.TypeArgs()) > 0 {
+			ctx.extraFunctions = append(ctx.extraFunctions, fn)
+		}
+	}
+
+	for _, member := range pkg.Members {
+		if fn, ok := member.(*ssa.Function); ok {
+			walk(fn)
+		}
+	}
+}
+
 func (ctx *Context) traverseFunction(pkg *ssa.Package, procedure func(function *ssa.Function)) {
 	var f func(function *ssa.Function)
 	f = func(function *ssa.Function) {
+		if function == nil {
+			return
+		}
+		if function.TypeParams().Len() > 0 && len(function.TypeArgs()) == 0 {
+			return
+		}
 		procedure(function)
 		for _, anonFunc := range function.AnonFuncs {
 			f(anonFunc)
@@ -2183,6 +2241,10 @@ func (ctx *Context) traverseFunction(pkg *ssa.Package, procedure func(function *
 			g(types.NewPointer(t))
 		}
 	})
+
+	for _, fn := range ctx.extraFunctions {
+		f(fn)
+	}
 }
 
 func (ctx *Context) traverseBasicType(procedure func(typ types.Type)) {
@@ -2217,7 +2279,7 @@ func (ctx *Context) traverseType(pkg *ssa.Package, procedure func(typ types.Type
 		case *types.Chan:
 			f(typ.Elem())
 
-		case *types.Interface, *types.Signature:
+		case *types.Interface, *types.Signature, *types.TypeParam:
 			// do nothing
 
 		case *types.Map:
@@ -2613,6 +2675,10 @@ func handleSharedDefinition(program *ssa.Program, outputPath string) {
 		latestNameMap: make(map[*ssa.BasicBlock]string),
 	}
 
+	for _, pkg := range program.AllPackages() {
+		ctx.collectInstances(pkg)
+	}
+
 	ctx.emitCommon()
 
 	ctx.emitTypeDeclarationAndDefinition(nil)
@@ -2649,6 +2715,7 @@ func handlePackage(program *ssa.Program, pkg *ssa.Package, outputPath string) {
 		latestNameMap: make(map[*ssa.BasicBlock]string),
 	}
 
+	ctx.collectInstances(pkg)
 	ctx.emitPackage(pkg)
 }
 
