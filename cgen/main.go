@@ -2230,11 +2230,28 @@ func (ctx *Context) collectInstances(pkg *ssa.Package) {
 		}
 	}
 
-	for _, member := range pkg.Members {
+	for _, member := range sortedPackageMembers(pkg) {
 		if fn, ok := member.(*ssa.Function); ok {
 			walk(fn)
 		}
 	}
+}
+
+func sortedPackageMembers(pkg *ssa.Package) []ssa.Member {
+	mp := map[string]ssa.Member{}
+	for _, member := range pkg.Members {
+		mp[member.RelString(nil)] = member
+	}
+	keys := []string{}
+	for key := range mp {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	members := []ssa.Member{}
+	for _, key := range keys {
+		members = append(members, mp[key])
+	}
+	return members
 }
 
 func (ctx *Context) traverseFunction(pkg *ssa.Package, procedure func(function *ssa.Function)) {
