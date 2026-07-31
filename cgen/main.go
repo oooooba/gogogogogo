@@ -1300,6 +1300,20 @@ func createFunctionName(function *ssa.Function) string {
 	return encode(fmt.Sprintf("f$%s", function.RelString(nil)))
 }
 
+func hasTypeParamInSignature(sig *types.Signature) bool {
+	for i := 0; i < sig.Params().Len(); i++ {
+		if _, ok := sig.Params().At(i).Type().(*types.TypeParam); ok {
+			return true
+		}
+	}
+	for i := 0; i < sig.Results().Len(); i++ {
+		if _, ok := sig.Results().At(i).Type().(*types.TypeParam); ok {
+			return true
+		}
+	}
+	return false
+}
+
 func createPackageName(pkg *types.Package) string {
 	return pkg.Name()
 }
@@ -1722,6 +1736,24 @@ func (ctx *Context) emitSignature(pkg *ssa.Package) {
 
 	ctx.traverseFunction(pkg, func(function *ssa.Function) {
 		signature := function.Signature
+
+		hasTypeParam := false
+		for i := 0; i < signature.Params().Len(); i++ {
+			if _, ok := signature.Params().At(i).Type().(*types.TypeParam); ok {
+				hasTypeParam = true
+				break
+			}
+		}
+		for i := 0; i < signature.Results().Len(); i++ {
+			if _, ok := signature.Results().At(i).Type().(*types.TypeParam); ok {
+				hasTypeParam = true
+				break
+			}
+		}
+		if hasTypeParam {
+			return
+		}
+
 		concreteSignatureName := createSignatureName(signature, false, false)
 		tryEmitSignatureDefinition(signature, concreteSignatureName, false, false)
 		if signature.Recv() != nil {
@@ -2214,6 +2246,9 @@ func (ctx *Context) traverseFunction(pkg *ssa.Package, procedure func(function *
 		if function.TypeParams().Len() > 0 && len(function.TypeArgs()) == 0 {
 			return
 		}
+		if hasTypeParamInSignature(function.Signature) {
+			return
+		}
 		procedure(function)
 		for _, anonFunc := range function.AnonFuncs {
 			f(anonFunc)
@@ -2327,6 +2362,24 @@ func (ctx *Context) traverseType(pkg *ssa.Package, procedure func(typ types.Type
 
 	ctx.traverseFunction(pkg, func(function *ssa.Function) {
 		sig := function.Signature
+
+		hasTypeParam := false
+		for i := 0; i < sig.Params().Len(); i++ {
+			if _, ok := sig.Params().At(i).Type().(*types.TypeParam); ok {
+				hasTypeParam = true
+				break
+			}
+		}
+		for i := 0; i < sig.Results().Len(); i++ {
+			if _, ok := sig.Results().At(i).Type().(*types.TypeParam); ok {
+				hasTypeParam = true
+				break
+			}
+		}
+		if hasTypeParam {
+			return
+		}
+
 		if sig.Recv() != nil {
 			f(sig.Recv().Type())
 		}
@@ -2338,7 +2391,23 @@ func (ctx *Context) traverseType(pkg *ssa.Package, procedure func(typ types.Type
 		}
 
 		ctx.traverseValue(function, func(value ssa.Value) {
-			f(value.Type())
+			typ := value.Type()
+			if _, ok := typ.(*types.TypeParam); ok {
+				return
+			}
+			if sig, ok := typ.(*types.Signature); ok {
+				hasTypeParam := false
+				for i := 0; i < sig.Params().Len(); i++ {
+					if _, ok := sig.Params().At(i).Type().(*types.TypeParam); ok {
+						hasTypeParam = true
+						break
+					}
+				}
+				if hasTypeParam {
+					return
+				}
+			}
+			f(typ)
 		})
 	})
 }
