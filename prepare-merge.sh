@@ -9,6 +9,7 @@ clang-format -i cgen/predefined.h
 
 cargo test
 cargo +nightly miri test
+bash check_reproducibility.sh
 bash run_xtests.sh
 bash run_xtests.sh --debug-runtime
 bash run_xtests.sh --debug-user
