@@ -4,7 +4,7 @@ set -ex
 
 cargo clippy --all-targets -- -D warnings
 cargo fmt --all
-gofmt -l cgen/*.go xtests/*.go
+gofmt -l cgen xtests
 clang-format -i cgen/predefined.h
 
 cargo test
