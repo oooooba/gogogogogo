@@ -2484,7 +2484,7 @@ func (ctx *Context) emitTypeDeclarationAndDefinition(pkg *ssa.Package) {
 	}
 }
 
-func (ctx *Context) emitInterfaceDataDeclaration(pkg *ssa.Package) {
+func (ctx *Context) buildAllowSet(pkg *ssa.Package) map[string]struct{} {
 	allowSet := make(map[string]struct{})
 	ctx.traverseBasicType(func(typ types.Type) {
 		allowSet[createTypeName(typ)] = struct{}{}
@@ -2492,9 +2492,15 @@ func (ctx *Context) emitInterfaceDataDeclaration(pkg *ssa.Package) {
 	ctx.traversePackageMember(pkg, func(member ssa.Member) {
 		if typ, ok := member.(*ssa.Type); ok {
 			t := typ.Type()
+			allowSet[createTypeName(t)] = struct{}{}
 			allowSet[createTypeName(types.NewPointer(t))] = struct{}{}
 		}
 	})
+	return allowSet
+}
+
+func (ctx *Context) emitInterfaceDataDeclaration(pkg *ssa.Package) {
+	allowSet := ctx.buildAllowSet(pkg)
 
 	fmt.Fprintf(ctx.stream, `
 bool equal_MapObject(const MapObject* lhs, const MapObject* rhs);
@@ -2519,16 +2525,7 @@ uintptr_t hash_Interface(const Interface* obj);
 }
 
 func (ctx *Context) emitInterfaceDataDefinition() {
-	allowSet := make(map[string]struct{})
-	ctx.traverseBasicType(func(typ types.Type) {
-		allowSet[createTypeName(typ)] = struct{}{}
-	})
-	ctx.traversePackageMember(nil, func(member ssa.Member) {
-		if typ, ok := member.(*ssa.Type); ok {
-			t := typ.Type()
-			allowSet[createTypeName(types.NewPointer(t))] = struct{}{}
-		}
-	})
+	allowSet := ctx.buildAllowSet(nil)
 
 	fmt.Fprintf(ctx.stream, `
 bool equal_MapObject(const MapObject* lhs, const MapObject* rhs) {
