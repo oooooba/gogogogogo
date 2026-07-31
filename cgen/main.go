@@ -2319,6 +2319,10 @@ func (ctx *Context) traverseType(pkg *ssa.Package, procedure func(typ types.Type
 	foundTypeSet := make(map[string]struct{})
 	var f func(typ types.Type)
 	f = func(typ types.Type) {
+		if _, ok := typ.(*types.Alias); ok {
+			f(typ.Underlying())
+			return
+		}
 		name := createTypeName(typ)
 		_, ok := foundTypeSet[name]
 		if ok {
@@ -2327,10 +2331,6 @@ func (ctx *Context) traverseType(pkg *ssa.Package, procedure func(typ types.Type
 		foundTypeSet[name] = struct{}{}
 
 		switch typ := typ.(type) {
-		case *types.Alias:
-			f(typ.Underlying())
-			return
-
 		case *types.Array:
 			f(typ.Elem())
 
