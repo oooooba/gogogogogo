@@ -133,6 +133,8 @@ func createTypeName(typ types.Type) string {
 	var f func(typ types.Type) string
 	f = func(typ types.Type) string {
 		switch t := typ.(type) {
+		case *types.Alias:
+			return f(t.Underlying())
 		case *types.Array:
 			return fmt.Sprintf("Array<%s$%d>", f(t.Elem()), t.Len())
 		case *types.Basic:
@@ -212,7 +214,7 @@ func createTypeName(typ types.Type) string {
 				return "IterObject"
 			}
 		}
-		panic(fmt.Sprintf("type not supported: %s", typ.String()))
+		panic(fmt.Sprintf("type not supported: %s (%T)", typ.String(), typ))
 	}
 	return encode(f(typ))
 }
@@ -1548,6 +1550,10 @@ func (ctx *Context) retrieveOrderedTypes(pkg *ssa.Package) []types.Type {
 
 		isPointerType := false
 		switch typ := typ.(type) {
+		case *types.Alias:
+			f(typ.Underlying())
+			return
+
 		case *types.Array:
 			f(typ.Elem())
 
@@ -2321,6 +2327,10 @@ func (ctx *Context) traverseType(pkg *ssa.Package, procedure func(typ types.Type
 		foundTypeSet[name] = struct{}{}
 
 		switch typ := typ.(type) {
+		case *types.Alias:
+			f(typ.Underlying())
+			return
+
 		case *types.Array:
 			f(typ.Elem())
 
