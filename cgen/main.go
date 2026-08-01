@@ -40,7 +40,7 @@ func main() {
 			program:       prog,
 			latestNameMap: make(map[*ssa.BasicBlock]string),
 		}
-		for _, pkg := range prog.AllPackages() {
+		for _, pkg := range allPackagesSorted(prog) {
 			ctx.traverseFunction(pkg, func(function *ssa.Function) {
 				for _, keyword := range keywords {
 					if strings.Contains(function.Name(), keyword) {
@@ -2008,7 +2008,7 @@ UserFunction runtime_info_get_init_point(void) {
 }
 
 func findMainPackage(program *ssa.Program) *ssa.Package {
-	for _, pkg := range program.AllPackages() {
+	for _, pkg := range allPackagesSorted(program) {
 		if pkg.Pkg.Name() == "main" {
 			return pkg
 		}
@@ -2447,7 +2447,7 @@ func (ctx *Context) traverseType(pkg *ssa.Package, procedure func(typ types.Type
 func (ctx *Context) traversePackageMember(pkg *ssa.Package, procedure func(member ssa.Member)) {
 	if ctx.orderedPackageMembers == nil {
 		mp := map[string]ssa.Member{}
-		for _, pkg2 := range ctx.program.AllPackages() {
+		for _, pkg2 := range allPackagesSorted(ctx.program) {
 			if pkg != nil && pkg != pkg2 {
 				continue
 			}
@@ -2683,6 +2683,14 @@ func (ctx *Context) emitPackage(pkg *ssa.Package) {
 	})
 }
 
+func allPackagesSorted(program *ssa.Program) []*ssa.Package {
+	pkgs := program.AllPackages()
+	sort.Slice(pkgs, func(i, j int) bool {
+		return createPackageName(pkgs[i].Pkg) < createPackageName(pkgs[j].Pkg)
+	})
+	return pkgs
+}
+
 func generateMakefile(makefile *os.File, program *ssa.Program) {
 	cCompiler := "gcc"
 	cCompilerWrapper := "ccache"
@@ -2736,7 +2744,7 @@ func generateMakefile(makefile *os.File, program *ssa.Program) {
 	}
 
 	cFileRule("shared_definition.c")
-	for _, pkg := range program.AllPackages() {
+	for _, pkg := range allPackagesSorted(program) {
 		outputName := fmt.Sprintf("package_%s.c", createPackageName(pkg.Pkg))
 		cFileRule(outputName, "shared_definition.c")
 	}
@@ -2773,7 +2781,7 @@ func handleSharedDefinition(program *ssa.Program, outputPath string) {
 		latestNameMap: make(map[*ssa.BasicBlock]string),
 	}
 
-	for _, pkg := range program.AllPackages() {
+	for _, pkg := range allPackagesSorted(program) {
 		ctx.collectInstances(pkg)
 	}
 
@@ -2836,7 +2844,7 @@ func emitProgram(program *ssa.Program, buildDirname string) {
 		waitGroup.Done()
 	}()
 
-	for _, pkg := range program.AllPackages() {
+	for _, pkg := range allPackagesSorted(program) {
 		waitGroup.Add(1)
 		go func(pkg *ssa.Package) {
 			outputName := fmt.Sprintf("package_%s.c", createPackageName(pkg.Pkg))
