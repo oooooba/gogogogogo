@@ -62,6 +62,7 @@ type Context struct {
 	builtinPrintWrapperBuf   strings.Builder
 	builtinPrintWrapperNames map[*ssa.CallCommon]string
 	extraFunctions           []*ssa.Function
+	instanceOwners           map[*ssa.Function]*ssa.Package
 }
 
 func encode(str string) string {
@@ -91,9 +92,27 @@ func wrapInTypeId(typ types.Type) string {
 	return fmt.Sprintf("(TypeId){ .info = &%s }", createTypeIdName(typ))
 }
 
+func isNumericKind(kind types.BasicKind) bool {
+	switch kind {
+	case types.Int, types.Int8, types.Int16, types.Int32, types.Int64,
+		types.Uint, types.Uint8, types.Uint16, types.Uint32, types.Uint64, types.Uintptr,
+		types.Float32, types.Float64:
+		return true
+	default:
+		return false
+	}
+}
+
 func createValueName(value ssa.Value) string {
 	if _, ok := value.(*ssa.Const); ok {
-		return encode(fmt.Sprintf("c$%s", strconv.QuoteToASCII(value.String())))
+		constVal := value.(*ssa.Const)
+		var full string
+		if constVal.Value != nil && constVal.Value.Kind() == constant.String {
+			full = strconv.QuoteToASCII(constant.StringVal(constVal.Value))
+		} else {
+			full = strconv.QuoteToASCII(value.String())
+		}
+		return encode(fmt.Sprintf("c$%s", full))
 	} else if val, ok := value.(*ssa.Function); ok {
 		return wrapInObject(createFunctionName(val), val.Type())
 	} else if val, ok := value.(*ssa.Parameter); ok {
@@ -715,6 +734,24 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 					default:
 						panic(fmt.Sprintf("unsuported argument for len: %s", callCommon.Args[0]))
 					}
+
+				case "max", "min":
+					result := createValueRelName(instr)
+					arg := callCommon.Args[0]
+					basic, ok := arg.Type().Underlying().(*types.Basic)
+					if !ok || !isNumericKind(basic.Kind()) {
+						panic(fmt.Sprintf("unsupported argument for %s: %s (%s)", callee.Name(), arg, arg.Type()))
+					}
+					op := ">"
+					if callee.Name() == "min" {
+						op = "<"
+					}
+					expr := fmt.Sprintf("%s.raw", createValueRelName(arg))
+					for _, next := range callCommon.Args[1:] {
+						rhs := fmt.Sprintf("%s.raw", createValueRelName(next))
+						expr = fmt.Sprintf("(%s %s %s ? %s : %s)", expr, op, rhs, expr, rhs)
+					}
+					fmt.Fprintf(ctx.stream, "%s = %s;\n", result, wrapInObject(expr, instr.Type()))
 
 				case "print", "println":
 					rawExprs := make([]string, len(callCommon.Args))
@@ -2201,6 +2238,72 @@ func (ctx *Context) traverseCallCommon(function *ssa.Function, procedure func(ca
 	}
 }
 
+func computeInstanceOwners(program *ssa.Program) map[*ssa.Function]*ssa.Package {
+	instanceOwners := map[*ssa.Function]*ssa.Package{}
+	reachers := map[*ssa.Function][]*ssa.Package{}
+
+	for _, pkg := range allPackagesSorted(program) {
+		for _, member := range sortedPackageMembers(pkg) {
+			fn, ok := member.(*ssa.Function)
+			if !ok {
+				continue
+			}
+			seen := map[*ssa.Function]bool{}
+			var walk func(fn *ssa.Function)
+			walk = func(fn *ssa.Function) {
+				if fn == nil || seen[fn] {
+					return
+				}
+				seen[fn] = true
+
+				if fn.Blocks == nil {
+					return
+				}
+
+				if fn.Pkg == nil && len(fn.TypeArgs()) > 0 {
+					reachers[fn] = append(reachers[fn], pkg)
+				}
+
+				for _, block := range fn.Blocks {
+					for _, instr := range block.Instrs {
+						var callee *ssa.Function
+						switch instr := instr.(type) {
+						case *ssa.Call:
+							callee, _ = instr.Common().Value.(*ssa.Function)
+						case *ssa.Defer:
+							callee, _ = instr.Common().Value.(*ssa.Function)
+						case *ssa.Go:
+							callee, _ = instr.Common().Value.(*ssa.Function)
+						}
+						if callee != nil {
+							walk(callee)
+						}
+					}
+				}
+
+				for _, anon := range fn.AnonFuncs {
+					walk(anon)
+				}
+			}
+			walk(fn)
+		}
+	}
+
+	for fn, pkgs := range reachers {
+		owner := pkgs[0]
+		if origin := fn.Origin(); origin != nil && origin.Pkg != nil {
+			for _, pkg := range pkgs {
+				if pkg == origin.Pkg {
+					owner = origin.Pkg
+					break
+				}
+			}
+		}
+		instanceOwners[fn] = owner
+	}
+	return instanceOwners
+}
+
 func (ctx *Context) collectInstances(pkg *ssa.Package) {
 	seen := map[*ssa.Function]bool{}
 
@@ -2237,7 +2340,9 @@ func (ctx *Context) collectInstances(pkg *ssa.Package) {
 		}
 
 		if fn.Pkg == nil && len(fn.TypeArgs()) > 0 {
-			ctx.extraFunctions = append(ctx.extraFunctions, fn)
+			if ctx.instanceOwners[fn] == pkg {
+				ctx.extraFunctions = append(ctx.extraFunctions, fn)
+			}
 		}
 	}
 
@@ -2768,7 +2873,7 @@ func generateMakefile(makefile *os.File, program *ssa.Program) {
 	fmt.Fprintf(makefile, "\t@$(CC) -o bin-debug-user-debug-runtime.exe %s $(LIBS_DEBUG) $(LDFLAGS_DEBUG)\n", strings.Join(objsDebug, " "))
 }
 
-func handleSharedDefinition(program *ssa.Program, outputPath string) {
+func handleSharedDefinition(program *ssa.Program, instanceOwners map[*ssa.Function]*ssa.Package, outputPath string) {
 	f, err := os.Create(outputPath)
 	if err != nil {
 		panic(err)
@@ -2776,9 +2881,10 @@ func handleSharedDefinition(program *ssa.Program, outputPath string) {
 	defer f.Close()
 
 	ctx := Context{
-		stream:        f,
-		program:       program,
-		latestNameMap: make(map[*ssa.BasicBlock]string),
+		stream:         f,
+		program:        program,
+		latestNameMap:  make(map[*ssa.BasicBlock]string),
+		instanceOwners: instanceOwners,
 	}
 
 	for _, pkg := range allPackagesSorted(program) {
@@ -2808,7 +2914,7 @@ func handleSharedDefinition(program *ssa.Program, outputPath string) {
 	ctx.emitRuntimeInfo()
 }
 
-func handlePackage(program *ssa.Program, pkg *ssa.Package, outputPath string) {
+func handlePackage(program *ssa.Program, pkg *ssa.Package, instanceOwners map[*ssa.Function]*ssa.Package, outputPath string) {
 	f, err := os.Create(outputPath)
 	if err != nil {
 		panic(err)
@@ -2816,9 +2922,10 @@ func handlePackage(program *ssa.Program, pkg *ssa.Package, outputPath string) {
 	defer f.Close()
 
 	ctx := Context{
-		stream:        f,
-		program:       program,
-		latestNameMap: make(map[*ssa.BasicBlock]string),
+		stream:         f,
+		program:        program,
+		latestNameMap:  make(map[*ssa.BasicBlock]string),
+		instanceOwners: instanceOwners,
 	}
 
 	ctx.collectInstances(pkg)
@@ -2837,10 +2944,12 @@ func handleMakefile(program *ssa.Program, outputPath string) {
 func emitProgram(program *ssa.Program, buildDirname string) {
 	waitGroup := sync.WaitGroup{}
 
+	instanceOwners := computeInstanceOwners(program)
+
 	waitGroup.Add(1)
 	go func() {
 		definitionName := "shared_definition.c"
-		handleSharedDefinition(program, fmt.Sprintf("%s/%s", buildDirname, definitionName))
+		handleSharedDefinition(program, instanceOwners, fmt.Sprintf("%s/%s", buildDirname, definitionName))
 		waitGroup.Done()
 	}()
 
@@ -2848,7 +2957,7 @@ func emitProgram(program *ssa.Program, buildDirname string) {
 		waitGroup.Add(1)
 		go func(pkg *ssa.Package) {
 			outputName := fmt.Sprintf("package_%s.c", createPackageName(pkg.Pkg))
-			handlePackage(program, pkg, fmt.Sprintf("%s/%s", buildDirname, outputName))
+			handlePackage(program, pkg, instanceOwners, fmt.Sprintf("%s/%s", buildDirname, outputName))
 			waitGroup.Done()
 		}(pkg)
 	}

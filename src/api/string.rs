@@ -161,21 +161,99 @@ struct StackFrameStringNext<'a> {
     count: &'a mut usize,
 }
 
+// Tables from Go's unicode/utf8 decodeRuneInStringSlow.
+const UTF8_FIRST: [u8; 256] = [
+    0xF0, 0xF0, 0xF0, 0xF0, 0xF0, 0xF0, 0xF0, 0xF0, 0xF0, 0xF0, 0xF0, 0xF0, 0xF0, 0xF0, 0xF0, 0xF0,
+    0xF0, 0xF0, 0xF0, 0xF0, 0xF0, 0xF0, 0xF0, 0xF0, 0xF0, 0xF0, 0xF0, 0xF0, 0xF0, 0xF0, 0xF0, 0xF0,
+    0xF0, 0xF0, 0xF0, 0xF0, 0xF0, 0xF0, 0xF0, 0xF0, 0xF0, 0xF0, 0xF0, 0xF0, 0xF0, 0xF0, 0xF0, 0xF0,
+    0xF0, 0xF0, 0xF0, 0xF0, 0xF0, 0xF0, 0xF0, 0xF0, 0xF0, 0xF0, 0xF0, 0xF0, 0xF0, 0xF0, 0xF0, 0xF0,
+    0xF0, 0xF0, 0xF0, 0xF0, 0xF0, 0xF0, 0xF0, 0xF0, 0xF0, 0xF0, 0xF0, 0xF0, 0xF0, 0xF0, 0xF0, 0xF0,
+    0xF0, 0xF0, 0xF0, 0xF0, 0xF0, 0xF0, 0xF0, 0xF0, 0xF0, 0xF0, 0xF0, 0xF0, 0xF0, 0xF0, 0xF0, 0xF0,
+    0xF0, 0xF0, 0xF0, 0xF0, 0xF0, 0xF0, 0xF0, 0xF0, 0xF0, 0xF0, 0xF0, 0xF0, 0xF0, 0xF0, 0xF0, 0xF0,
+    0xF0, 0xF0, 0xF0, 0xF0, 0xF0, 0xF0, 0xF0, 0xF0, 0xF0, 0xF0, 0xF0, 0xF0, 0xF0, 0xF0, 0xF0, 0xF0,
+    0xF1, 0xF1, 0xF1, 0xF1, 0xF1, 0xF1, 0xF1, 0xF1, 0xF1, 0xF1, 0xF1, 0xF1, 0xF1, 0xF1, 0xF1, 0xF1,
+    0xF1, 0xF1, 0xF1, 0xF1, 0xF1, 0xF1, 0xF1, 0xF1, 0xF1, 0xF1, 0xF1, 0xF1, 0xF1, 0xF1, 0xF1, 0xF1,
+    0xF1, 0xF1, 0xF1, 0xF1, 0xF1, 0xF1, 0xF1, 0xF1, 0xF1, 0xF1, 0xF1, 0xF1, 0xF1, 0xF1, 0xF1, 0xF1,
+    0xF1, 0xF1, 0xF1, 0xF1, 0xF1, 0xF1, 0xF1, 0xF1, 0xF1, 0xF1, 0xF1, 0xF1, 0xF1, 0xF1, 0xF1, 0xF1,
+    0xF1, 0xF1, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02,
+    0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02,
+    0x13, 0x03, 0x03, 0x03, 0x03, 0x03, 0x03, 0x03, 0x03, 0x03, 0x03, 0x03, 0x03, 0x23, 0x03, 0x03,
+    0x34, 0x04, 0x04, 0x04, 0x44, 0xF1, 0xF1, 0xF1, 0xF1, 0xF1, 0xF1, 0xF1, 0xF1, 0xF1, 0xF1, 0xF1,
+];
+const UTF8_ACCEPT_RANGES: [(u8, u8); 5] = [
+    (0x80, 0xBF),
+    (0xA0, 0xBF),
+    (0x80, 0x9F),
+    (0x90, 0xBF),
+    (0x80, 0x8F),
+];
+const UTF8_LOCB: u8 = 0x80;
+const UTF8_HICB: u8 = 0xBF;
+
+fn decode_rune_next(bytes: &[u8]) -> (u32, usize) {
+    let n = bytes.len();
+    if n < 1 {
+        return (0xFFFD, 0);
+    }
+    let s0 = bytes[0];
+    let x = UTF8_FIRST[s0 as usize];
+    if x >= 0xF0 {
+        if x == 0xF0 {
+            return (s0 as u32, 1);
+        }
+        return (0xFFFD, 1);
+    }
+    let sz = (x & 7) as usize;
+    let (lo, hi) = UTF8_ACCEPT_RANGES[(x >> 4) as usize];
+    if n < sz {
+        return (0xFFFD, 1);
+    }
+    let s1 = bytes[1];
+    if s1 < lo || hi < s1 {
+        return (0xFFFD, 1);
+    }
+    if sz <= 2 {
+        return (((s0 as u32 & 0x1F) << 6) | (s1 as u32 & 0x3F), 2);
+    }
+    let s2 = bytes[2];
+    if !(UTF8_LOCB..=UTF8_HICB).contains(&s2) {
+        return (0xFFFD, 1);
+    }
+    if sz <= 3 {
+        return (
+            ((s0 as u32 & 0x0F) << 12) | ((s1 as u32 & 0x3F) << 6) | (s2 as u32 & 0x3F),
+            3,
+        );
+    }
+    let s3 = bytes[3];
+    if !(UTF8_LOCB..=UTF8_HICB).contains(&s3) {
+        return (0xFFFD, 1);
+    }
+    (
+        ((s0 as u32 & 0x07) << 18)
+            | ((s1 as u32 & 0x3F) << 12)
+            | ((s2 as u32 & 0x3F) << 6)
+            | (s3 as u32 & 0x3F),
+        4,
+    )
+}
+
 #[unsafe(no_mangle)]
 pub extern "C" fn gox5_string_next(ctx: &mut LightWeightThreadContext) -> FunctionObject {
     let frame = ctx.stack_frame_mut::<StackFrameStringNext>();
 
-    let s = frame.string.to_str().unwrap();
+    let bytes = frame.string.as_bytes();
     let index = *frame.count;
-    if let Some(c) = s.chars().nth(index) {
+    if index < bytes.len() {
+        let (rune, size) = decode_rune_next(&bytes[index..]);
         if let Some(p) = frame.index.as_mut() {
             **p = index as isize;
         }
         if let Some(p) = frame.rune.as_mut() {
-            **p = c as i32;
+            **p = rune as i32;
         }
         *frame.found = true;
-        *frame.count = index + 1;
+        *frame.count = index + size;
     } else {
         *frame.found = false;
     }
@@ -496,5 +574,196 @@ mod tests {
         assert_eq!(result, FunctionObject::new_null());
         let res = unsafe { &*result_raw };
         assert_eq!(res.as_bytes(), b"helloworld");
+    }
+
+    fn make_string(ctx: &mut LightWeightThreadContext, bytes: &[u8]) -> StringObject {
+        let mut builder = ctx.global_context().process(|mut global_context| {
+            StringObject::builder(bytes.len(), global_context.allocator())
+        });
+        builder.append_bytes(bytes);
+        builder.build()
+    }
+
+    struct NextOut {
+        index: isize,
+        rune: i32,
+        found: bool,
+        count: usize,
+    }
+
+    fn step_next(
+        ctx: &mut LightWeightThreadContext,
+        string_obj: StringObject,
+        count_in: usize,
+        use_index: bool,
+        use_rune: bool,
+    ) -> NextOut {
+        let mut index_slot: isize = -1;
+        let mut rune_slot: i32 = -1;
+        let mut found_slot: bool = false;
+        let mut count_slot: usize = count_in;
+
+        let prev_sp = ctx.stack_pointer();
+        ctx.grow_stack(mem::size_of::<StackFrameStringNext>());
+        ctx.push_frame(prev_sp, None, &[], FunctionObject::new_null());
+
+        {
+            let frame = ctx.stack_frame_mut::<StackFrameStringNext>();
+            frame.string = string_obj;
+            frame.index = if use_index {
+                Some(&mut index_slot)
+            } else {
+                None
+            };
+            frame.rune = if use_rune { Some(&mut rune_slot) } else { None };
+            frame.found = &mut found_slot;
+            frame.count = &mut count_slot;
+        }
+
+        let result = gox5_string_next(ctx);
+        assert_eq!(result, FunctionObject::new_null());
+
+        NextOut {
+            index: index_slot,
+            rune: rune_slot,
+            found: found_slot,
+            count: count_slot,
+        }
+    }
+
+    fn iterate(ctx: &mut LightWeightThreadContext, bytes: &[u8]) -> Vec<(isize, i32, bool)> {
+        let s = make_string(ctx, bytes);
+        let mut steps = Vec::new();
+        let mut count = 0;
+        loop {
+            let out = step_next(ctx, s.clone(), count, true, true);
+            count = out.count;
+            steps.push((out.index, out.rune, out.found));
+            if !out.found {
+                break;
+            }
+        }
+        steps
+    }
+
+    #[test]
+    fn test_gox5_string_next_ascii() {
+        let (mut ctx, _gc) = create_ctx();
+        let steps = iterate(&mut ctx, b"ABC");
+        assert_eq!(
+            steps,
+            vec![
+                (0, 'A' as i32, true),
+                (1, 'B' as i32, true),
+                (2, 'C' as i32, true),
+                (-1, -1, false)
+            ]
+        );
+    }
+
+    #[test]
+    fn test_gox5_string_next_multibyte() {
+        let (mut ctx, _gc) = create_ctx();
+        let steps = iterate(&mut ctx, "A€z".as_bytes());
+        assert_eq!(
+            steps,
+            vec![
+                (0, 'A' as i32, true),
+                (1, 0x20AC, true),
+                (4, 'z' as i32, true),
+                (-1, -1, false)
+            ]
+        );
+    }
+
+    #[test]
+    fn test_gox5_string_next_japanese() {
+        let (mut ctx, _gc) = create_ctx();
+        let steps = iterate(&mut ctx, "日本語".as_bytes());
+        assert_eq!(
+            steps,
+            vec![
+                (0, 0x65E5, true),
+                (3, 0x672C, true),
+                (6, 0x8A9E, true),
+                (-1, -1, false)
+            ]
+        );
+    }
+
+    #[test]
+    fn test_gox5_string_next_four_byte() {
+        let (mut ctx, _gc) = create_ctx();
+        let steps = iterate(&mut ctx, b"\xF0\x90\x80\x80z");
+        assert_eq!(
+            steps,
+            vec![(0, 0x10000, true), (4, 'z' as i32, true), (-1, -1, false)]
+        );
+    }
+
+    #[test]
+    fn test_gox5_string_next_invalid_byte() {
+        let (mut ctx, _gc) = create_ctx();
+        let steps = iterate(&mut ctx, b"A\xFFz");
+        assert_eq!(
+            steps,
+            vec![
+                (0, 'A' as i32, true),
+                (1, 0xFFFD, true),
+                (2, 'z' as i32, true),
+                (-1, -1, false)
+            ]
+        );
+    }
+
+    #[test]
+    fn test_gox5_string_next_truncated_sequence() {
+        let (mut ctx, _gc) = create_ctx();
+        let steps = iterate(&mut ctx, b"\xE2\x82");
+        assert_eq!(
+            steps,
+            vec![(0, 0xFFFD, true), (1, 0xFFFD, true), (-1, -1, false)]
+        );
+    }
+
+    #[test]
+    fn test_gox5_string_next_surrogate() {
+        let (mut ctx, _gc) = create_ctx();
+        let steps = iterate(&mut ctx, b"\xED\xA0\x80");
+        assert_eq!(
+            steps,
+            vec![
+                (0, 0xFFFD, true),
+                (1, 0xFFFD, true),
+                (2, 0xFFFD, true),
+                (-1, -1, false)
+            ]
+        );
+    }
+
+    #[test]
+    fn test_gox5_string_next_empty() {
+        let (mut ctx, _gc) = create_ctx();
+        let steps = iterate(&mut ctx, b"");
+        assert_eq!(steps, vec![(-1, -1, false)]);
+    }
+
+    #[test]
+    fn test_gox5_string_next_no_index_no_rune() {
+        let (mut ctx, _gc) = create_ctx();
+        let s = make_string(&mut ctx, "A€z".as_bytes());
+
+        let mut count = 0;
+        let mut found_sequence = Vec::new();
+        loop {
+            let out = step_next(&mut ctx, s.clone(), count, false, false);
+            count = out.count;
+            found_sequence.push(out.found);
+            if !out.found {
+                break;
+            }
+        }
+        assert_eq!(found_sequence, vec![true, true, true, false]);
+        assert_eq!(count, 5);
     }
 }
