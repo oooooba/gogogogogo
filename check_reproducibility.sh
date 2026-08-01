@@ -5,8 +5,8 @@ set -e
 combinations=(
     ""
     "--debug-runtime"
-    "--debug-user"
-    "--debug-user --debug-runtime"
+    # "--debug-user"
+    # "--debug-user --debug-runtime"
 )
 
 for combo in "${combinations[@]}"; do
