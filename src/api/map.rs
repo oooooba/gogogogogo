@@ -95,9 +95,7 @@ pub extern "C" fn gox5_map_get(ctx: &mut LightWeightThreadContext) -> FunctionOb
     let value = frame.value.clone();
     let found = map.get(key, value);
 
-    if frame.found.is_null() {
-        assert!(found);
-    } else {
+    if !frame.found.is_null() {
         let frame = ctx.stack_frame_mut::<StackFrameMapGet>();
         *frame.found.as_mut() = found;
     }

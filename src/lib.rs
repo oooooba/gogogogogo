@@ -196,7 +196,7 @@ fn create_light_weight_thread_context(
 ) -> LightWeightThreadContext {
     let (id, stack_start_addr) = global_context.process(|mut global_context| {
         let id = global_context.issue_light_weight_thread_id();
-        let addr = global_context.allocator().allocate_guarded_pages(10);
+        let addr = global_context.allocator().allocate_guarded_pages(200);
         (id, addr)
     });
     let prev_func = UserFunction::new(terminate);

@@ -1902,9 +1902,14 @@ func (ctx *Context) emitHashFunctionDefinition(typ types.Type) {
 		switch t := typ.(type) {
 		case *types.Basic:
 			switch t.Kind() {
-			case types.Invalid, types.String:
+			case types.Invalid:
 				body += "assert(false); /// not implemented\n"
 				body += "return 0;\n"
+			case types.String:
+				body += "uint64_t hash = UINT64_C(14695981039346656037); // FNV-1a 64-bit\n"
+				body += "\n"
+				body += "for (const unsigned char *p = (const unsigned char *)obj->raw; *p != 0; ++p) { hash ^= *p; hash *= UINT64_C(1099511628211); }\n"
+				body += "return hash;\n"
 			default:
 				body += "return (uintptr_t)obj->raw;\n"
 			}
