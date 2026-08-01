@@ -2,24 +2,25 @@
 
 set -e
 
-combinations=(
-    ""
-    "--debug-runtime"
-    # "--debug-user"
-    # "--debug-user --debug-runtime"
-)
+for path in $(find xtests -name '*.go' -type f | sort); do
+    base=`basename $path`
 
-for combo in "${combinations[@]}"; do
-    bin1=$(bash ./build.sh $combo xtests/generics.go)
+    if [ "$base" == "reflect.go" ]; then
+        continue
+    fi
+
+    echo -n "[$path] "
+
+    bin1=$(bash ./build.sh $path)
     hash1=$(sha256sum $bin1 | awk '{print $1}')
 
-    bin2=$(bash ./build.sh $combo xtests/generics.go)
+    bin2=$(bash ./build.sh $path)
     hash2=$(sha256sum $bin2 | awk '{print $1}')
 
     if [ "$hash1" == "$hash2" ]; then
-        echo "[$combo] PASS: $hash1"
+        echo "PASS"
     else
-        echo "[$combo] FAIL"
+        echo "FAIL"
         echo "  first:  $hash1"
         echo "  second: $hash2"
         exit 1
