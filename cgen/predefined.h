@@ -1,6 +1,7 @@
 #include <assert.h>
 #include <complex.h>
 #include <math.h>
+#include <stdatomic.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>

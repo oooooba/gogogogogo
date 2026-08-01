@@ -103,6 +103,90 @@ func isNumericKind(kind types.BasicKind) bool {
 	}
 }
 
+func (ctx *Context) emitAtomicCall(instruction *ssa.Call, callCommon *ssa.CallCommon) bool {
+	atomicFunctionOperations := map[string]string{
+		"AddInt32":              "add",
+		"AddInt64":              "add",
+		"AddUint32":             "add",
+		"AddUint64":             "add",
+		"AddUintptr":            "add",
+		"AndInt32":              "and",
+		"AndInt64":              "and",
+		"AndUint32":             "and",
+		"AndUint64":             "and",
+		"AndUintptr":            "and",
+		"CompareAndSwapInt32":   "cas",
+		"CompareAndSwapInt64":   "cas",
+		"CompareAndSwapUint32":  "cas",
+		"CompareAndSwapUint64":  "cas",
+		"CompareAndSwapUintptr": "cas",
+		"LoadInt32":             "load",
+		"LoadInt64":             "load",
+		"LoadUint32":            "load",
+		"LoadUint64":            "load",
+		"LoadUintptr":           "load",
+		"OrInt32":               "or",
+		"OrInt64":               "or",
+		"OrUint32":              "or",
+		"OrUint64":              "or",
+		"OrUintptr":             "or",
+		"StoreInt32":            "store",
+		"StoreInt64":            "store",
+		"StoreUint32":           "store",
+		"StoreUint64":           "store",
+		"StoreUintptr":          "store",
+		"SwapInt32":             "swap",
+		"SwapInt64":             "swap",
+		"SwapUint32":            "swap",
+		"SwapUint64":            "swap",
+		"SwapUintptr":           "swap",
+	}
+
+	function, ok := callCommon.Value.(*ssa.Function)
+	if !ok || function.Pkg == nil || function.Pkg.Pkg.Path() != "sync/atomic" {
+		return false
+	}
+	op, ok := atomicFunctionOperations[function.Name()]
+	if !ok {
+		return false
+	}
+	pointerType, ok := callCommon.Args[0].Type().(*types.Pointer)
+	if !ok {
+		panic(instruction)
+	}
+	rawType := createRawTypeName(pointerType.Elem())
+	addr := fmt.Sprintf("(_Atomic %s*)&(%s.raw->raw)", rawType, createValueRelName(callCommon.Args[0]))
+	result := createValueRelName(instruction)
+	switch op {
+	case "load":
+		expr := fmt.Sprintf("atomic_load_explicit(%s, memory_order_seq_cst)", addr)
+		fmt.Fprintf(ctx.stream, "%s = %s;\n", result, wrapInObject(expr, instruction.Type()))
+	case "store":
+		fmt.Fprintf(ctx.stream, "atomic_store_explicit(%s, %s.raw, memory_order_seq_cst);\n", addr, createValueRelName(callCommon.Args[1]))
+	case "add":
+		operand := createValueRelName(callCommon.Args[1])
+		expr := fmt.Sprintf("atomic_fetch_add_explicit(%s, %s.raw, memory_order_seq_cst) + %s.raw", addr, operand, operand)
+		fmt.Fprintf(ctx.stream, "%s = %s;\n", result, wrapInObject(expr, instruction.Type()))
+	case "swap":
+		expr := fmt.Sprintf("atomic_exchange_explicit(%s, %s.raw, memory_order_seq_cst)", addr, createValueRelName(callCommon.Args[1]))
+		fmt.Fprintf(ctx.stream, "%s = %s;\n", result, wrapInObject(expr, instruction.Type()))
+	case "cas":
+		fmt.Fprintf(ctx.stream, "%s expected = %s.raw;\n", rawType, createValueRelName(callCommon.Args[1]))
+		fmt.Fprintf(ctx.stream, "bool swapped = atomic_compare_exchange_strong_explicit(%s, &expected, %s.raw, memory_order_seq_cst, memory_order_seq_cst);\n", addr, createValueRelName(callCommon.Args[2]))
+		fmt.Fprintf(ctx.stream, "%s = %s;\n", result, wrapInObject("swapped", instruction.Type()))
+	case "and":
+		expr := fmt.Sprintf("atomic_fetch_and_explicit(%s, %s.raw, memory_order_seq_cst)", addr, createValueRelName(callCommon.Args[1]))
+		fmt.Fprintf(ctx.stream, "%s = %s;\n", result, wrapInObject(expr, instruction.Type()))
+	case "or":
+		expr := fmt.Sprintf("atomic_fetch_or_explicit(%s, %s.raw, memory_order_seq_cst)", addr, createValueRelName(callCommon.Args[1]))
+		fmt.Fprintf(ctx.stream, "%s = %s;\n", result, wrapInObject(expr, instruction.Type()))
+	default:
+		panic(function.Name())
+	}
+	fmt.Fprintf(ctx.stream, "\treturn %s;\n", wrapInFunctionObject(createInstructionName(instruction)))
+	return true
+}
+
 func createValueName(value ssa.Value) string {
 	if _, ok := value.(*ssa.Const); ok {
 		constVal := value.(*ssa.Const)
@@ -787,6 +871,9 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 				fmt.Fprintf(ctx.stream, "\treturn %s;\n", wrapInFunctionObject(createInstructionName(instr)))
 
 			default:
+				if ctx.emitAtomicCall(instr, callCommon) {
+					break
+				}
 				nextFunction := createValueRelName(callee)
 				signature := callCommon.Value.Type().Underlying().(*types.Signature)
 				signatureName := createSignatureName(signature, false, false)
@@ -1351,6 +1438,54 @@ func hasTypeParamInSignature(sig *types.Signature) bool {
 		}
 	}
 	return false
+}
+
+func hasTypeParameter(typ types.Type) bool {
+	return hasTypeParameterWithSeen(typ, make(map[types.Type]bool))
+}
+
+func hasTypeParameterWithSeen(typ types.Type, seen map[types.Type]bool) bool {
+	if seen[typ] {
+		return false
+	}
+	seen[typ] = true
+	switch t := typ.(type) {
+	case *types.Alias:
+		return hasTypeParameterWithSeen(t.Underlying(), seen)
+	case *types.Array:
+		return hasTypeParameterWithSeen(t.Elem(), seen)
+	case *types.Chan:
+		return hasTypeParameterWithSeen(t.Elem(), seen)
+	case *types.Map:
+		return hasTypeParameterWithSeen(t.Key(), seen) || hasTypeParameterWithSeen(t.Elem(), seen)
+	case *types.Named:
+		if t.TypeParams().Len() > 0 && t.TypeArgs().Len() == 0 {
+			return true
+		}
+		return hasTypeParameterWithSeen(t.Underlying(), seen)
+	case *types.Pointer:
+		return hasTypeParameterWithSeen(t.Elem(), seen)
+	case *types.Slice:
+		return hasTypeParameterWithSeen(t.Elem(), seen)
+	case *types.Struct:
+		for i := 0; i < t.NumFields(); i++ {
+			if hasTypeParameterWithSeen(t.Field(i).Type(), seen) {
+				return true
+			}
+		}
+		return false
+	case *types.Tuple:
+		for i := 0; i < t.Len(); i++ {
+			if hasTypeParameterWithSeen(t.At(i).Type(), seen) {
+				return true
+			}
+		}
+		return false
+	case *types.TypeParam:
+		return true
+	default:
+		return false
+	}
 }
 
 func createPackageName(pkg *types.Package) string {
@@ -2431,6 +2566,9 @@ func (ctx *Context) traverseType(pkg *ssa.Package, procedure func(typ types.Type
 	f = func(typ types.Type) {
 		if _, ok := typ.(*types.Alias); ok {
 			f(typ.Underlying())
+			return
+		}
+		if hasTypeParameter(typ) {
 			return
 		}
 		name := createTypeName(typ)
