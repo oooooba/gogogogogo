@@ -2,6 +2,8 @@
 
 set -e
 
+mkdir -p tmp
+
 run_args=("$@")
 
 exit_status=0
@@ -14,9 +16,9 @@ for path in $(find xtests -name '*.go' -type f | sort); do
 
     echo -n "[$path] "
 
-    expect_result=/tmp/raw_expect_$base.txt
-    actual_result=/tmp/raw_actual_$base.txt
-    compare_result=/tmp/compare_$base.txt
+    expect_result=tmp/raw_expect_$base.txt
+    actual_result=tmp/raw_actual_$base.txt
+    compare_result=tmp/compare_$base.txt
 
     case $base in
         panic_*)

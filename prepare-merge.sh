@@ -2,6 +2,8 @@
 
 set -ex
 
+mkdir -p tmp
+
 cargo clippy --all-targets -- -D warnings
 cargo fmt --all
 gofmt -l cgen xtests
@@ -65,9 +67,9 @@ for target in ${targets[@]}; do
 
     base=`basename $path`
 
-    expect_result=/tmp/raw_expect_$base.txt
-    actual_result=/tmp/raw_actual_$base.txt
-    compare_result=/tmp/compare_$base.txt
+    expect_result=tmp/raw_expect_$base.txt
+    actual_result=tmp/raw_actual_$base.txt
+    compare_result=tmp/compare_$base.txt
 
     if ! go run $path >$expect_result 2>&1; then
         echo "FAIL (go run crashed)"
