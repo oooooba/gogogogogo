@@ -16,38 +16,16 @@ for path in $(find xtests -name '*.go' -type f | sort); do
 
     echo -n "[$path] "
 
-    expect_result=tmp/raw_expect_$base.txt
-    actual_result=tmp/raw_actual_$base.txt
-    compare_result=tmp/compare_$base.txt
-
+    check_args=()
     case $base in
         panic_*)
-            go run $path 2>&1 | head -n 1 >$expect_result || true
-            if ! bash ./run.sh "${run_args[@]}" $path >$actual_result 2>&1; then
-                if diff -y $expect_result $actual_result >$compare_result; then
-                    echo PASS
-                else
-                    echo FAIL
-                    cat $compare_result
-                    exit_status=1
-                fi
-            else
-                echo "FAIL (exit normaly)"
-                exit_status=1
-            fi
+            check_args+=(--panic)
             ;;
-        *)
-            go run $path >$expect_result 2>&1
-            bash ./run.sh "${run_args[@]}" $path >$actual_result 2>&1 || true
-            if diff -y $expect_result $actual_result >$compare_result; then
-                echo PASS
-            else
-                echo FAIL
-                cat $compare_result
-                exit_status=1
-            fi
-            ;;
-        esac
+    esac
+
+    if ! bash ./check_equivalence.sh "${check_args[@]}" "${run_args[@]}" "$path"; then
+        exit_status=1
+    fi
 done
 
 exit $exit_status
