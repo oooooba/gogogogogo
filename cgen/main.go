@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math"
 	"os"
 	"sort"
 	"strconv"
@@ -187,13 +188,52 @@ func (ctx *Context) emitAtomicCall(instruction *ssa.Call, callCommon *ssa.CallCo
 	return true
 }
 
+func mathArchImplementation(function *ssa.Function) *ssa.Function {
+	var mathArchToPure = map[string]string{
+		"archFloor": "floor",
+		"archCeil":  "ceil",
+		"archTrunc": "trunc",
+		"archMax":   "max",
+		"archMin":   "min",
+		"archExp":   "exp",
+		"archExp2":  "exp2",
+		"archLog":   "log",
+		"archHypot": "hypot",
+	}
+
+	if function.Pkg == nil || function.Pkg.Pkg.Path() != "math" {
+		return nil
+	}
+	pureName, ok := mathArchToPure[function.Name()]
+	if !ok {
+		return nil
+	}
+	return function.Pkg.Func(pureName)
+}
+
 func createValueName(value ssa.Value) string {
 	if _, ok := value.(*ssa.Const); ok {
 		constVal := value.(*ssa.Const)
 		var full string
-		if constVal.Value != nil && constVal.Value.Kind() == constant.String {
+		switch {
+		case constVal.Value != nil && constVal.Value.Kind() == constant.String:
 			full = strconv.QuoteToASCII(constant.StringVal(constVal.Value))
-		} else {
+		case constVal.Value != nil && constVal.Value.Kind() == constant.Float:
+			if t, ok := constVal.Type().Underlying().(*types.Basic); ok {
+				switch t.Kind() {
+				case types.Float32:
+					f := float32(constVal.Float64())
+					full = fmt.Sprintf("%s(0x%x)", constVal.Type().String(), math.Float32bits(f))
+				case types.Float64:
+					f := constVal.Float64()
+					full = fmt.Sprintf("%s(0x%x)", constVal.Type().String(), math.Float64bits(f))
+				default:
+					full = strconv.QuoteToASCII(value.String())
+				}
+			} else {
+				full = strconv.QuoteToASCII(value.String())
+			}
+		default:
 			full = strconv.QuoteToASCII(value.String())
 		}
 		return encode(fmt.Sprintf("c$%s", full))
@@ -875,6 +915,11 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 					break
 				}
 				nextFunction := createValueRelName(callee)
+				if function, ok := callee.(*ssa.Function); ok {
+					if target := mathArchImplementation(function); target != nil {
+						nextFunction = createValueRelName(target)
+					}
+				}
 				signature := callCommon.Value.Type().Underlying().(*types.Signature)
 				signatureName := createSignatureName(signature, false, false)
 				ctx.switchFunction(nextFunction, signature, signatureName, createValueRelName(instr), createInstructionName(instr), func() {
