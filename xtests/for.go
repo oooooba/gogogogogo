@@ -73,6 +73,24 @@ func Test8() int {
 	return s
 }
 
+func Test9() int {
+	a, b, c := 1, 2, 3
+	for i := 0; i < 3; i++ {
+		a, b, c = b, c, a
+	}
+	return a + b*10 + c*100
+}
+
+func Test10() int {
+	b := 2.0
+	a := 1.0
+	for i := 0; i < 4; i++ {
+		nb := b*2.0 - a
+		a, b = b, nb
+	}
+	return int(a + b)
+}
+
 func main() {
 	runTest := func(testName string, test func() int) {
 		println(testName+":", test())
@@ -85,4 +103,6 @@ func main() {
 	runTest("Test6", Test6)
 	runTest("Test7", Test7)
 	runTest("Test8", Test8)
+	runTest("Test9", Test9)
+	runTest("Test10", Test10)
 }

@@ -1221,12 +1221,7 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 		)
 
 	case *ssa.Phi:
-		basicBlock := instr.Block()
-		for i, edge := range instr.Edges {
-			fmt.Fprintf(ctx.stream, "\tif (ctx->prev_func.func_ptr == %s) { %s = %s; } else\n",
-				ctx.latestNameMap[basicBlock.Preds[i]], createValueRelName(instr), createValueRelName(edge))
-		}
-		fmt.Fprintln(ctx.stream, "\t{ assert(false); }")
+		panic("unreachable: phis are emitted by emitBlockPhis")
 
 	case *ssa.Range:
 		if _, ok := instr.X.Type().(*types.Map); ok {
@@ -1647,6 +1642,41 @@ func (ctx *Context) emitFunctionDefinitionEpilogue() {
 	fmt.Fprintln(ctx.stream, "}")
 }
 
+func (ctx *Context) emitPhiAssign(dest string, instr *ssa.Phi) {
+	basicBlock := instr.Block()
+	for i, edge := range instr.Edges {
+		fmt.Fprintf(ctx.stream, "\tif (ctx->prev_func.func_ptr == %s) { %s = %s; } else\n",
+			ctx.latestNameMap[basicBlock.Preds[i]], dest, createValueRelName(edge))
+	}
+	fmt.Fprintln(ctx.stream, "\t{ assert(false); }")
+}
+
+func (ctx *Context) emitBlockPhis(basicBlock *ssa.BasicBlock) {
+	var phis []*ssa.Phi
+	for _, instr := range basicBlock.Instrs {
+		phi, ok := instr.(*ssa.Phi)
+		if !ok {
+			break
+		}
+		phis = append(phis, phi)
+	}
+	if len(phis) == 0 {
+		return
+	}
+	for _, phi := range phis {
+		tempName := createPhiTempName(phi)
+		fmt.Fprintf(ctx.stream, "\t%s %s;\n", createTypeName(phi.Type()), tempName)
+		ctx.emitPhiAssign(tempName, phi)
+	}
+	for _, phi := range phis {
+		fmt.Fprintf(ctx.stream, "\t%s = %s;\n", createValueRelName(phi), createPhiTempName(phi))
+	}
+}
+
+func createPhiTempName(phi *ssa.Phi) string {
+	return encode(fmt.Sprintf("%s$phi_temp", createValueName(phi)))
+}
+
 func (ctx *Context) emitFunctionDefinition(function *ssa.Function) {
 	if function.Pkg != nil && function.Pkg.Pkg.Name() == "runtime" && function.Name() == "init" { // ToDo
 		ctx.emitFunctionHeader(createFunctionName(function), "{")
@@ -1667,7 +1697,12 @@ func (ctx *Context) emitFunctionDefinition(function *ssa.Function) {
 	for _, basicBlock := range function.Blocks {
 		ctx.emitFunctionDefinitionPrologue(createBasicBlockName(basicBlock), frameName, hasFreeVariables)
 
+		ctx.emitBlockPhis(basicBlock)
+
 		for _, instr := range basicBlock.Instrs {
+			if _, ok := instr.(*ssa.Phi); ok {
+				continue
+			}
 			ctx.emitInstruction(instr)
 
 			if requireSwitchFunction(instr) {
