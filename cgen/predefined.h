@@ -258,8 +258,12 @@ typedef struct {
 __attribute__((unused)) static FunctionObject
 gox5_complex64_new(LightWeightThreadContext *ctx) {
     StackFrameComplex64New *frame = (void *)ctx->stack_pointer;
-    *frame->result_ptr =
-        (Complex64Object){.raw = frame->real.raw + frame->imaginary.raw * I};
+    float parts[2];
+    parts[0] = frame->real.raw;
+    parts[1] = frame->imaginary.raw;
+    Complex64Object result;
+    memcpy(&result, parts, sizeof(result));
+    *frame->result_ptr = result;
     ctx->stack_pointer = frame->common.prev_stack_pointer;
     return frame->common.resume_func;
 }
@@ -290,8 +294,12 @@ typedef struct {
 __attribute__((unused)) static FunctionObject
 gox5_complex128_new(LightWeightThreadContext *ctx) {
     StackFrameComplex128New *frame = (void *)ctx->stack_pointer;
-    *frame->result_ptr =
-        (Complex128Object){.raw = frame->real.raw + frame->imaginary.raw * I};
+    double parts[2];
+    parts[0] = frame->real.raw;
+    parts[1] = frame->imaginary.raw;
+    Complex128Object result;
+    memcpy(&result, parts, sizeof(result));
+    *frame->result_ptr = result;
     ctx->stack_pointer = frame->common.prev_stack_pointer;
     return frame->common.resume_func;
 }
