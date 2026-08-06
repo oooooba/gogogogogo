@@ -760,6 +760,13 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 				}
 
 				switch callee.Name() {
+				case "Add":
+					result := createValueRelName(instr)
+					ptr := fmt.Sprintf("%s.raw", createValueRelName(callCommon.Args[0]))
+					offset := fmt.Sprintf("%s.raw", createValueRelName(callCommon.Args[1]))
+					raw := fmt.Sprintf("(void*)((uintptr_t)%s + (uintptr_t)%s)", ptr, offset)
+					fmt.Fprintf(ctx.stream, "%s = %s;\n", result, wrapInObject(raw, instr.Type()))
+
 				case "append":
 					result := createValueRelName(instr)
 					result += ".raw"
@@ -904,6 +911,34 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 					ctx.switchFunctionToCallRuntimeApi("gox5_check_non_nil", "StackFrameCheckNonNil", createInstructionName(instr), &result, nil,
 						paramArgPair{param: "pointer", arg: fmt.Sprintf("%s.raw", createValueRelName(callCommon.Args[0]))},
 					)
+
+				case "Slice":
+					result := createValueRelName(instr)
+					ptr := fmt.Sprintf("%s.raw", createValueRelName(callCommon.Args[0]))
+					length := fmt.Sprintf("%s.raw", createValueRelName(callCommon.Args[1]))
+					raw := fmt.Sprintf("(SliceObject){.addr = %s, .size = (uintptr_t)%s, .capacity = (uintptr_t)%s}", ptr, length, length)
+					fmt.Fprintf(ctx.stream, "%s = %s;\n", result, wrapInObject(raw, instr.Type()))
+
+				case "SliceData":
+					result := createValueRelName(instr)
+					elemType := instr.Type().Underlying().(*types.Pointer).Elem()
+					raw := fmt.Sprintf("(%s*)%s.raw.addr", createTypeName(elemType), createValueRelName(callCommon.Args[0]))
+					fmt.Fprintf(ctx.stream, "%s = %s;\n", result, wrapInObject(raw, instr.Type()))
+
+				case "String":
+					result := createValueRelName(instr)
+					ptr := fmt.Sprintf("%s.raw", createValueRelName(callCommon.Args[0]))
+					length := fmt.Sprintf("%s.raw", createValueRelName(callCommon.Args[1]))
+					byteSlice := fmt.Sprintf("(SliceObject){.addr = %s, .size = (uintptr_t)%s, .capacity = (uintptr_t)%s}", ptr, length, length)
+					ctx.switchFunctionToCallRuntimeApi("gox5_string_new_from_byte_slice", "StackFrameStringNewFromByteSlice", createInstructionName(instr), &result, nil,
+						paramArgPair{param: "byte_slice", arg: byteSlice},
+					)
+
+				case "StringData":
+					result := createValueRelName(instr)
+					elemType := instr.Type().Underlying().(*types.Pointer).Elem()
+					raw := fmt.Sprintf("(%s*)%s.raw", createTypeName(elemType), createValueRelName(callCommon.Args[0]))
+					fmt.Fprintf(ctx.stream, "%s = %s;\n", result, wrapInObject(raw, instr.Type()))
 
 				default:
 					panic(fmt.Sprintf("unsuported builtin function: %s", callee.Name()))
