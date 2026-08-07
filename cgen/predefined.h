@@ -459,13 +459,6 @@ DECLARE_RUNTIME_API(defer_execute, StackFrameDeferExecute);
 
 typedef struct {
     StackFrameCommon common;
-} StackFrameSchedule;
-DECLARE_RUNTIME_API(schedule, StackFrameSchedule);
-
-#define f_24_runtime_2E_mcall gox5_lwt_yield
-
-typedef struct {
-    StackFrameCommon common;
     ChannelObject channel;
     const void *data;
     TypeId type_id;
@@ -502,6 +495,11 @@ typedef struct {
     void *arg_buffer[0];
 } StackFrameLwtSpawnInvoke;
 DECLARE_RUNTIME_API(lwt_spawn_invoke, StackFrameLwtSpawnInvoke);
+
+typedef struct {
+    StackFrameCommon common;
+} StackFrameLwtYield;
+DECLARE_RUNTIME_API(lwt_yield, StackFrameLwtYield);
 
 typedef struct {
     StackFrameCommon common;

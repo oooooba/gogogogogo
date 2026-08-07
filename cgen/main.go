@@ -544,6 +544,47 @@ func (ctx *Context) emitCallCommonForMethod(callCommon *ssa.CallCommon, nextFunc
 	)
 }
 
+func isFunctionBodySkippedPackage(pkg *ssa.Package) bool {
+	return isFunctionBodySkippedPackagePath(pkg.Pkg.Path())
+}
+
+func isFunctionBodySkippedPackagePath(path string) bool {
+	if path == "runtime" {
+		return true
+	}
+	if path == "internal/cpu" {
+		return false
+	}
+	if strings.HasPrefix(path, "internal/") || strings.HasPrefix(path, "runtime/internal/") {
+		return true
+	}
+	return false
+}
+
+func (ctx *Context) emitSpecialRuntimeCall(callee *ssa.Function, instr *ssa.Call, callCommon *ssa.CallCommon) bool {
+	pkgPath := ""
+	if callee.Pkg != nil {
+		pkgPath = callee.Pkg.Pkg.Path()
+	}
+	funcName := callee.Name()
+
+	if isFunctionBodySkippedPackagePath(pkgPath) {
+		if funcName == "init" {
+			fmt.Fprintf(ctx.stream, "\treturn %s;\n", wrapInFunctionObject(createInstructionName(instr)))
+			return true
+		}
+
+		if pkgPath == "runtime" && funcName == "Gosched" {
+			ctx.switchFunctionToCallRuntimeApi("gox5_lwt_yield", "StackFrameLwtYield", createInstructionName(instr), nil, nil)
+			return true
+		}
+
+		panic(fmt.Sprintf("unexpected call to function in skipped package: %s.%s (called from %s)", pkgPath, funcName, createFunctionName(instr.Parent())))
+	}
+
+	return false
+}
+
 func (ctx *Context) emitBuiltinPrintWrapper(name string, callCommon *ssa.CallCommon, instr ssa.Instruction) string {
 	if ctx.builtinPrintWrapperNames == nil {
 		ctx.builtinPrintWrapperNames = make(map[*ssa.CallCommon]string)
@@ -941,13 +982,18 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 					fmt.Fprintf(ctx.stream, "%s = %s;\n", result, wrapInObject(raw, instr.Type()))
 
 				default:
-					panic(fmt.Sprintf("unsuported builtin function: %s", callee.Name()))
+					panic(fmt.Sprintf("unsuported builtin function: %s (in %s)", callee.Name(), createFunctionName(instr.Parent())))
 				}
 				fmt.Fprintf(ctx.stream, "\treturn %s;\n", wrapInFunctionObject(createInstructionName(instr)))
 
 			default:
 				if ctx.emitAtomicCall(instr, callCommon) {
 					break
+				}
+				if function, ok := callee.(*ssa.Function); ok {
+					if ctx.emitSpecialRuntimeCall(function, instr, callCommon) {
+						break
+					}
 				}
 				nextFunction := createValueRelName(callee)
 				if function, ok := callee.(*ssa.Function); ok {
@@ -2234,7 +2280,7 @@ func (ctx *Context) emitInterfaceTableDeclaration(typ types.Type, allowSet map[s
 	if _, ok := allowSet[createTypeName(typ)]; ok {
 		for i := 0; i < methodSet.Len(); i++ {
 			function := ctx.program.MethodValue(methodSet.At(i))
-			if function != nil {
+			if function != nil && !isMethodFromSkippedPackage(function) {
 				entryIndexes = append(entryIndexes, i)
 			}
 		}
@@ -2250,7 +2296,7 @@ func (ctx *Context) emitInterfaceTableDefinition(typ types.Type, allowSet map[st
 	if _, ok := allowSet[createTypeName(typ)]; ok {
 		for i := 0; i < methodSet.Len(); i++ {
 			function := ctx.program.MethodValue(methodSet.At(i))
-			if function != nil {
+			if function != nil && !isMethodFromSkippedPackage(function) {
 				entryIndexes = append(entryIndexes, i)
 			}
 		}
@@ -2264,6 +2310,40 @@ func (ctx *Context) emitInterfaceTableDefinition(typ types.Type, allowSet map[st
 		fmt.Fprintf(ctx.stream, "\t{\"%s\", %s},\n", methodName, method)
 	}
 	fmt.Fprintln(ctx.stream, "}};")
+}
+
+func isMethodFromSkippedPackage(function *ssa.Function) bool {
+	origin := function.Origin()
+	if origin != nil {
+		function = origin
+	}
+	if function.Pkg != nil && isFunctionBodySkippedPackage(function.Pkg) {
+		return true
+	}
+	if function.Signature != nil && function.Signature.Recv() != nil {
+		if pkgPath := packagePathOfType(function.Signature.Recv().Type()); isFunctionBodySkippedPackagePath(pkgPath) {
+			return true
+		}
+	}
+	return false
+}
+
+func packagePathOfType(typ types.Type) string {
+	switch typ := typ.(type) {
+	case *types.Alias:
+		return packagePathOfType(typ.Rhs())
+	case *types.Array:
+		return packagePathOfType(typ.Elem())
+	case *types.Named:
+		if obj := typ.Obj(); obj != nil && obj.Pkg() != nil {
+			return obj.Pkg().Path()
+		}
+	case *types.Pointer:
+		return packagePathOfType(typ.Elem())
+	case *types.Slice:
+		return packagePathOfType(typ.Elem())
+	}
+	return ""
 }
 
 func (ctx *Context) emitGlobalVariableDeclaration(gv *ssa.Global) {
@@ -2540,6 +2620,9 @@ func computeInstanceOwners(program *ssa.Program) map[*ssa.Function]*ssa.Package 
 	}
 
 	for fn, pkgs := range reachers {
+		if origin := fn.Origin(); origin != nil && origin.Pkg != nil && isFunctionBodySkippedPackagePath(origin.Pkg.Pkg.Path()) {
+			continue
+		}
 		owner := pkgs[0]
 		if origin := fn.Origin(); origin != nil && origin.Pkg != nil {
 			for _, pkg := range pkgs {
@@ -2589,7 +2672,7 @@ func (ctx *Context) collectInstances(pkg *ssa.Package) {
 			walk(anon)
 		}
 
-		if fn.Pkg == nil && len(fn.TypeArgs()) > 0 {
+		if fn.Pkg == nil && len(fn.TypeArgs()) > 0 && fn.Parent() == nil {
 			if ctx.instanceOwners[fn] == pkg {
 				ctx.extraFunctions = append(ctx.extraFunctions, fn)
 			}
@@ -3103,6 +3186,9 @@ func generateMakefile(makefile *os.File, program *ssa.Program) {
 
 	cFileRule("shared_definition.c")
 	for _, pkg := range allPackagesSorted(program) {
+		if isFunctionBodySkippedPackage(pkg) {
+			continue
+		}
 		outputName := fmt.Sprintf("package_%s.c", createPackageName(pkg.Pkg))
 		cFileRule(outputName, "shared_definition.c")
 	}
@@ -3207,6 +3293,9 @@ func emitProgram(program *ssa.Program, buildDirname string) {
 	}()
 
 	for _, pkg := range allPackagesSorted(program) {
+		if isFunctionBodySkippedPackage(pkg) {
+			continue
+		}
 		waitGroup.Add(1)
 		go func(pkg *ssa.Package) {
 			outputName := fmt.Sprintf("package_%s.c", createPackageName(pkg.Pkg))
