@@ -479,6 +479,11 @@ DECLARE_RUNTIME_API(panic_recover, StackFramePanicRecover);
 
 typedef struct {
     StackFrameCommon common;
+} StackFrameLwtExit;
+DECLARE_RUNTIME_API(lwt_exit, StackFrameLwtExit);
+
+typedef struct {
+    StackFrameCommon common;
     FunctionObject function_object;
     uintptr_t result_size;
     uintptr_t num_arg_buffer_words;

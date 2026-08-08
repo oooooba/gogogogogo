@@ -1,4 +1,5 @@
 use std::mem;
+use std::process;
 
 use crate::FunctionObject;
 use crate::StackFrameCommon;
@@ -8,6 +9,55 @@ use crate::light_weight_thread::LightWeightThreadContext;
 use crate::object::interface::Interface;
 use crate::object::string::StringObject;
 use crate::word_chunk::WordChunk;
+
+#[repr(C)]
+struct StackFrameLwtExit {
+    common: StackFrameCommon,
+}
+
+extern "C" fn lwt_exit_body(ctx: &mut LightWeightThreadContext) -> FunctionObject {
+    let prev_stack_pointer = ctx.stack_pointer();
+    let frame = ctx.stack_frame_mut::<StackFrameLwtExit>();
+    let prev_frame = frame.common.prev_stack_frame_mut::<StackFrameCommon>();
+    match prev_frame.defer_stack_mut().pop() {
+        Some(mut entry) => {
+            // Keep the stack frame at the time it is called by user function.
+            ctx.grow_stack(mem::size_of::<StackFrameLwtExit>());
+            let entry = unsafe { entry.as_mut() };
+            let result_pointer = if entry.result_size() > 0 {
+                Some(ctx.stack_pointer() as *const ())
+            } else {
+                None
+            };
+            ctx.grow_stack(entry.result_size());
+            ctx.push_frame(
+                prev_stack_pointer,
+                result_pointer,
+                entry.args(),
+                FunctionObject::from_user_function(UserFunction::new(lwt_exit_body)),
+            );
+            entry.func()
+        }
+        None => {
+            ctx.pop_frame();
+            if ctx.is_stack_empty() {
+                ctx.suspend();
+                ctx.terminate();
+                if ctx.is_main() {
+                    process::exit(0);
+                }
+                FunctionObject::new_null()
+            } else {
+                FunctionObject::from_user_function(UserFunction::new(lwt_exit_body))
+            }
+        }
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn gox5_lwt_exit(_ctx: &mut LightWeightThreadContext) -> FunctionObject {
+    FunctionObject::from_user_function(UserFunction::new(lwt_exit_body))
+}
 
 fn spawn<F>(ctx: &mut LightWeightThreadContext, param: F) -> FunctionObject
 where
@@ -96,6 +146,7 @@ mod tests {
     use super::*;
     use crate::ObjectAllocator;
     use crate::UserFunction;
+    use crate::defer_stack::DeferStackEntry;
     use crate::global_context;
     use std::mem;
 
@@ -156,6 +207,98 @@ mod tests {
         let func = FunctionObject::new_null();
         let ctx = create_light_weight_thread_context(gc.dupulicate(), func);
         (ctx, gc)
+    }
+
+    #[test]
+    fn test_gox5_lwt_exit() {
+        // The first LWT of a fresh global context is the main one (id 0).
+        let (_main_ctx, gc) = create_ctx();
+        // Create a second LWT so that is_main() is false: calling
+        // gox5_lwt_exit must not terminate the process.
+        let mut ctx =
+            create_light_weight_thread_context(gc.dupulicate(), FunctionObject::new_null());
+        assert!(!ctx.is_main());
+        let prev_sp = ctx.stack_pointer();
+        ctx.grow_stack(mem::size_of::<crate::StackFrameCommon>());
+        let resume_func = FunctionObject::from_user_function(UserFunction::new(dummy_resume));
+        ctx.push_frame(prev_sp, None, &[], resume_func.clone());
+
+        assert!(!ctx.is_terminated());
+        // gox5_lwt_exit starts unwinding the stack; the returned function object
+        // must be invoked to finish the unwinding and terminate the LWT.
+        let result = gox5_lwt_exit(&mut ctx);
+        let (exit_body, _) = result.extract_user_function();
+        let result = exit_body.invoke(&mut ctx);
+        assert!(ctx.is_terminated());
+        assert_eq!(result, FunctionObject::new_null());
+    }
+
+    static DEFERRED_RAN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+    unsafe extern "C" fn mark_deferred(ctx: &mut LightWeightThreadContext) -> FunctionObject {
+        DEFERRED_RAN.store(true, std::sync::atomic::Ordering::SeqCst);
+        let frame = ctx.stack_frame::<StackFrameCommon>();
+        frame.resume_func.clone()
+    }
+
+    #[test]
+    fn test_gox5_lwt_exit_runs_deferred_function() {
+        // The first LWT of a fresh global context is the main one (id 0).
+        let (_main_ctx, gc) = create_ctx();
+        // Create a second LWT so that is_main() is false: calling
+        // gox5_lwt_exit must not terminate the process.
+        let mut ctx =
+            create_light_weight_thread_context(gc.dupulicate(), FunctionObject::new_null());
+        assert!(!ctx.is_main());
+
+        // Frame A: the user function frame that registered the deferred function.
+        let sp_root = ctx.stack_pointer();
+        ctx.grow_stack(mem::size_of::<crate::StackFrameCommon>());
+        ctx.push_frame(
+            sp_root,
+            None,
+            &[],
+            FunctionObject::from_user_function(UserFunction::new(dummy_resume)),
+        );
+
+        // Register a deferred function on frame A's defer stack.
+        let mut args_buf: Vec<usize> = vec![0];
+        let entry = Box::into_raw(Box::new(DeferStackEntry::new(
+            FunctionObject::from_user_function(UserFunction::new(mark_deferred)),
+            0,
+            std::ptr::NonNull::new(args_buf.as_mut_ptr() as *mut WordChunk)
+                .expect("non-null args pointer"),
+        )));
+        {
+            let frame = ctx.stack_frame_mut::<StackFrameCommon>();
+            frame
+                .defer_stack_mut()
+                .push(std::ptr::NonNull::new(entry).expect("non-null entry pointer"));
+        }
+
+        // Frame B: the frame pushed by the Goexit runtime-call instruction in
+        // the generated code; gox5_lwt_exit is invoked with this frame on top.
+        let sp_a = ctx.stack_pointer();
+        ctx.grow_stack(mem::size_of::<StackFrameLwtExit>());
+        ctx.push_frame(
+            sp_a,
+            None,
+            &[],
+            FunctionObject::from_user_function(UserFunction::new(lwt_exit_body)),
+        );
+
+        DEFERRED_RAN.store(false, std::sync::atomic::Ordering::SeqCst);
+        let mut func = gox5_lwt_exit(&mut ctx);
+        while func != FunctionObject::new_null() {
+            let (next, _) = func.extract_user_function();
+            func = next.invoke(&mut ctx);
+        }
+
+        assert!(DEFERRED_RAN.load(std::sync::atomic::Ordering::SeqCst));
+        assert!(ctx.is_terminated());
+        unsafe {
+            drop(Box::from_raw(entry));
+        }
     }
 
     #[test]

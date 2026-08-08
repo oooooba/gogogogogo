@@ -574,6 +574,10 @@ func (ctx *Context) emitSpecialRuntimeCall(callee *ssa.Function, instr *ssa.Call
 			return true
 		}
 
+		if pkgPath == "runtime" && funcName == "Goexit" {
+			ctx.switchFunctionToCallRuntimeApi("gox5_lwt_exit", "StackFrameLwtExit", "NULL", nil, nil)
+			return true
+		}
 		if pkgPath == "runtime" && funcName == "Gosched" {
 			ctx.switchFunctionToCallRuntimeApi("gox5_lwt_yield", "StackFrameLwtYield", createInstructionName(instr), nil, nil)
 			return true
@@ -1140,6 +1144,26 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 					},
 					paramArgPair{param: "function_object", arg: functionObject},
 					paramArgPair{param: "result_size", arg: resultSize},
+				)
+			} else if builtin, ok := callCommon.Value.(*ssa.Builtin); ok && builtin.Name() == "close" {
+				// The channel argument is copied to the deferred function frame's
+				// arg_buffer, which is at the same offset as StackFrameChannelClose.channel,
+				// so gox5_channel_close can be invoked directly as the deferred function.
+				ctx.switchFunctionToCallRuntimeApi("gox5_defer_register", "StackFrameDeferRegister", resumeFunction, nil,
+					func() {
+						fmt.Fprintf(ctx.stream, "intptr_t num_arg_buffer_words = 0;\n")
+						for i, arg := range callCommon.Args {
+							argValue := createValueRelName(arg)
+							argType := createTypeName(arg.Type())
+							argPtr := fmt.Sprintf("ptr%d", i)
+							fmt.Fprintf(ctx.stream, "%s* %s = (void*)&next_frame->arg_buffer[num_arg_buffer_words]; // param[%d]\n", argType, argPtr, i)
+							fmt.Fprintf(ctx.stream, "*%s = %s;\n", argPtr, argValue)
+							fmt.Fprintf(ctx.stream, "num_arg_buffer_words += sizeof(%s) / sizeof(next_frame->arg_buffer[0]);\n", argType)
+						}
+						fmt.Fprintf(ctx.stream, "next_frame->num_arg_buffer_words = num_arg_buffer_words;\n")
+					},
+					paramArgPair{param: "function_object", arg: wrapInFunctionObject("gox5_channel_close")},
+					paramArgPair{param: "result_size", arg: "0"},
 				)
 			} else {
 				ctx.emitCallCommon(callCommon, "gox5_defer_register", "StackFrameDeferRegister", resumeFunction)
