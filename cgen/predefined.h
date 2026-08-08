@@ -381,6 +381,13 @@ DECLARE_RUNTIME_API(map_new, StackFrameMapNew);
 
 typedef struct {
     StackFrameCommon common;
+    Interface *result_ptr;
+    Interface map;
+} StackFrameMapClone;
+DECLARE_RUNTIME_API(map_clone, StackFrameMapClone);
+
+typedef struct {
+    StackFrameCommon common;
     StringObject *result_ptr;
     SliceObject byte_slice;
 } StackFrameStringNewFromByteSlice;

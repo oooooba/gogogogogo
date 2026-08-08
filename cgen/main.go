@@ -584,6 +584,17 @@ func (ctx *Context) emitSpecialRuntimeCall(callee *ssa.Function, instr *ssa.Call
 		}
 	}
 
+	if pkgPath == "maps" {
+		switch funcName {
+		case "clone":
+			result := createValueRelName(instr)
+			ctx.switchFunctionToCallRuntimeApi("gox5_map_clone", "StackFrameMapClone", createInstructionName(instr), &result, nil,
+				paramArgPair{param: "map", arg: createValueRelName(callCommon.Args[0])},
+			)
+			return true
+		}
+	}
+
 	if isFunctionBodySkippedPackagePath(pkgPath) {
 		if funcName == "init" {
 			fmt.Fprintf(ctx.stream, "\treturn %s;\n", wrapInFunctionObject(createInstructionName(instr)))
@@ -1274,7 +1285,13 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 				value = fmt.Sprintf("&%s", result)
 				found = "NULL"
 			}
-			ctx.switchFunctionToCallRuntimeApi("gox5_map_get", "StackFrameMapGet", createInstructionName(instr), nil, nil,
+			valueType := instr.X.Type().Underlying().(*types.Map).Elem()
+			ctx.switchFunctionToCallRuntimeApi("gox5_map_get", "StackFrameMapGet", createInstructionName(instr), nil,
+				func() {
+					fmt.Fprintf(ctx.stream, "if (next_frame->map.raw == NULL) {\n")
+					fmt.Fprintf(ctx.stream, "\tmemset(next_frame->value, 0, sizeof(%s));\n", createTypeName(valueType))
+					fmt.Fprintf(ctx.stream, "}\n")
+				},
 				paramArgPair{param: "map", arg: fmt.Sprintf("%s.raw", createValueRelName(instr.X))},
 				paramArgPair{param: "key", arg: key},
 				paramArgPair{param: "value", arg: value},
@@ -1593,13 +1610,16 @@ func createFunctionName(function *ssa.Function) string {
 }
 
 func hasTypeParamInSignature(sig *types.Signature) bool {
+	if sig.Recv() != nil && hasTypeParameter(sig.Recv().Type()) {
+		return true
+	}
 	for i := 0; i < sig.Params().Len(); i++ {
-		if _, ok := sig.Params().At(i).Type().(*types.TypeParam); ok {
+		if hasTypeParameter(sig.Params().At(i).Type()) {
 			return true
 		}
 	}
 	for i := 0; i < sig.Results().Len(); i++ {
-		if _, ok := sig.Results().At(i).Type().(*types.TypeParam); ok {
+		if hasTypeParameter(sig.Results().At(i).Type()) {
 			return true
 		}
 	}

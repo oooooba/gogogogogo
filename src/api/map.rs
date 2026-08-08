@@ -5,6 +5,7 @@ use crate::FunctionObject;
 use crate::LightWeightThreadContext;
 use crate::ObjectPtr;
 use crate::StackFrameCommon;
+use crate::object::interface::Interface;
 use crate::object::map::MapObject;
 use crate::type_id::TypeId;
 
@@ -16,11 +17,7 @@ struct StackFrameMapNew<'a> {
     value_type: TypeId,
 }
 
-fn allocate_map(
-    ctx: &mut LightWeightThreadContext,
-    key_type: TypeId,
-    value_type: TypeId,
-) -> *mut MapObject {
+fn allocate_map(ctx: &mut LightWeightThreadContext, map: MapObject) -> *mut MapObject {
     let object_size = mem::size_of::<MapObject>();
     let ptr = ctx.global_context().process(|mut global_context| {
         global_context
@@ -30,9 +27,8 @@ fn allocate_map(
             }) as *mut MapObject
     });
 
-    let map = MapObject::new(key_type, value_type);
     unsafe {
-        *ptr = map;
+        ptr::write(ptr, map);
     }
     ptr
 }
@@ -41,11 +37,50 @@ fn allocate_map(
 pub extern "C" fn gox5_map_new(ctx: &mut LightWeightThreadContext) -> FunctionObject {
     let frame = ctx.stack_frame::<StackFrameMapNew>();
 
-    let ptr = allocate_map(ctx, frame.key_type, frame.value_type);
+    let ptr = allocate_map(ctx, MapObject::new(frame.key_type, frame.value_type));
     let ptr = ObjectPtr(ptr as *mut ());
 
     let frame = ctx.stack_frame_mut::<StackFrameMapNew>();
     *frame.result_ptr = ptr;
+
+    ctx.pop_frame()
+}
+
+#[repr(C)]
+struct StackFrameMapClone<'a> {
+    common: StackFrameCommon,
+    result_ptr: &'a mut Interface,
+    map: Interface,
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn gox5_map_clone(ctx: &mut LightWeightThreadContext) -> FunctionObject {
+    let frame = ctx.stack_frame::<StackFrameMapClone>();
+
+    if frame.map.is_nil() {
+        let frame = ctx.stack_frame_mut::<StackFrameMapClone>();
+        *frame.result_ptr = Interface::nil();
+        return ctx.pop_frame();
+    }
+
+    let type_id = *frame.map.type_id();
+    let receiver = frame.map.receiver();
+    let map_ptr = unsafe { *(receiver.0 as *const *mut ()) };
+    let map = unsafe { &*(map_ptr as *const MapObject) };
+    let cloned = map.clone();
+
+    let ptr = allocate_map(ctx, cloned);
+    let slot_size = mem::size_of::<*mut ()>();
+    let slot = ctx
+        .global_context()
+        .process(|mut global_context| global_context.allocator().allocate(slot_size, |_ptr| {}));
+    unsafe {
+        *(slot as *mut *mut ()) = ptr as *mut ();
+    }
+    let interface = Interface::new(ObjectPtr(slot), type_id);
+
+    let frame = ctx.stack_frame_mut::<StackFrameMapClone>();
+    *frame.result_ptr = interface;
 
     ctx.pop_frame()
 }
@@ -86,14 +121,14 @@ struct StackFrameMapGet {
 pub extern "C" fn gox5_map_get(ctx: &mut LightWeightThreadContext) -> FunctionObject {
     let frame = ctx.stack_frame::<StackFrameMapGet>();
 
-    if frame.map.is_null() {
-        unimplemented!()
+    let found = if frame.map.is_null() {
+        false
+    } else {
+        let map = frame.map.as_ref::<MapObject>();
+        let key = frame.key.clone();
+        let value = frame.value.clone();
+        map.get(key, value)
     };
-
-    let map = frame.map.as_ref::<MapObject>();
-    let key = frame.key.clone();
-    let value = frame.value.clone();
-    let found = map.get(key, value);
 
     if !frame.found.is_null() {
         let frame = ctx.stack_frame_mut::<StackFrameMapGet>();
@@ -141,19 +176,21 @@ struct StackFrameMapNext {
 pub extern "C" fn gox5_map_next(ctx: &mut LightWeightThreadContext) -> FunctionObject {
     let frame = ctx.stack_frame::<StackFrameMapNext>();
 
-    if frame.map.is_null() {
-        unimplemented!()
+    let found = if frame.map.is_null() {
+        false
+    } else {
+        let mut map = frame.map.clone();
+        let map = map.as_mut::<MapObject>();
+        let key = frame.key.clone();
+        let value = frame.value.clone();
+        let nth = *frame.count.as_ref::<usize>();
+        map.nth(key, value, nth)
     };
-
-    let map = frame.map.as_ref::<MapObject>();
-    let key = frame.key.clone();
-    let value = frame.value.clone();
-    let nth = *frame.count.as_ref::<usize>();
-    let found = map.nth(key, value, nth);
 
     let frame = ctx.stack_frame_mut::<StackFrameMapNext>();
     *frame.found.as_mut() = found;
     if found {
+        let nth = *frame.count.as_ref::<usize>();
         *frame.count.as_mut() = nth + 1;
     }
 
@@ -307,7 +344,7 @@ mod tests {
             ptr::drop_in_place(ptr as *mut MapObject);
         }) as *mut MapObject;
         unsafe {
-            *ptr = map;
+            ptr::write(ptr, map);
         }
         ObjectPtr(ptr as *mut ())
     }

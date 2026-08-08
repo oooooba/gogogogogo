@@ -5,6 +5,7 @@ use std::slice;
 use crate::type_id::TypeId;
 use crate::{ObjectAllocator, ObjectPtr};
 
+#[derive(Clone)]
 struct Key {
     ptr: ObjectPtr,
     type_id: TypeId,
@@ -33,10 +34,12 @@ impl Hash for Key {
     }
 }
 
+#[derive(Clone)]
 pub(crate) struct MapObject {
     map: HashMap<Key, ObjectPtr>,
     key_type: TypeId,
     value_type: TypeId,
+    iteration_snapshot: Option<Vec<(ObjectPtr, ObjectPtr)>>,
 }
 
 impl MapObject {
@@ -45,6 +48,7 @@ impl MapObject {
             map: HashMap::new(),
             key_type,
             value_type,
+            iteration_snapshot: None,
         }
     }
 
@@ -94,12 +98,24 @@ impl MapObject {
         self.map.remove(&key);
     }
 
-    pub fn nth(&self, key: ObjectPtr, value: ObjectPtr, nth: usize) -> bool {
-        match self.map.iter().nth(nth) {
+    pub fn nth(&mut self, key: ObjectPtr, value: ObjectPtr, nth: usize) -> bool {
+        if nth == 0 {
+            self.iteration_snapshot = Some(
+                self.map
+                    .iter()
+                    .map(|(k, v)| (k.ptr.clone(), v.clone()))
+                    .collect(),
+            );
+        }
+        match self
+            .iteration_snapshot
+            .as_ref()
+            .and_then(|snapshot| snapshot.get(nth))
+        {
             Some((k, v)) => {
                 if !key.is_null() {
                     let object_size = self.key_type.size();
-                    let src = unsafe { slice::from_raw_parts(k.ptr.0 as *const u8, object_size) };
+                    let src = unsafe { slice::from_raw_parts(k.0 as *const u8, object_size) };
                     let dst = unsafe { slice::from_raw_parts_mut(key.0 as *mut u8, object_size) };
                     dst.copy_from_slice(src);
                 }
