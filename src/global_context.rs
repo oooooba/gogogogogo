@@ -8,6 +8,7 @@ pub struct GlobalContext {
     created_light_weight_thread_count: usize,
     allocator: Box<dyn ObjectAllocator>,
     run_queue: VecDeque<LightWeightThreadContext>,
+    coros: Vec<Option<LightWeightThreadContext>>,
 }
 
 impl GlobalContext {
@@ -16,6 +17,7 @@ impl GlobalContext {
             created_light_weight_thread_count: 0,
             allocator,
             run_queue: VecDeque::new(),
+            coros: Vec::new(),
         }
     }
 
@@ -35,6 +37,31 @@ impl GlobalContext {
 
     pub fn pop_light_weight_thread(&mut self) -> Option<LightWeightThreadContext> {
         self.run_queue.pop_front()
+    }
+
+    pub fn reserve_coro_slot(&mut self) -> usize {
+        self.coros.push(None);
+        self.coros.len() - 1
+    }
+
+    pub fn park_coro(&mut self, slot: usize, ctx: LightWeightThreadContext) {
+        let parked = self
+            .coros
+            .get_mut(slot)
+            .unwrap_or_else(|| panic!("invalid coro slot: {}", slot));
+        assert!(parked.is_none(), "coro slot {} already occupied", slot);
+        *parked = Some(ctx);
+    }
+
+    pub fn unpark_coro(&mut self, slot: usize) -> LightWeightThreadContext {
+        let mut ctx = self
+            .coros
+            .get_mut(slot)
+            .unwrap_or_else(|| panic!("invalid coro slot: {}", slot))
+            .take()
+            .unwrap_or_else(|| panic!("coroswitch on empty coro slot: {}", slot));
+        ctx.take_coro_slot();
+        ctx
     }
 }
 

@@ -20,6 +20,7 @@ pub struct LightWeightThreadContext {
     control_flags: usize,
     panic_data: Interface,
     initial_stack_pointer: *mut StackFrame,
+    coro_slot: Option<usize>,
 }
 
 impl LightWeightThreadContext {
@@ -40,6 +41,7 @@ impl LightWeightThreadContext {
             control_flags: 0,
             panic_data: Interface::nil(),
             initial_stack_pointer: stack_pointer,
+            coro_slot: None,
         }
     }
 
@@ -170,6 +172,14 @@ impl LightWeightThreadContext {
 
     pub(crate) fn is_panicking(&self) -> bool {
         self.control_flags & 0b100 > 0
+    }
+
+    pub(crate) fn set_coro_slot(&mut self, slot: Option<usize>) {
+        self.coro_slot = slot;
+    }
+
+    pub(crate) fn take_coro_slot(&mut self) -> Option<usize> {
+        self.coro_slot.take()
     }
 }
 

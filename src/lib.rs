@@ -257,7 +257,11 @@ fn main() {
         execute(&mut ctx);
         if !ctx.is_terminated() {
             global_context.process(|mut global_context| {
-                global_context.push_light_weight_thread(ctx);
+                if let Some(slot) = ctx.take_coro_slot() {
+                    global_context.park_coro(slot, ctx);
+                } else {
+                    global_context.push_light_weight_thread(ctx);
+                }
             });
         }
     }

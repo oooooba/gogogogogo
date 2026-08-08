@@ -250,6 +250,19 @@ DECLARE_RUNTIME_API(closure_new, StackFrameClosureNew);
 
 typedef struct {
     StackFrameCommon common;
+    void *result_ptr;
+    FunctionObject function_object;
+} StackFrameCoroNew;
+DECLARE_RUNTIME_API(coro_new, StackFrameCoroNew);
+
+typedef struct {
+    StackFrameCommon common;
+    void *coro;
+} StackFrameCoroSwitch;
+DECLARE_RUNTIME_API(coro_switch, StackFrameCoroSwitch);
+
+typedef struct {
+    StackFrameCommon common;
     Complex64Object *result_ptr;
     Float32Object real;
     Float32Object imaginary;

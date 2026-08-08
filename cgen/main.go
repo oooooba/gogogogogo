@@ -549,7 +549,7 @@ func isFunctionBodySkippedPackage(pkg *ssa.Package) bool {
 }
 
 func isFunctionBodySkippedPackagePath(path string) bool {
-	if path == "runtime" {
+	if path == "runtime" || path == "internal/race" || path == "internal/abi" {
 		return true
 	}
 	if path == "internal/cpu" {
@@ -568,6 +568,22 @@ func (ctx *Context) emitSpecialRuntimeCall(callee *ssa.Function, instr *ssa.Call
 	}
 	funcName := callee.Name()
 
+	if pkgPath == "iter" {
+		switch funcName {
+		case "newcoro":
+			result := createValueRelName(instr)
+			ctx.switchFunctionToCallRuntimeApi("gox5_coro_new", "StackFrameCoroNew", createInstructionName(instr), &result, nil,
+				paramArgPair{param: "function_object", arg: createValueRelName(callCommon.Args[0])},
+			)
+			return true
+		case "coroswitch":
+			ctx.switchFunctionToCallRuntimeApi("gox5_coro_switch", "StackFrameCoroSwitch", createInstructionName(instr), nil, nil,
+				paramArgPair{param: "coro", arg: fmt.Sprintf("%s.raw", createValueRelName(callCommon.Args[0]))},
+			)
+			return true
+		}
+	}
+
 	if isFunctionBodySkippedPackagePath(pkgPath) {
 		if funcName == "init" {
 			fmt.Fprintf(ctx.stream, "\treturn %s;\n", wrapInFunctionObject(createInstructionName(instr)))
@@ -580,6 +596,11 @@ func (ctx *Context) emitSpecialRuntimeCall(callee *ssa.Function, instr *ssa.Call
 		}
 		if pkgPath == "runtime" && funcName == "Gosched" {
 			ctx.switchFunctionToCallRuntimeApi("gox5_lwt_yield", "StackFrameLwtYield", createInstructionName(instr), nil, nil)
+			return true
+		}
+
+		if strings.HasPrefix(pkgPath, "internal/race") {
+			fmt.Fprintf(ctx.stream, "\treturn %s;\n", wrapInFunctionObject(createInstructionName(instr)))
 			return true
 		}
 
