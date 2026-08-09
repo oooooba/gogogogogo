@@ -1,0 +1,69 @@
+name: Regression Test
+
+on:
+  push:
+
+concurrency:
+  group: regression-test-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  regression-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install system packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ccache clang-format
+
+      - name: Setup Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.26.5'
+          cache: true
+          cache-dependency-path: 'cgen/go.sum' 
+
+      - name: Install Go tool
+        run: go install golang.org/x/tools/gopls@latest
+
+      - name: Install Go packages
+        run: go mod tidy
+        working-directory: ./cgen
+
+      - name: Install Rust stable toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - name: Install Rust nightly toolchain with miri
+        run: rustup toolchain install nightly --component miri
+
+      - name: Cache cargo registry and build artifacts
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            cargo-${{ runner.os }}-
+
+      - name: Cache result of ccache
+        uses: actions/cache@v5
+        with:
+          path: ~/.ccache
+          key: ccache-${{ runner.os }}-${{ github.run_id }}
+          restore-keys: ccache-${{ runner.os }}-
+
+      - name: Limit ccache size
+        run: ccache -M 1G
+
+      - name: Check formatting
+        run: bash check_formatting.sh
+
+      - name: Check regression
+        run: bash check_regression.sh --full
