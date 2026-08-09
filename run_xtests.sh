@@ -14,6 +14,19 @@ for path in $(find xtests -name '*.go' -type f | sort); do
         continue
     fi
 
+    if [ "$base" == "unicode.go" ]; then
+        skip=false
+        for run_arg in "${run_args[@]}"; do
+            if [ "$run_arg" == "--debug-user" ]; then
+                skip=true
+            fi
+        done
+        if [ "$skip" = "true" ]; then
+            echo "[$path] SKIP (unicode.go is too slow with --debug-user)"
+            continue
+        fi
+    fi
+
     echo -n "[$path] "
 
     check_args=()

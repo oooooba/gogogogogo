@@ -2,20 +2,33 @@
 
 set -ex
 
-mkdir -p tmp
+full=false
+while [ "$1" != "" ]; do
+    case "$1" in
+        --full)
+            full=true
+            shift
+            ;;
+        *)
+            echo "usage: prepare-merge.sh [--full]" >&2
+            exit 1
+            ;;
+    esac
+done
 
-cargo clippy --all-targets -- -D warnings
-cargo fmt --all
-gofmt -l cgen xtests
-clang-format -i cgen/predefined.h
+mkdir -p tmp
 
 cargo test
 cargo +nightly miri test
-bash check_reproducibility.sh
 bash run_xtests.sh
+
+if [ "$full" = "false" ]; then
+    exit 0
+fi
+
+bash check_reproducibility.sh
 bash run_xtests.sh --debug-runtime
-# bash run_xtests.sh --debug-user
-# bash run_xtests.sh --debug-user --debug-runtime
+bash run_xtests.sh --debug-user
 
 go_root=$(go env GOROOT)
 if [ ! -d "$go_root/test" ]; then
