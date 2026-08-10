@@ -219,6 +219,16 @@ func Test15() int {
 	return v
 }
 
+func Test16() int {
+	ch := make(chan int)
+	go close(ch)
+	_, ok := <-ch
+	if ok {
+		return 0
+	}
+	return 16
+}
+
 func main() {
 	runTest := func(testName string, test func() int) {
 		println(testName+":", test())
@@ -238,4 +248,5 @@ func main() {
 	runTest("Test13", Test13)
 	runTest("Test14", Test14)
 	runTest("Test15", Test15)
+	runTest("Test16", Test16)
 }

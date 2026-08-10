@@ -461,6 +461,62 @@ func (ctx *Context) switchFunctionToCallRuntimeApi(nextFunction string, nextFunc
 	fmt.Fprintf(ctx.stream, "return %s;\n", wrapInFunctionObject(nextFunction))
 }
 
+func (ctx *Context) emitArgBufferCopies(args []ssa.Value) {
+	fmt.Fprintf(ctx.stream, "intptr_t num_arg_buffer_words = 0;\n")
+	for i, arg := range args {
+		argValue := createValueRelName(arg)
+		argType := createTypeName(arg.Type())
+		argPtr := fmt.Sprintf("ptr%d", i)
+		fmt.Fprintf(ctx.stream, "%s* %s = (void*)&next_frame->arg_buffer[num_arg_buffer_words]; // param[%d]\n", argType, argPtr, i)
+		fmt.Fprintf(ctx.stream, "*%s = %s;\n", argPtr, argValue)
+		fmt.Fprintf(ctx.stream, "num_arg_buffer_words += sizeof(%s) / sizeof(next_frame->arg_buffer[0]);\n", argType)
+	}
+	fmt.Fprintf(ctx.stream, "next_frame->num_arg_buffer_words = num_arg_buffer_words;\n")
+}
+
+func (ctx *Context) emitGoOrDefer(instr ssa.Instruction, callCommon *ssa.CallCommon, registerApi string, registerFrame string, invokeApi string, invokeFrame string, builtinPrintSupported bool) {
+	resumeFunction := createInstructionName(instr)
+	if callCommon.Method != nil {
+		ctx.emitCallCommonForMethod(callCommon, invokeApi, invokeFrame, resumeFunction)
+		return
+	}
+	if builtin, ok := callCommon.Value.(*ssa.Builtin); ok && builtinPrintSupported && (builtin.Name() == "print" || builtin.Name() == "println") {
+		wrapperName := ctx.emitBuiltinPrintWrapper(builtin.Name(), callCommon, instr)
+		signature := callCommon.Value.Type().Underlying().(*types.Signature)
+		resultSize := "0"
+		switch signature.Results().Len() {
+		case 0:
+			// do nothing
+		case 1:
+			resultSize = fmt.Sprintf("sizeof(%s)", createTypeName(signature.Results().At(0).Type()))
+		default:
+			resultSize = fmt.Sprintf("sizeof(%s)", createTypeName(signature.Results()))
+		}
+		ctx.switchFunctionToCallRuntimeApi(registerApi, registerFrame, resumeFunction, nil,
+			func() {
+				ctx.emitArgBufferCopies(callCommon.Args)
+			},
+			paramArgPair{param: "function_object", arg: wrapInFunctionObject(wrapperName)},
+			paramArgPair{param: "result_size", arg: resultSize},
+		)
+		return
+	}
+	if builtin, ok := callCommon.Value.(*ssa.Builtin); ok && builtin.Name() == "close" {
+		// The channel argument is copied to the frame's arg_buffer, which is at the
+		// same offset as StackFrameChannelClose.channel, so gox5_channel_close can be
+		// invoked directly as the entry function.
+		ctx.switchFunctionToCallRuntimeApi(registerApi, registerFrame, resumeFunction, nil,
+			func() {
+				ctx.emitArgBufferCopies(callCommon.Args)
+			},
+			paramArgPair{param: "function_object", arg: wrapInFunctionObject("gox5_channel_close")},
+			paramArgPair{param: "result_size", arg: "0"},
+		)
+		return
+	}
+	ctx.emitCallCommon(callCommon, registerApi, registerFrame, resumeFunction)
+}
+
 func (ctx *Context) emitCallCommon(callCommon *ssa.CallCommon, nextFunction string, nextFunctionFrame string, resumeFunction string) {
 	if callCommon.Method != nil {
 		panic("method not supported")
@@ -490,16 +546,7 @@ func (ctx *Context) emitCallCommon(callCommon *ssa.CallCommon, nextFunction stri
 
 	ctx.switchFunctionToCallRuntimeApi(nextFunction, nextFunctionFrame, resumeFunction, nil,
 		func() {
-			fmt.Fprintf(ctx.stream, "intptr_t num_arg_buffer_words = 0;\n")
-			for i, arg := range callCommon.Args {
-				argValue := createValueRelName(arg)
-				argType := createTypeName(arg.Type())
-				argPtr := fmt.Sprintf("ptr%d", i)
-				fmt.Fprintf(ctx.stream, "%s* %s = (void*)&next_frame->arg_buffer[num_arg_buffer_words]; // param[%d]\n", argType, argPtr, i)
-				fmt.Fprintf(ctx.stream, "*%s = %s;\n", argPtr, argValue)
-				fmt.Fprintf(ctx.stream, "num_arg_buffer_words += sizeof(%s) / sizeof(next_frame->arg_buffer[0]);\n", argType)
-			}
-			fmt.Fprintf(ctx.stream, "next_frame->num_arg_buffer_words = num_arg_buffer_words;\n")
+			ctx.emitArgBufferCopies(callCommon.Args)
 		},
 		paramArgPair{param: "function_object", arg: functionObject},
 		paramArgPair{param: "result_size", arg: resultSize},
@@ -1176,64 +1223,7 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 		}
 
 	case *ssa.Defer:
-		callCommon := instr.Common()
-		resumeFunction := createInstructionName(instr)
-		if callCommon.Method == nil {
-			if builtin, ok := callCommon.Value.(*ssa.Builtin); ok && (builtin.Name() == "print" || builtin.Name() == "println") {
-				wrapperName := ctx.emitBuiltinPrintWrapper(builtin.Name(), callCommon, instr)
-				functionObject := wrapInFunctionObject(wrapperName)
-				signature := callCommon.Value.Type().Underlying().(*types.Signature)
-				resultSize := "0"
-				switch signature.Results().Len() {
-				case 0:
-					// do nothing
-				case 1:
-					resultSize = fmt.Sprintf("sizeof(%s)", createTypeName(signature.Results().At(0).Type()))
-				default:
-					resultSize = fmt.Sprintf("sizeof(%s)", createTypeName(signature.Results()))
-				}
-				ctx.switchFunctionToCallRuntimeApi("gox5_defer_register", "StackFrameDeferRegister", resumeFunction, nil,
-					func() {
-						fmt.Fprintf(ctx.stream, "intptr_t num_arg_buffer_words = 0;\n")
-						for i, arg := range callCommon.Args {
-							argValue := createValueRelName(arg)
-							argType := createTypeName(arg.Type())
-							argPtr := fmt.Sprintf("ptr%d", i)
-							fmt.Fprintf(ctx.stream, "%s* %s = (void*)&next_frame->arg_buffer[num_arg_buffer_words]; // param[%d]\n", argType, argPtr, i)
-							fmt.Fprintf(ctx.stream, "*%s = %s;\n", argPtr, argValue)
-							fmt.Fprintf(ctx.stream, "num_arg_buffer_words += sizeof(%s) / sizeof(next_frame->arg_buffer[0]);\n", argType)
-						}
-						fmt.Fprintf(ctx.stream, "next_frame->num_arg_buffer_words = num_arg_buffer_words;\n")
-					},
-					paramArgPair{param: "function_object", arg: functionObject},
-					paramArgPair{param: "result_size", arg: resultSize},
-				)
-			} else if builtin, ok := callCommon.Value.(*ssa.Builtin); ok && builtin.Name() == "close" {
-				// The channel argument is copied to the deferred function frame's
-				// arg_buffer, which is at the same offset as StackFrameChannelClose.channel,
-				// so gox5_channel_close can be invoked directly as the deferred function.
-				ctx.switchFunctionToCallRuntimeApi("gox5_defer_register", "StackFrameDeferRegister", resumeFunction, nil,
-					func() {
-						fmt.Fprintf(ctx.stream, "intptr_t num_arg_buffer_words = 0;\n")
-						for i, arg := range callCommon.Args {
-							argValue := createValueRelName(arg)
-							argType := createTypeName(arg.Type())
-							argPtr := fmt.Sprintf("ptr%d", i)
-							fmt.Fprintf(ctx.stream, "%s* %s = (void*)&next_frame->arg_buffer[num_arg_buffer_words]; // param[%d]\n", argType, argPtr, i)
-							fmt.Fprintf(ctx.stream, "*%s = %s;\n", argPtr, argValue)
-							fmt.Fprintf(ctx.stream, "num_arg_buffer_words += sizeof(%s) / sizeof(next_frame->arg_buffer[0]);\n", argType)
-						}
-						fmt.Fprintf(ctx.stream, "next_frame->num_arg_buffer_words = num_arg_buffer_words;\n")
-					},
-					paramArgPair{param: "function_object", arg: wrapInFunctionObject("gox5_channel_close")},
-					paramArgPair{param: "result_size", arg: "0"},
-				)
-			} else {
-				ctx.emitCallCommon(callCommon, "gox5_defer_register", "StackFrameDeferRegister", resumeFunction)
-			}
-		} else {
-			ctx.emitCallCommonForMethod(callCommon, "gox5_defer_register_invoke", "StackFrameDeferRegisterInvoke", resumeFunction)
-		}
+		ctx.emitGoOrDefer(instr, instr.Common(), "gox5_defer_register", "StackFrameDeferRegister", "gox5_defer_register_invoke", "StackFrameDeferRegisterInvoke", true)
 
 	case *ssa.Extract:
 		fmt.Fprintf(ctx.stream, "%s = %s.raw.e%d;\n", createValueRelName(instr), createValueRelName(instr.Tuple), instr.Index)
@@ -1279,13 +1269,7 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 		fmt.Fprintf(ctx.stream, "%s = %s;\n", createValueRelName(instr), wrapInObject("raw", instr.Type()))
 
 	case *ssa.Go:
-		callCommon := instr.Common()
-		resumeFunction := createInstructionName(instr)
-		if callCommon.Method == nil {
-			ctx.emitCallCommon(callCommon, "gox5_lwt_spawn", "StackFrameLwtSpawn", resumeFunction)
-		} else {
-			ctx.emitCallCommonForMethod(callCommon, "gox5_lwt_spawn_invoke", "StackFrameLwtSpawnInvoke", resumeFunction)
-		}
+		ctx.emitGoOrDefer(instr, instr.Common(), "gox5_lwt_spawn", "StackFrameLwtSpawn", "gox5_lwt_spawn_invoke", "StackFrameLwtSpawnInvoke", false)
 
 	case *ssa.If:
 		fmt.Fprintf(ctx.stream, "\treturn %s.raw ? %s : %s;\n", createValueRelName(instr.Cond),
