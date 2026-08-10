@@ -609,6 +609,53 @@ func isFunctionBodySkippedPackagePath(path string) bool {
 	return false
 }
 
+func isFunctionBodySkipped(fn *ssa.Function) bool {
+	if origin := fn.Origin(); origin != nil {
+		fn = origin
+	}
+	if fn.Pkg != nil && isFunctionBodySkippedPackagePath(fn.Pkg.Pkg.Path()) {
+		return true
+	}
+	for _, block := range fn.Blocks {
+		for _, instr := range block.Instrs {
+			var common *ssa.CallCommon
+			switch instr := instr.(type) {
+			case *ssa.Call:
+				common = instr.Common()
+			case *ssa.Go:
+				common = instr.Common()
+			case *ssa.Defer:
+				common = instr.Common()
+			}
+			if common == nil {
+				continue
+			}
+			if f, ok := common.Value.(*ssa.Function); ok {
+				if origin := f.Origin(); origin != nil {
+					f = origin
+				}
+				if f.Pkg == nil || !isFunctionBodySkippedPackagePath(f.Pkg.Pkg.Path()) {
+					continue
+				}
+				if f.Name() == "init" {
+					continue
+				}
+				switch f.Pkg.Pkg.Path() {
+				case "runtime":
+					if f.Name() == "Goexit" || f.Name() == "Gosched" {
+						continue
+					}
+				}
+				if strings.HasPrefix(f.Pkg.Pkg.Path(), "internal/race") {
+					continue
+				}
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func (ctx *Context) emitSpecialRuntimeCall(callee *ssa.Function, instr *ssa.Call, callCommon *ssa.CallCommon) bool {
 	pkgPath := ""
 	if callee.Pkg != nil {
@@ -3213,6 +3260,9 @@ func (ctx *Context) emitPackage(pkg *ssa.Package) {
 	foundConstValueSet := make(map[string]struct{})
 	ctx.traverseFunction(pkg, func(function *ssa.Function) {
 		if function.Blocks == nil {
+			return
+		}
+		if isFunctionBodySkipped(function) {
 			return
 		}
 		ctx.traverseValue(function, func(value ssa.Value) {
