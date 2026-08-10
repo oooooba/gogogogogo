@@ -17,7 +17,15 @@ jobs:
       - name: Install system packages
         run: |
           sudo apt-get update
-          sudo apt-get install -y ccache clang-format
+          sudo apt-get install -y sysstat ccache clang-format
+
+      - name: Start monitoring
+        run: |
+          mkdir -p tmp
+          iostat -dx 1 >tmp/iostat.log &
+          echo $! >tmp/iostat_pid.txt
+          vmstat 1 >tmp/vmstat.log &
+          echo $! >tmp/vmstat_pid.txt
 
       - name: Setup Go
         uses: actions/setup-go@v6
@@ -67,3 +75,18 @@ jobs:
 
       - name: Check regression
         run: bash check_regression.sh --full
+
+      - name: Stop monitoring
+        run: |
+          kill $(cat tmp/iostat_pid.txt) || true
+          kill $(cat tmp/vmstat_pid.txt) || true
+
+      - name: Metrics of ccache
+        run: ccache -s >tmp/ccache_metrics.txt
+
+      - name: Upload logs and temporary files
+        uses: actions/upload-artifact@v6
+        with:
+          name: logs
+          path: tmp
+          retention-days: 7
