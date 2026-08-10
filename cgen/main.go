@@ -878,6 +878,10 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 
 				case "clear":
 					switch t := callCommon.Args[0].Type().Underlying().(type) {
+					case *types.Map:
+						ctx.switchFunctionToCallRuntimeApi("gox5_map_clear", "StackFrameMapClear", createInstructionName(instr), nil, nil,
+							paramArgPair{param: "map", arg: fmt.Sprintf("%s.raw", createValueRelName(callCommon.Args[0]))},
+						)
 					case *types.Slice:
 						slice := createValueRelName(callCommon.Args[0])
 						elemType := t.Elem()

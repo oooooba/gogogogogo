@@ -47,6 +47,25 @@ pub extern "C" fn gox5_map_new(ctx: &mut LightWeightThreadContext) -> FunctionOb
 }
 
 #[repr(C)]
+struct StackFrameMapClear {
+    common: StackFrameCommon,
+    map: ObjectPtr,
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn gox5_map_clear(ctx: &mut LightWeightThreadContext) -> FunctionObject {
+    let frame = ctx.stack_frame::<StackFrameMapClear>();
+
+    if !frame.map.is_null() {
+        let mut map = frame.map.clone();
+        let map = map.as_mut::<MapObject>();
+        map.clear();
+    }
+
+    ctx.pop_frame()
+}
+
+#[repr(C)]
 struct StackFrameMapClone<'a> {
     common: StackFrameCommon,
     result_ptr: &'a mut Interface,
@@ -469,6 +488,62 @@ mod tests {
         frame.key = ObjectPtr(ptr::null_mut());
 
         let result = gox5_map_delete(&mut ctx);
+        assert_eq!(result, FunctionObject::new_null());
+    }
+
+    #[test]
+    fn test_gox5_map_clear() {
+        let mut allocator = MockObjectAllocator::new();
+        let map = MapObject::new(test_type_id(), test_type_id());
+        let map_ptr = make_map_ptr(&mut allocator, map);
+
+        let (mut ctx, _gc) = create_ctx();
+
+        for (key, value) in [(1isize, 10isize), (2, 20), (3, 30)] {
+            let key = make_isize_ptr(&mut allocator, key);
+            let value = make_isize_ptr(&mut allocator, value);
+
+            let prev_sp = ctx.stack_pointer();
+            ctx.grow_stack(mem::size_of::<StackFrameMapSet>());
+            ctx.push_frame(prev_sp, None, &[], FunctionObject::new_null());
+
+            let frame = ctx.stack_frame_mut::<StackFrameMapSet>();
+            frame.map = map_ptr.clone();
+            frame.key = key;
+            frame.value = value;
+
+            let result = gox5_map_set(&mut ctx);
+            assert_eq!(result, FunctionObject::new_null());
+        }
+
+        let map = map_ptr.as_ref::<MapObject>();
+        assert_eq!(map.len(), 3);
+
+        let prev_sp = ctx.stack_pointer();
+        ctx.grow_stack(mem::size_of::<StackFrameMapClear>());
+        ctx.push_frame(prev_sp, None, &[], FunctionObject::new_null());
+
+        let frame = ctx.stack_frame_mut::<StackFrameMapClear>();
+        frame.map = map_ptr.clone();
+
+        let result = gox5_map_clear(&mut ctx);
+        assert_eq!(result, FunctionObject::new_null());
+
+        let map = map_ptr.as_ref::<MapObject>();
+        assert_eq!(map.len(), 0);
+    }
+
+    #[test]
+    fn test_gox5_map_clear_null() {
+        let (mut ctx, _gc) = create_ctx();
+        let prev_sp = ctx.stack_pointer();
+        ctx.grow_stack(mem::size_of::<StackFrameMapClear>());
+        ctx.push_frame(prev_sp, None, &[], FunctionObject::new_null());
+
+        let frame = ctx.stack_frame_mut::<StackFrameMapClear>();
+        frame.map = ObjectPtr(ptr::null_mut());
+
+        let result = gox5_map_clear(&mut ctx);
         assert_eq!(result, FunctionObject::new_null());
     }
 }

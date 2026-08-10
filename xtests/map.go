@@ -236,6 +236,56 @@ func Test12() int {
 	return 12
 }
 
+func Test13() int {
+	m := map[int]int{1: 10, 2: 20, 3: 30}
+	if len(m) != 3 {
+		return 0
+	}
+	clear(m)
+	if len(m) != 0 {
+		return 1
+	}
+	if v, ok := m[1]; ok || v != 0 {
+		return 2
+	}
+	return 13
+}
+
+func Test14() int {
+	var m map[int]int
+	clear(m) // no-op on nil map
+	if m != nil {
+		return 0
+	}
+	if len(m) != 0 {
+		return 1
+	}
+	return 14
+}
+
+func Test15() int {
+	m := map[int]int{1: 10, 2: 20, 3: 30}
+	clear(m)
+	count := 0
+	for k, v := range m {
+		count++
+		if k != 0 || v != 0 {
+			return k + v
+		}
+	}
+	if count != 0 {
+		return count
+	}
+	m[7] = 77
+	if len(m) != 1 {
+		return 1
+	}
+	if m[7] != 77 {
+		return 2
+	}
+	return 15
+}
+
 func main() {
 	runTest := func(testName string, test func() int) {
 		println(testName+":", test())
@@ -252,4 +302,7 @@ func main() {
 	runTest("Test10", Test10)
 	runTest("Test11", Test11)
 	runTest("Test12", Test12)
+	runTest("Test13", Test13)
+	runTest("Test14", Test14)
+	runTest("Test15", Test15)
 }

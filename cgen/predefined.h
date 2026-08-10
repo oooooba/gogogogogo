@@ -412,6 +412,12 @@ DECLARE_RUNTIME_API(string_new_from_rune_slice,
 typedef struct {
     StackFrameCommon common;
     MapObject map;
+} StackFrameMapClear;
+DECLARE_RUNTIME_API(map_clear, StackFrameMapClear);
+
+typedef struct {
+    StackFrameCommon common;
+    MapObject map;
     const void *key;
 } StackFrameMapDelete;
 DECLARE_RUNTIME_API(map_delete, StackFrameMapDelete);

@@ -98,6 +98,11 @@ impl MapObject {
         self.map.remove(&key);
     }
 
+    pub fn clear(&mut self) {
+        self.map.clear();
+        self.iteration_snapshot = None;
+    }
+
     pub fn nth(&mut self, key: ObjectPtr, value: ObjectPtr, nth: usize) -> bool {
         if nth == 0 {
             self.iteration_snapshot = Some(
@@ -347,5 +352,43 @@ mod tests {
         map.set(key, value, &mut allocator);
         let out_key = make_result_ptr(&mut allocator);
         assert!(map.nth(out_key, ObjectPtr(ptr::null_mut()), 0));
+    }
+
+    #[test]
+    fn test_map_clear() {
+        let mut allocator = MockObjectAllocator::new();
+        let mut map = MapObject::new(test_type_id(), test_type_id());
+        for (k, v) in [(1isize, 10isize), (2, 20), (3, 30)] {
+            let key = make_isize_ptr(&mut allocator, k);
+            let value = make_isize_ptr(&mut allocator, v);
+            map.set(key, value, &mut allocator);
+        }
+        assert_eq!(map.len(), 3);
+
+        map.clear();
+        assert_eq!(map.len(), 0);
+
+        let key = make_isize_ptr(&mut allocator, 1);
+        let result = make_result_ptr(&mut allocator);
+        assert!(!map.get(key, result));
+    }
+
+    #[test]
+    fn test_map_clear_resets_iteration() {
+        let mut allocator = MockObjectAllocator::new();
+        let mut map = MapObject::new(test_type_id(), test_type_id());
+        let key1 = make_isize_ptr(&mut allocator, 1);
+        let value1 = make_isize_ptr(&mut allocator, 10);
+        map.set(key1, value1, &mut allocator);
+        let key2 = make_isize_ptr(&mut allocator, 2);
+        let value2 = make_isize_ptr(&mut allocator, 20);
+        map.set(key2, value2, &mut allocator);
+
+        let out_key = make_result_ptr(&mut allocator);
+        let out_value = make_result_ptr(&mut allocator);
+        assert!(map.nth(out_key.clone(), out_value.clone(), 0));
+
+        map.clear();
+        assert!(!map.nth(out_key, out_value, 0));
     }
 }
