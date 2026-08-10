@@ -735,7 +735,14 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 			fmt.Fprintf(ctx.stream, "bool raw = %s(&%s, &%s) %s true;", equalFunc, createValueRelName(instr.X), createValueRelName(instr.Y), instr.Op)
 			raw = "raw"
 		case token.LSS, token.LEQ, token.GTR, token.GEQ:
-			raw = fmt.Sprintf("%s.raw %s %s.raw", createValueRelName(instr.X), instr.Op.String(), createValueRelName(instr.Y))
+			if t, ok := instr.X.Type().Underlying().(*types.Basic); ok && t.Kind() == types.String {
+				raw = fmt.Sprintf("strcmp(%s.raw ? %s.raw : \"\", %s.raw ? %s.raw : \"\") %s 0",
+					createValueRelName(instr.X), createValueRelName(instr.X),
+					createValueRelName(instr.Y), createValueRelName(instr.Y),
+					instr.Op.String())
+			} else {
+				raw = fmt.Sprintf("%s.raw %s %s.raw", createValueRelName(instr.X), instr.Op.String(), createValueRelName(instr.Y))
+			}
 		case token.ADD:
 			if t, ok := instr.Type().Underlying().(*types.Basic); ok && t.Kind() == types.String {
 				result := createValueRelName(instr)
@@ -869,6 +876,16 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 						paramArgPair{param: "slice", arg: fmt.Sprintf("%s.raw", createValueRelName(callCommon.Args[0]))},
 					)
 
+				case "clear":
+					switch t := callCommon.Args[0].Type().Underlying().(type) {
+					case *types.Slice:
+						slice := createValueRelName(callCommon.Args[0])
+						elemType := t.Elem()
+						fmt.Fprintf(ctx.stream, "if (%s.raw.size != 0) { memset(%s.raw.addr, 0, %s.raw.size * sizeof(%s)); }\n", slice, slice, slice, createTypeName(elemType))
+					default:
+						panic(fmt.Sprintf("unsupported argument for clear: %s (%s)", callCommon.Args[0], t))
+					}
+
 				case "close":
 					ctx.switchFunctionToCallRuntimeApi("gox5_channel_close", "StackFrameChannelClose", createInstructionName(instr), nil, nil,
 						paramArgPair{param: "channel", arg: fmt.Sprintf("%s.raw", createValueRelName(callCommon.Args[0]))},
@@ -947,7 +964,8 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 					result := createValueRelName(instr)
 					arg := callCommon.Args[0]
 					basic, ok := arg.Type().Underlying().(*types.Basic)
-					if !ok || !isNumericKind(basic.Kind()) {
+					isString := ok && basic.Kind() == types.String
+					if !ok || (!isNumericKind(basic.Kind()) && !isString) {
 						panic(fmt.Sprintf("unsupported argument for %s: %s (%s)", callee.Name(), arg, arg.Type()))
 					}
 					op := ">"
@@ -957,7 +975,11 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 					expr := fmt.Sprintf("%s.raw", createValueRelName(arg))
 					for _, next := range callCommon.Args[1:] {
 						rhs := fmt.Sprintf("%s.raw", createValueRelName(next))
-						expr = fmt.Sprintf("(%s %s %s ? %s : %s)", expr, op, rhs, expr, rhs)
+						if isString {
+							expr = fmt.Sprintf("(strcmp(%s ? %s : \"\", %s ? %s : \"\") %s 0 ? %s : %s)", expr, expr, rhs, rhs, op, expr, rhs)
+						} else {
+							expr = fmt.Sprintf("(%s %s %s ? %s : %s)", expr, op, rhs, expr, rhs)
+						}
 					}
 					fmt.Fprintf(ctx.stream, "%s = %s;\n", result, wrapInObject(expr, instr.Type()))
 
@@ -988,6 +1010,11 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 					ctx.switchFunctionToCallRuntimeApi("gox5_check_non_nil", "StackFrameCheckNonNil", createInstructionName(instr), &result, nil,
 						paramArgPair{param: "pointer", arg: fmt.Sprintf("%s.raw", createValueRelName(callCommon.Args[0]))},
 					)
+
+				case "Sizeof":
+					result := createValueRelName(instr)
+					expr := fmt.Sprintf("sizeof(%s)", createTypeName(callCommon.Args[0].Type()))
+					fmt.Fprintf(ctx.stream, "%s = %s;\n", result, wrapInObject(expr, instr.Type()))
 
 				case "Slice":
 					result := createValueRelName(instr)
@@ -1513,10 +1540,15 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 				endIndex = fmt.Sprintf("%s.raw", createValueRelName(instr.High))
 			}
 
+			capacity := length
+			if instr.Max != nil {
+				capacity = fmt.Sprintf("%s.raw", createValueRelName(instr.Max))
+			}
+
 			fmt.Fprintf(ctx.stream, "%s = %s;\n", createValueRelName(instr), wrapInObject("0", instr.Type()))
 			fmt.Fprintf(ctx.stream, "%s.typed.ptr = %s.%s + %s;\n", createValueRelName(instr), createValueRelName(instr.X), ptr, startIndex)
 			fmt.Fprintf(ctx.stream, "%s.typed.size = %s - %s;\n", createValueRelName(instr), endIndex, startIndex)
-			fmt.Fprintf(ctx.stream, "%s.typed.capacity = %s - %s;\n", createValueRelName(instr), length, startIndex)
+			fmt.Fprintf(ctx.stream, "%s.typed.capacity = %s - %s;\n", createValueRelName(instr), capacity, startIndex)
 		}
 
 	case *ssa.Store:
@@ -2257,6 +2289,9 @@ func (ctx *Context) emitEqualFunctionDefinition(typ types.Type) {
 			case types.Invalid:
 				body += "return true;\n"
 			case types.String:
+				body += "if (lhs->raw == rhs->raw) { return true; }\n"
+				body += "if (lhs->raw == NULL) { return rhs->raw[0] == '\\0'; }\n"
+				body += "if (rhs->raw == NULL) { return lhs->raw[0] == '\\0'; }\n"
 				body += "return strcmp(lhs->raw, rhs->raw) == 0;\n"
 			default:
 				body += "return lhs->raw == rhs->raw;\n"
@@ -2769,11 +2804,16 @@ func sortedPackageMembers(pkg *ssa.Package) []ssa.Member {
 }
 
 func (ctx *Context) traverseFunction(pkg *ssa.Package, procedure func(function *ssa.Function)) {
+	visited := make(map[*ssa.Function]struct{})
 	var f func(function *ssa.Function)
 	f = func(function *ssa.Function) {
 		if function == nil {
 			return
 		}
+		if _, ok := visited[function]; ok {
+			return
+		}
+		visited[function] = struct{}{}
 		if function.TypeParams().Len() > 0 && len(function.TypeArgs()) == 0 {
 			return
 		}

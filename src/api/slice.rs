@@ -86,7 +86,13 @@ fn reallocate_slice(
     let result_slice = result.as_bytes_mut(elem_size);
     let base_len = base.size() * elem_size;
     let extend_len = extend_bytes.len();
-    result_slice[base_len..base_len + extend_len].clone_from_slice(&extend_bytes[..extend_len]);
+    let src = extend_bytes.as_ptr();
+    let dst = unsafe { result_slice.as_mut_ptr().add(base_len) };
+    unsafe {
+        let src = core::hint::black_box(src);
+        let dst = core::hint::black_box(dst);
+        ptr::copy(src, dst, extend_len);
+    }
     result
 }
 
@@ -151,11 +157,11 @@ pub extern "C" fn gox5_slice_append_string(ctx: &mut LightWeightThreadContext) -
     ctx.pop_frame()
 }
 
-fn copy_slice(dst: &mut SliceObject, elem_size: usize, src: &[u8]) -> usize {
+fn copy_slice(dst: &mut SliceObject, elem_size: usize, src: &[u8], src_size: usize) -> usize {
     assert!(elem_size > 0);
     assert!(src.len().is_multiple_of(elem_size));
 
-    let copy_count = cmp::min(src.len() / elem_size, dst.size());
+    let copy_count = cmp::min(src_size, dst.size());
     let src = src.as_ptr();
     let dst = dst.as_bytes_mut(elem_size).as_mut_ptr();
     unsafe {
@@ -180,7 +186,12 @@ struct StackFrameSliceCopy<'a> {
 pub extern "C" fn gox5_slice_copy(ctx: &mut LightWeightThreadContext) -> FunctionObject {
     let frame = ctx.stack_frame_mut::<StackFrameSliceCopy>();
     let elem_size = frame.type_id.size();
-    let copy_count = copy_slice(&mut frame.dst, elem_size, frame.src.as_bytes(elem_size));
+    let copy_count = copy_slice(
+        &mut frame.dst,
+        elem_size,
+        frame.src.as_bytes(elem_size),
+        frame.src.size(),
+    );
     *frame.result_ptr = isize::try_from(copy_count).unwrap();
     ctx.pop_frame()
 }
@@ -197,7 +208,12 @@ struct StackFrameSliceCopyString<'a> {
 pub extern "C" fn gox5_slice_copy_string(ctx: &mut LightWeightThreadContext) -> FunctionObject {
     let frame = ctx.stack_frame_mut::<StackFrameSliceCopyString>();
     let elem_size = mem::size_of::<u8>();
-    let copy_count = copy_slice(&mut frame.dst, elem_size, frame.src.as_bytes());
+    let copy_count = copy_slice(
+        &mut frame.dst,
+        elem_size,
+        frame.src.as_bytes(),
+        frame.src.len_in_bytes(),
+    );
     *frame.result_ptr = isize::try_from(copy_count).unwrap();
     ctx.pop_frame()
 }
@@ -356,7 +372,7 @@ mod tests {
         let mut dst_buf = [0u8; 8];
         let mut dst_slice = SliceObject::new(dst_buf.as_mut_ptr() as *mut (), 4, 8);
         let src = [10u8, 20, 30, 40, 50, 60];
-        let count = copy_slice(&mut dst_slice, 1, &src);
+        let count = copy_slice(&mut dst_slice, 1, &src, src.len());
         assert_eq!(count, 4);
         assert_eq!(dst_buf[0], 10);
         assert_eq!(dst_buf[1], 20);
@@ -370,7 +386,7 @@ mod tests {
         let mut dst_buf = [0u8; 3];
         let mut dst_slice = SliceObject::new(dst_buf.as_mut_ptr() as *mut (), 3, 3);
         let src = [10u8, 20, 30, 40, 50];
-        let count = copy_slice(&mut dst_slice, 1, &src);
+        let count = copy_slice(&mut dst_slice, 1, &src, src.len());
         assert_eq!(count, 3);
         assert_eq!(dst_buf[0], 10);
         assert_eq!(dst_buf[1], 20);
@@ -382,7 +398,7 @@ mod tests {
         let mut dst_buf = [0u8; 8];
         let mut dst_slice = SliceObject::new(dst_buf.as_mut_ptr() as *mut (), 8, 8);
         let src = [10u8, 20];
-        let count = copy_slice(&mut dst_slice, 1, &src);
+        let count = copy_slice(&mut dst_slice, 1, &src, src.len());
         assert_eq!(count, 2);
         assert_eq!(dst_buf[0], 10);
         assert_eq!(dst_buf[1], 20);
@@ -398,7 +414,7 @@ mod tests {
         for v in &src {
             src_bytes.extend_from_slice(&v.to_le_bytes());
         }
-        let count = copy_slice(&mut dst_slice, 4, &src_bytes);
+        let count = copy_slice(&mut dst_slice, 4, &src_bytes, src.len());
         assert_eq!(count, 2);
         assert_eq!(dst_buf[0], 100);
         assert_eq!(dst_buf[1], 200);
