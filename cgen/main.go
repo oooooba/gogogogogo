@@ -3046,6 +3046,18 @@ func (ctx *Context) traverseType(pkg *ssa.Package, procedure func(typ types.Type
 			}
 			f(typ)
 		})
+
+		ctx.traverseCallCommon(function, func(callCommon *ssa.CallCommon) {
+			sig := callCommon.Signature()
+			if sig == nil {
+				return
+			}
+			if sig.Recv() != nil {
+				f(sig.Recv().Type())
+			}
+			f(sig.Params())
+			f(sig.Results())
+		})
 	})
 }
 
