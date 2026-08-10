@@ -1,24 +1,20 @@
-use std::ffi;
 use std::slice;
 
 use crate::ObjectAllocator;
 
 #[derive(Clone, Eq, Debug)]
 #[repr(C)]
-pub struct StringObject(*const u8);
+pub struct StringObject(*const u8, usize);
 
 impl PartialEq for StringObject {
-    #[allow(clippy::unconditional_recursion)]
     fn eq(&self, other: &Self) -> bool {
-        let lhs = unsafe { ffi::CStr::from_ptr(self.0 as *const libc::c_char) };
-        let rhs = unsafe { ffi::CStr::from_ptr(other.0 as *const libc::c_char) };
-        lhs == rhs
+        self.as_bytes() == other.as_bytes()
     }
 }
 
 impl StringObject {
-    fn new(p: *const u8) -> Self {
-        Self(p)
+    pub(crate) fn new(p: *const u8, len_in_bytes: usize) -> Self {
+        Self(p, len_in_bytes)
     }
 
     pub(crate) fn builder(
@@ -29,15 +25,19 @@ impl StringObject {
     }
 
     pub(crate) fn len_in_bytes(&self) -> usize {
-        self.as_bytes().len()
+        self.1
     }
 
     pub(crate) fn as_bytes(&self) -> &[u8] {
-        unsafe { ffi::CStr::from_ptr(self.0 as *const libc::c_char).to_bytes() }
+        if self.0.is_null() {
+            &[]
+        } else {
+            unsafe { slice::from_raw_parts(self.0, self.1) }
+        }
     }
 
     pub(crate) fn to_str(&self) -> Result<&str, std::str::Utf8Error> {
-        unsafe { ffi::CStr::from_ptr(self.0 as *const libc::c_char).to_str() }
+        std::str::from_utf8(self.as_bytes())
     }
 }
 
@@ -90,7 +90,7 @@ impl StringObjectBuilder {
         let index = self.cursor;
         let bytes = self.as_mut_slice();
         bytes[index] = 0;
-        StringObject::new(self.ptr)
+        StringObject::new(self.ptr, self.len_in_bytes)
     }
 }
 
@@ -227,5 +227,27 @@ mod tests {
         assert_eq!(s.as_bytes(), b"");
         assert_eq!(s.len_in_bytes(), 0);
         assert_eq!(s.to_str().unwrap(), "");
+    }
+
+    #[test]
+    fn test_string_object_contains_nul_bytes() {
+        let mut allocator = MockObjectAllocator::new();
+        let mut builder = StringObject::builder(3, &mut allocator);
+        builder.append_bytes(b"a\x00b");
+        let s = builder.build();
+
+        let mut builder2 = StringObject::builder(3, &mut allocator);
+        builder2.append_bytes(b"a\x00b");
+        let s2 = builder2.build();
+
+        let mut builder3 = StringObject::builder(4, &mut allocator);
+        builder3.append_bytes(b"a\x00bc");
+        let s3 = builder3.build();
+
+        assert_eq!(s.len_in_bytes(), 3);
+        assert_eq!(s.as_bytes(), b"a\x00b");
+        assert_eq!(s, s2);
+        assert_ne!(s, s3);
+        assert_eq!(s.to_str().unwrap(), "a\u{0}b");
     }
 }

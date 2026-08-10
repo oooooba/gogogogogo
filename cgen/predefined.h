@@ -38,7 +38,6 @@ DEFINE_BUILTIN_OBJECT_TYPE(Int8, int8_t);
 DEFINE_BUILTIN_OBJECT_TYPE(Int16, int16_t);
 DEFINE_BUILTIN_OBJECT_TYPE(Int32, int32_t);
 DEFINE_BUILTIN_OBJECT_TYPE(Int64, int64_t);
-DEFINE_BUILTIN_OBJECT_TYPE(String, const char *);
 DEFINE_BUILTIN_OBJECT_TYPE(UnsafePointer, void *);
 DEFINE_BUILTIN_OBJECT_TYPE(Uint, uintptr_t);
 DEFINE_BUILTIN_OBJECT_TYPE(Uint8, uint8_t);
@@ -54,6 +53,11 @@ typedef struct {
 typedef struct {
     const void *raw;
 } FunctionObject;
+
+typedef struct {
+    const char *raw;
+    uintptr_t len;
+} StringObject;
 
 typedef struct {
     void *raw;
@@ -84,12 +88,12 @@ typedef struct {
 } LightWeightThreadContext;
 
 typedef struct {
-    const char *method_name;
+    StringObject method_name;
     FunctionObject method;
 } InterfaceTableEntry;
 
 typedef struct TypeInfo {
-    const char *name;
+    StringObject name;
     uintptr_t num_methods;
     const InterfaceTableEntry *interface_table;
     void *is_equal;
@@ -547,3 +551,22 @@ typedef struct {
     intptr_t high;
 } StackFrameStringSubstr;
 DECLARE_RUNTIME_API(string_substr, StackFrameStringSubstr);
+
+static inline int string_compare(const StringObject *lhs,
+                                 const StringObject *rhs) {
+    uintptr_t min_len = lhs->len < rhs->len ? lhs->len : rhs->len;
+    int result = 0;
+    if (min_len != 0 && lhs->raw != NULL && rhs->raw != NULL) {
+        result = memcmp(lhs->raw, rhs->raw, min_len);
+    }
+    if (result != 0) {
+        return result;
+    }
+    if (lhs->len < rhs->len) {
+        return -1;
+    }
+    if (lhs->len > rhs->len) {
+        return 1;
+    }
+    return 0;
+}

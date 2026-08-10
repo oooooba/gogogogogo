@@ -170,7 +170,7 @@ mod tests {
         INSTANCE.get_or_init(|| {
             static TEST_NAME: [u8; 5] = *b"test\0";
             let name: crate::object::string::StringObject =
-                unsafe { mem::transmute(TEST_NAME.as_ptr()) };
+                crate::object::string::StringObject::new(TEST_NAME.as_ptr(), 4);
             TestTypeInfo {
                 name,
                 num_methods: 0,

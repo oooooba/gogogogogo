@@ -282,7 +282,7 @@ mod tests {
         static INSTANCE: OnceLock<TestTypeInfo> = OnceLock::new();
         INSTANCE.get_or_init(|| {
             static TEST_NAME: [u8; 5] = *b"test\0";
-            let name: StringObject = unsafe { mem::transmute(TEST_NAME.as_ptr()) };
+            let name = StringObject::new(TEST_NAME.as_ptr(), 4);
             TestTypeInfo {
                 name,
                 num_methods: 0,

@@ -364,6 +364,47 @@ func Test26() int {
 	return 26
 }
 
+func Test27() int {
+	n := 0
+	s := string(n)
+	if len(s) != 1 {
+		return 0
+	}
+	if s[0] != 0 {
+		return 1
+	}
+	if s != string(0) {
+		return 2
+	}
+	t := s + "x"
+	if len(t) != 2 {
+		return 3
+	}
+	if t[0] != 0 {
+		return 4
+	}
+	if t[1] != 'x' {
+		return 5
+	}
+	if t != string(0)+"x" {
+		return 6
+	}
+	ss := "a\x00b"
+	if len(ss) != 3 {
+		return 7
+	}
+	if ss[0] != 'a' {
+		return 8
+	}
+	if ss[1] != 0 {
+		return 9
+	}
+	if ss[2] != 'b' {
+		return 10
+	}
+	return 27
+}
+
 func main() {
 	runTest := func(testName string, test func() int) {
 		println(testName+":", test())
@@ -396,4 +437,5 @@ func main() {
 	runTest("Test24", Test24)
 	runTest("Test25", Test25)
 	runTest("Test26", Test26)
+	runTest("Test27", Test27)
 }

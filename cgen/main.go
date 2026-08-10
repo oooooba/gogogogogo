@@ -572,9 +572,10 @@ func (ctx *Context) emitCallCommonForMethod(callCommon *ssa.CallCommon, nextFunc
 
 	ctx.switchFunctionToCallRuntimeApi(nextFunction, nextFunctionFrame, resumeFunction, nil,
 		func() {
-			receiver := fmt.Sprintf("*(void**)(%s.receiver)", createValueRelName(callCommon.Value))
-			fmt.Fprintf(ctx.stream, "next_frame->arg_buffer[0] = %s; // receiver: %s\n", receiver, signature.Recv())
-			fmt.Fprintf(ctx.stream, "intptr_t num_arg_buffer_words = 1;\n")
+			receiver := fmt.Sprintf("%s.receiver", createValueRelName(callCommon.Value))
+			receiverSize := fmt.Sprintf("%s.type_id.info->size", createValueRelName(callCommon.Value))
+			fmt.Fprintf(ctx.stream, "memcpy(&next_frame->arg_buffer[0], %s, %s); // receiver: %s\n", receiver, receiverSize, signature.Recv())
+			fmt.Fprintf(ctx.stream, "intptr_t num_arg_buffer_words = (%s + sizeof(next_frame->arg_buffer[0]) - 1) / sizeof(next_frame->arg_buffer[0]);\n", receiverSize)
 			for i, arg := range callCommon.Args {
 				argValue := createValueRelName(arg)
 				argType := createTypeName(arg.Type())
@@ -586,7 +587,7 @@ func (ctx *Context) emitCallCommonForMethod(callCommon *ssa.CallCommon, nextFunc
 			fmt.Fprintf(ctx.stream, "next_frame->num_arg_buffer_words = num_arg_buffer_words;\n")
 		},
 		paramArgPair{param: "interface", arg: fmt.Sprintf("&%s", createValueRelName(callCommon.Value))},
-		paramArgPair{param: "method_name", arg: fmt.Sprintf("(StringObject){\"%s\"}", callCommon.Method.Name())},
+		paramArgPair{param: "method_name", arg: fmt.Sprintf("(StringObject){.raw = \"%s\", .len = sizeof(\"%s\") - 1}", callCommon.Method.Name(), callCommon.Method.Name())},
 		paramArgPair{param: "result_size", arg: resultSize},
 	)
 }
@@ -684,17 +685,21 @@ func (ctx *Context) emitBuiltinPrintWrapper(name string, callCommon *ssa.CallCom
 	fmt.Fprintf(&ctx.builtinPrintWrapperBuf, "\tStackFrameCommon* args_frame = (StackFrameCommon*)ctx->stack_pointer;\n")
 	fmt.Fprintf(&ctx.builtinPrintWrapperBuf, "\tuintptr_t* arg_words = (uintptr_t*)(args_frame + 1);\n")
 	fmt.Fprintf(&ctx.builtinPrintWrapperBuf, "\tStackFrameCommon* prev = (StackFrameCommon*)args_frame->prev_stack_pointer;\n")
+	fmt.Fprintf(&ctx.builtinPrintWrapperBuf, "\tuintptr_t arg_word_index = 0;\n")
 
 	for i, arg := range callCommon.Args {
 		argType := createTypeName(arg.Type())
-		fmt.Fprintf(&ctx.builtinPrintWrapperBuf, "\t%s arg%d_val = *(%s*)&arg_words[%d];\n", argType, i, argType, i)
+		fmt.Fprintf(&ctx.builtinPrintWrapperBuf, "\t%s arg%d_val = *(%s*)&arg_words[arg_word_index];\n", argType, i, argType)
+		fmt.Fprintf(&ctx.builtinPrintWrapperBuf, "\targ_word_index += sizeof(%s) / sizeof(arg_words[0]);\n", argType)
 	}
 
 	rawExprs := make([]string, len(callCommon.Args))
+	lenExprs := make([]string, len(callCommon.Args))
 	for i := range callCommon.Args {
 		rawExprs[i] = fmt.Sprintf("arg%d_val.raw", i)
+		lenExprs[i] = fmt.Sprintf("arg%d_val.len", i)
 	}
-	emitInlinePrintBody(&ctx.builtinPrintWrapperBuf, name == "print", callCommon.Args, rawExprs)
+	emitInlinePrintBody(&ctx.builtinPrintWrapperBuf, name == "print", callCommon.Args, rawExprs, lenExprs)
 
 	fmt.Fprintf(&ctx.builtinPrintWrapperBuf, "\tctx->stack_pointer = prev;\n")
 	fmt.Fprintf(&ctx.builtinPrintWrapperBuf, "\treturn (FunctionObject){.raw = gox5_defer_execute};\n")
@@ -703,9 +708,9 @@ func (ctx *Context) emitBuiltinPrintWrapper(name string, callCommon *ssa.CallCom
 	return wrapperName
 }
 
-func emitInlinePrintBody(w io.Writer, packs bool, args []ssa.Value, rawExprs []string) {
-	var emitInlinePrintArgByType func(w io.Writer, t types.Type, rawExpr string)
-	emitInlinePrintArgByType = func(w io.Writer, t types.Type, rawExpr string) {
+func emitInlinePrintBody(w io.Writer, packs bool, args []ssa.Value, rawExprs []string, lenExprs []string) {
+	var emitInlinePrintArgByType func(w io.Writer, t types.Type, rawExpr string, lenExpr string)
+	emitInlinePrintArgByType = func(w io.Writer, t types.Type, rawExpr string, lenExpr string) {
 		switch t := t.(type) {
 		case *types.Basic:
 			switch t.Kind() {
@@ -728,14 +733,14 @@ func emitInlinePrintBody(w io.Writer, packs bool, args []ssa.Value, rawExprs []s
 			case types.Float32, types.Float64:
 				fmt.Fprintf(w, "\tfprintf(stderr, \"%%.15g\", (%s) == 0.0 && signbit((%s)) ? 0.0 : (%s));\n", rawExpr, rawExpr, rawExpr)
 			case types.String:
-				fmt.Fprintf(w, "\tfprintf(stderr, \"%%s\", %s);\n", rawExpr)
+				fmt.Fprintf(w, "\tif (%s) { fprintf(stderr, \"%%.*s\", (int)(%s), %s); }\n", rawExpr, lenExpr, rawExpr)
 			case types.UnsafePointer:
 				fmt.Fprintf(w, "\tfprintf(stderr, \"%%p\", %s);\n", rawExpr)
 			default:
 				panic(fmt.Sprintf("unsupported type for print/println: %s (%T)", t, t))
 			}
 		case *types.Named:
-			emitInlinePrintArgByType(w, t.Underlying(), rawExpr)
+			emitInlinePrintArgByType(w, t.Underlying(), rawExpr, lenExpr)
 		case *types.Pointer:
 			fmt.Fprintf(w, "\tfprintf(stderr, \"%%p\", (void*)(%s));\n", rawExpr)
 		default:
@@ -746,7 +751,7 @@ func emitInlinePrintBody(w io.Writer, packs bool, args []ssa.Value, rawExprs []s
 		if !packs && i != 0 {
 			fmt.Fprintf(w, "\tfprintf(stderr, \" \");\n")
 		}
-		emitInlinePrintArgByType(w, arg.Type(), rawExprs[i])
+		emitInlinePrintArgByType(w, arg.Type(), rawExprs[i], lenExprs[i])
 	}
 	if !packs {
 		fmt.Fprintf(w, "\tfprintf(stderr, \"\\n\");\n")
@@ -783,9 +788,8 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 			raw = "raw"
 		case token.LSS, token.LEQ, token.GTR, token.GEQ:
 			if t, ok := instr.X.Type().Underlying().(*types.Basic); ok && t.Kind() == types.String {
-				raw = fmt.Sprintf("strcmp(%s.raw ? %s.raw : \"\", %s.raw ? %s.raw : \"\") %s 0",
-					createValueRelName(instr.X), createValueRelName(instr.X),
-					createValueRelName(instr.Y), createValueRelName(instr.Y),
+				raw = fmt.Sprintf("string_compare(&%s, &%s) %s 0",
+					createValueRelName(instr.X), createValueRelName(instr.Y),
 					instr.Op.String())
 			} else {
 				raw = fmt.Sprintf("%s.raw %s %s.raw", createValueRelName(instr.X), instr.Op.String(), createValueRelName(instr.Y))
@@ -859,9 +863,10 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 			}
 			ctx.switchFunctionToCallRuntimeApi("gox5_interface_invoke", "StackFrameInterfaceInvoke", createInstructionName(instr), nil,
 				func() {
-					receiver := fmt.Sprintf("*(void**)(%s.receiver)", createValueRelName(callCommon.Value))
-					fmt.Fprintf(ctx.stream, "next_frame->arg_buffer[0] = %s; // receiver: %s\n", receiver, signature.Recv())
-					fmt.Fprintf(ctx.stream, "intptr_t num_arg_buffer_words = 1;\n")
+					receiver := fmt.Sprintf("%s.receiver", createValueRelName(callCommon.Value))
+					receiverSize := fmt.Sprintf("%s.type_id.info->size", createValueRelName(callCommon.Value))
+					fmt.Fprintf(ctx.stream, "memcpy(&next_frame->arg_buffer[0], %s, %s); // receiver: %s\n", receiver, receiverSize, signature.Recv())
+					fmt.Fprintf(ctx.stream, "intptr_t num_arg_buffer_words = (%s + sizeof(next_frame->arg_buffer[0]) - 1) / sizeof(next_frame->arg_buffer[0]);\n", receiverSize)
 					for i, arg := range callCommon.Args {
 						argValue := createValueRelName(arg)
 						argType := createTypeName(arg.Type())
@@ -874,7 +879,7 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 				},
 				paramArgPair{param: "result_ptr", arg: result_ptr},
 				paramArgPair{param: "interface", arg: fmt.Sprintf("&%s", createValueRelName(callCommon.Value))},
-				paramArgPair{param: "method_name", arg: fmt.Sprintf("(StringObject){\"%s\"}", callCommon.Method.Name())},
+				paramArgPair{param: "method_name", arg: fmt.Sprintf("(StringObject){.raw = \"%s\", .len = sizeof(\"%s\") - 1}", callCommon.Method.Name(), callCommon.Method.Name())},
 			)
 		} else {
 			switch callee := callCommon.Value.(type) {
@@ -1023,23 +1028,33 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 					if callee.Name() == "min" {
 						op = "<"
 					}
-					expr := fmt.Sprintf("%s.raw", createValueRelName(arg))
+					expr := createValueRelName(arg)
+					if !isString {
+						expr = fmt.Sprintf("%s.raw", expr)
+					}
 					for _, next := range callCommon.Args[1:] {
-						rhs := fmt.Sprintf("%s.raw", createValueRelName(next))
 						if isString {
-							expr = fmt.Sprintf("(strcmp(%s ? %s : \"\", %s ? %s : \"\") %s 0 ? %s : %s)", expr, expr, rhs, rhs, op, expr, rhs)
+							rhs := createValueRelName(next)
+							expr = fmt.Sprintf("(string_compare(&%s, &%s) %s 0 ? %s : %s)", expr, rhs, op, expr, rhs)
 						} else {
+							rhs := fmt.Sprintf("%s.raw", createValueRelName(next))
 							expr = fmt.Sprintf("(%s %s %s ? %s : %s)", expr, op, rhs, expr, rhs)
 						}
 					}
-					fmt.Fprintf(ctx.stream, "%s = %s;\n", result, wrapInObject(expr, instr.Type()))
+					if isString {
+						fmt.Fprintf(ctx.stream, "%s = %s;\n", result, expr)
+					} else {
+						fmt.Fprintf(ctx.stream, "%s = %s;\n", result, wrapInObject(expr, instr.Type()))
+					}
 
 				case "print", "println":
 					rawExprs := make([]string, len(callCommon.Args))
+					lenExprs := make([]string, len(callCommon.Args))
 					for i, arg := range callCommon.Args {
 						rawExprs[i] = fmt.Sprintf("%s.raw", createValueRelName(arg))
+						lenExprs[i] = fmt.Sprintf("%s.len", createValueRelName(arg))
 					}
-					emitInlinePrintBody(ctx.stream, callee.Name() == "print", callCommon.Args, rawExprs)
+					emitInlinePrintBody(ctx.stream, callee.Name() == "print", callCommon.Args, rawExprs, lenExprs)
 
 				case "real":
 					bitLength := complexNumberBitLength(callCommon.Args[0])
@@ -1138,8 +1153,12 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 		fmt.Fprintf(ctx.stream, "%s = %s;\n", createValueRelName(instr), createValueRelName(instr.X))
 
 	case *ssa.ChangeType:
-		s := wrapInObject(fmt.Sprintf("%s.raw", createValueRelName(instr.X)), instr.Type())
-		fmt.Fprintf(ctx.stream, "%s = %s;\n", createValueRelName(instr), s)
+		if t, ok := instr.Type().Underlying().(*types.Basic); ok && (t.Kind() == types.String || t.Kind() == types.UntypedString) {
+			fmt.Fprintf(ctx.stream, "%s = %s;\n", createValueRelName(instr), createValueRelName(instr.X))
+		} else {
+			s := wrapInObject(fmt.Sprintf("%s.raw", createValueRelName(instr.X)), instr.Type())
+			fmt.Fprintf(ctx.stream, "%s = %s;\n", createValueRelName(instr), s)
+		}
 
 	case *ssa.Convert:
 		switch dstType := instr.Type().Underlying().(type) {
@@ -2206,7 +2225,7 @@ func (ctx *Context) emitTypeInfoDefinition(typ types.Type) {
 	interfaceTable := fmt.Sprintf("&%s.entries[0]", interfaceTableName)
 
 	fmt.Fprintf(ctx.stream, "const TypeInfo %s = {\n", createTypeIdName(typ))
-	fmt.Fprintf(ctx.stream, ".name = \"%s\",\n", createTypeName(typ))
+	fmt.Fprintf(ctx.stream, ".name = (StringObject){.raw = \"%s\", .len = sizeof(\"%s\") - 1},\n", createTypeName(typ), createTypeName(typ))
 	fmt.Fprintf(ctx.stream, ".num_methods = %s,\n", numMethods)
 	fmt.Fprintf(ctx.stream, ".interface_table = %s,\n", interfaceTable)
 	fmt.Fprintf(ctx.stream, ".is_equal = equal_%s,\n", createTypeName(typ))
@@ -2251,7 +2270,11 @@ func (ctx *Context) emitConstant(cst *ssa.Const) {
 		fmt.Fprintf(ctx.stream, "__attribute__((unused)) static const %s %s; // %s\n", typeName, valueName, cst)
 		return
 	} else {
-		value = wrapInObject(inner, cst.Type())
+		if basic, ok := cst.Type().Underlying().(*types.Basic); ok && (basic.Kind() == types.String || basic.Kind() == types.UntypedString) {
+			value = fmt.Sprintf("(StringObject){.raw = %s, .len = sizeof(%s) - 1}", inner, inner)
+		} else {
+			value = wrapInObject(inner, cst.Type())
+		}
 	}
 
 	typeName := createTypeName(cst.Type())
@@ -2278,9 +2301,10 @@ func (ctx *Context) emitEqualFunctionDefinition(typ types.Type) {
 				body += "return true;\n"
 			case types.String:
 				body += "if (lhs->raw == rhs->raw) { return true; }\n"
-				body += "if (lhs->raw == NULL) { return rhs->raw[0] == '\\0'; }\n"
-				body += "if (rhs->raw == NULL) { return lhs->raw[0] == '\\0'; }\n"
-				body += "return strcmp(lhs->raw, rhs->raw) == 0;\n"
+				body += "if (lhs->len != rhs->len) { return false; }\n"
+				body += "if (lhs->len == 0) { return true; }\n"
+				body += "if (lhs->raw == NULL || rhs->raw == NULL) { return false; }\n"
+				body += "return memcmp(lhs->raw, rhs->raw, lhs->len) == 0;\n"
 			default:
 				body += "return lhs->raw == rhs->raw;\n"
 			}
@@ -2329,7 +2353,7 @@ func (ctx *Context) emitHashFunctionDefinition(typ types.Type) {
 			case types.String:
 				body += "uint64_t hash = UINT64_C(14695981039346656037); // FNV-1a 64-bit\n"
 				body += "\n"
-				body += "for (const unsigned char *p = (const unsigned char *)obj->raw; *p != 0; ++p) { hash ^= *p; hash *= UINT64_C(1099511628211); }\n"
+				body += "for (uintptr_t i = 0; i < obj->len; ++i) { hash ^= (unsigned char)obj->raw[i]; hash *= UINT64_C(1099511628211); }\n"
 				body += "return hash;\n"
 			default:
 				body += "return (uintptr_t)obj->raw;\n"
@@ -2395,7 +2419,7 @@ func (ctx *Context) emitInterfaceTableDefinition(typ types.Type, allowSet map[st
 		function := ctx.program.MethodValue(methodSet.At(index))
 		methodName := function.Name()
 		method := wrapInFunctionObject(createFunctionName(function))
-		fmt.Fprintf(ctx.stream, "\t{\"%s\", %s},\n", methodName, method)
+		fmt.Fprintf(ctx.stream, "\t{ .method_name = (StringObject){.raw = \"%s\", .len = sizeof(\"%s\") - 1}, .method = %s },\n", methodName, methodName, method)
 	}
 	fmt.Fprintln(ctx.stream, "}};")
 }
