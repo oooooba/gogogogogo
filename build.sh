@@ -4,6 +4,7 @@ set -e
 
 debug_runtime=false
 debug_user=false
+build_directory=build
 
 while [ "$1" != "" ]; do
     case "$1" in
@@ -14,6 +15,10 @@ while [ "$1" != "" ]; do
         --debug-user)
             debug_user=true
             shift
+            ;;
+        -b)
+            build_directory=$2
+            shift 2
             ;;
         *)
             break
@@ -27,12 +32,10 @@ else
     cargo build >/dev/null 2>&1
 fi
 
-build_directory=build
-
 if [ -d $build_directory ]; then
     rm -rf $build_directory
 fi
-mkdir $build_directory
+mkdir -p $build_directory
 
 dir_name=$(cd `dirname $1` && pwd)
 base_name=`basename $1`

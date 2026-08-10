@@ -7,6 +7,7 @@ import (
 	"log"
 	"math"
 	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -3311,7 +3312,21 @@ func allPackagesSorted(program *ssa.Program) []*ssa.Package {
 	return pkgs
 }
 
-func generateMakefile(makefile *os.File, program *ssa.Program) {
+func generateMakefile(makefile *os.File, program *ssa.Program, buildDirname string) {
+	cgenDir, err := os.Getwd()
+	if err != nil {
+		panic(err)
+	}
+	buildDirAbs := filepath.Join(cgenDir, buildDirname)
+	relToCgen, err := filepath.Rel(buildDirAbs, cgenDir)
+	if err != nil {
+		panic(err)
+	}
+	relToTarget, err := filepath.Rel(buildDirAbs, filepath.Join(cgenDir, "..", "target"))
+	if err != nil {
+		panic(err)
+	}
+
 	cCompiler := "gcc"
 	cCompilerWrapper := "ccache"
 	cc := fmt.Sprintf("$(shell command -v %s >/dev/null 2>&1 && echo %s %s || echo %s)", cCompilerWrapper, cCompilerWrapper, cCompiler, cCompiler)
@@ -3334,8 +3349,8 @@ func generateMakefile(makefile *os.File, program *ssa.Program) {
 		"-fsanitize=undefined", "-fsanitize=address", "-fno-sanitize-recover=all",
 		"-lpthread", "-ldl", "-lm",
 	}
-	libsRelease := "../target/release/libgogogogogo.a"
-	libsDebug := "../target/debug/libgogogogogo.a"
+	libsRelease := filepath.Join(relToTarget, "release", "libgogogogogo.a")
+	libsDebug := filepath.Join(relToTarget, "debug", "libgogogogogo.a")
 
 	fmt.Fprintf(makefile, "CC = %s\n", cc)
 	fmt.Fprintf(makefile, "CFLAGS = %s\n", strings.Join(cflags, " "))
@@ -3374,7 +3389,7 @@ func generateMakefile(makefile *os.File, program *ssa.Program) {
 
 	fmt.Fprintf(makefile, "\n")
 	fmt.Fprintf(makefile, "predefined.h:\n")
-	fmt.Fprintf(makefile, "\t@ln -sf ../cgen/predefined.h predefined.h\n")
+	fmt.Fprintf(makefile, "\t@ln -sf %s/predefined.h predefined.h\n", relToCgen)
 	fmt.Fprintf(makefile, "\n")
 	fmt.Fprintf(makefile, "all: bin.exe\n")
 	fmt.Fprintf(makefile, "\n")
@@ -3450,13 +3465,13 @@ func handlePackage(program *ssa.Program, pkg *ssa.Package, instanceOwners map[*s
 	ctx.emitPackage(pkg)
 }
 
-func handleMakefile(program *ssa.Program, outputPath string) {
+func handleMakefile(program *ssa.Program, outputPath string, buildDirname string) {
 	makefile, err := os.Create(outputPath)
 	if err != nil {
 		panic(err)
 	}
 	defer makefile.Close()
-	generateMakefile(makefile, program)
+	generateMakefile(makefile, program, buildDirname)
 }
 
 func emitProgram(program *ssa.Program, buildDirname string) {
@@ -3486,7 +3501,7 @@ func emitProgram(program *ssa.Program, buildDirname string) {
 	waitGroup.Add(1)
 	go func() {
 		makefileName := "Makefile"
-		handleMakefile(program, fmt.Sprintf("%s/%s", buildDirname, makefileName))
+		handleMakefile(program, fmt.Sprintf("%s/%s", buildDirname, makefileName), buildDirname)
 		waitGroup.Done()
 	}()
 
