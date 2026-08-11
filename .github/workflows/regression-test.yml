@@ -88,5 +88,7 @@ jobs:
         uses: actions/upload-artifact@v6
         with:
           name: logs
-          path: tmp
+          path: |
+            tmp/**/*.log
+            tmp/**/*.txt
           retention-days: 7
