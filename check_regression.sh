@@ -73,41 +73,28 @@ targets=(
     "strvar"
 )
 
-exit_status=0
 for target in ${targets[@]}; do
     path=$go_root/test/ken/$target.go
-    echo -n "[$path] "
 
-    base=`basename $path`
+    (
+        if ! bash ./check_equivalence.sh "$path"; then
+            echo "[$path] FAIL"
+            exit 1
+        fi
+    ) &
+done
 
-    expect_result=tmp/raw_expect_$base.txt
-    actual_result=tmp/raw_actual_$base.txt
-    compare_result=tmp/compare_$base.txt
-
-    if ! go run $path >$expect_result 2>&1; then
-        echo "FAIL (go run crashed)"
-        exit_status=1
-        continue
-    fi
-    if ! bash ./run.sh $path >$actual_result 2>&1; then
-        echo "FAIL (run.sh crashed)"
-        exit_status=1
-        continue
-    fi
-
-    if diff -y $expect_result $actual_result >$compare_result; then
-        echo PASS
-    else
-        echo FAIL
-        cat $compare_result
-        exit_status=1
+fail_count=0
+for job in $(jobs -p); do
+    if ! wait $job; then
+        fail_count=$((fail_count+1))
     fi
 done
 
-if [ $exit_status -eq 0 ]; then
+if [ $fail_count -eq 0 ]; then
     echo PASS
 else
     echo FAIL
 fi
 
-exit $exit_status
+exit $fail_count
