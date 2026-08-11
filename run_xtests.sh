@@ -2,11 +2,8 @@
 
 set -e
 
-mkdir -p tmp
-
 run_args=("$@")
 
-exit_status=0
 for path in $(find xtests -name '*.go' -type f | sort); do
     base=`basename $path`
 
@@ -27,18 +24,28 @@ for path in $(find xtests -name '*.go' -type f | sort); do
         fi
     fi
 
-    echo -n "[$path] "
+    (
+        check_args=()
+        case $base in
+            panic_*)
+                check_args+=(--panic)
+                ;;
+        esac
 
-    check_args=()
-    case $base in
-        panic_*)
-            check_args+=(--panic)
-            ;;
-    esac
+        if ! bash ./check_equivalence.sh "${check_args[@]}" "${run_args[@]}" "$path"; then
+            echo "[$path] FAIL"
+            exit 1
+        fi
+    ) &
+done
 
-    if ! bash ./check_equivalence.sh "${check_args[@]}" "${run_args[@]}" "$path"; then
-        exit_status=1
+fail_count=0
+for job in $(jobs -p); do
+    if ! wait $job; then
+        fail_count=$((fail_count+1))
     fi
 done
 
-exit $exit_status
+if [ $fail_count -ne 0 ]; then
+    exit 1
+fi

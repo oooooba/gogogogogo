@@ -28,13 +28,15 @@ if [ -z "$path" ]; then
     exit 1
 fi
 
-base=$(basename "$path")
+tmp_dir="tmp/$path.$(IFS=; echo "${build_args[*]}").d"
+mkdir -p "$tmp_dir"
 
-mkdir -p tmp
+expect_result="$tmp_dir/raw_expect.txt"
+actual_result="$tmp_dir/raw_actual.txt"
+compare_result="$tmp_dir/compare.txt"
 
-expect_result=tmp/raw_expect_$base.txt
-actual_result=tmp/raw_actual_$base.txt
-compare_result=tmp/compare_$base.txt
+build_args+=("-b")
+build_args+=("$tmp_dir/build")
 
 exit_status=0
 

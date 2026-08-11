@@ -5,17 +5,25 @@ set -e
 debug_user=false
 
 build_args=()
-for arg in "$@"; do
-    case "$arg" in
+while [ $# -gt 0 ]; do
+    case "$1" in
         --debug-user)
             debug_user=true
-            build_args+=("$arg")
+            build_args+=("$1")
+            shift
             ;;
         --debug-runtime)
-            build_args+=("$arg")
+            build_args+=("$1")
+            shift
+            ;;
+        -b)
+            build_args+=("-b")
+            build_args+=("$2")
+            shift 2
             ;;
         *)
-            build_args+=("$arg")
+            build_args+=("$1")
+            shift
             ;;
     esac
 done
