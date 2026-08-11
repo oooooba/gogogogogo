@@ -68,18 +68,18 @@ type Context struct {
 }
 
 func encode(str string) string {
-	buf := ""
+	var buf strings.Builder
 	for _, c := range str {
 		if c >= 0x80 {
 			panic(str)
 		}
 		if ('a' <= c && c <= 'z') || ('A' <= c && c <= 'Z') || ('0' <= c && c <= '9') {
-			buf += string(c)
+			buf.WriteByte(byte(c))
 		} else {
-			buf += fmt.Sprintf("_%02X_", c)
+			fmt.Fprintf(&buf, "_%02X_", c)
 		}
 	}
-	return buf
+	return buf.String()
 }
 
 func wrapInFunctionObject(s string) string {
