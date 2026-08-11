@@ -3343,7 +3343,10 @@ func generateMakefile(makefile *os.File, program *ssa.Program, buildDirname stri
 	if err != nil {
 		panic(err)
 	}
-	buildDirAbs := filepath.Join(cgenDir, buildDirname)
+	buildDirAbs, err := filepath.Abs(buildDirname)
+	if err != nil {
+		panic(err)
+	}
 	relToCgen, err := filepath.Rel(buildDirAbs, cgenDir)
 	if err != nil {
 		panic(err)
