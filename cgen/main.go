@@ -611,7 +611,7 @@ func isFunctionBodySkippedPackagePath(path string) bool {
 	if path == "runtime" || path == "internal/race" || path == "internal/abi" {
 		return true
 	}
-	if path == "internal/cpu" {
+	if path == "internal/cpu" || path == "internal/strconv" || path == "internal/stringslite" || path == "internal/bytealg" {
 		return false
 	}
 	if strings.HasPrefix(path, "internal/") || strings.HasPrefix(path, "runtime/internal/") {
@@ -699,6 +699,23 @@ func (ctx *Context) emitSpecialRuntimeCall(callee *ssa.Function, instr *ssa.Call
 			)
 			return true
 		}
+	}
+
+	if pkgPath == "internal/bytealg" {
+		switch funcName {
+		case "IndexByteString":
+			result := createValueRelName(instr)
+			ctx.switchFunctionToCallRuntimeApi("gox5_string_search_byte", "StackFrameStringSearchByte", createInstructionName(instr), &result, nil,
+				paramArgPair{param: "string", arg: createValueRelName(callCommon.Args[0])},
+				paramArgPair{param: "byte", arg: createValueRelName(callCommon.Args[1])},
+			)
+			return true
+		}
+	}
+
+	if pkgPath == "errors" && funcName == "init" {
+		fmt.Fprintf(ctx.stream, "\treturn %s;\n", wrapInFunctionObject(createInstructionName(instr)))
+		return true
 	}
 
 	if isFunctionBodySkippedPackagePath(pkgPath) {
@@ -1782,7 +1799,7 @@ func hasTypeParameter(typ types.Type) bool {
 }
 
 func createPackageName(pkg *types.Package) string {
-	return pkg.Name()
+	return encode(pkg.Path())
 }
 
 func requireSwitchFunction(instruction ssa.Instruction) bool {

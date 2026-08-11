@@ -400,6 +400,14 @@ DECLARE_RUNTIME_API(string_new_from_byte_slice,
 
 typedef struct {
     StackFrameCommon common;
+    IntObject *result_ptr;
+    StringObject string;
+    Uint8Object byte;
+} StackFrameStringSearchByte;
+DECLARE_RUNTIME_API(string_search_byte, StackFrameStringSearchByte);
+
+typedef struct {
+    StackFrameCommon common;
     StringObject *result_ptr;
     IntObject rune;
 } StackFrameStringNewFromRune;

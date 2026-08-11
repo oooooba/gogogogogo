@@ -55,6 +55,10 @@ pub extern "C" fn gox5_slice_from_string(ctx: &mut LightWeightThreadContext) -> 
     ctx.pop_frame()
 }
 
+fn slice_extend_bytes(slice: &SliceObject, elem_size: usize) -> &[u8] {
+    &slice.as_bytes(elem_size)[..slice.size() * elem_size]
+}
+
 fn reallocate_slice(
     base: &SliceObject,
     elem_size: usize,
@@ -112,13 +116,9 @@ pub extern "C" fn gox5_slice_append(ctx: &mut LightWeightThreadContext) -> Funct
     let rhs = &frame.rhs;
 
     let elem_size = frame.type_id.size();
+    let rhs_bytes = slice_extend_bytes(rhs, elem_size);
     let result = ctx.global_context().process(|mut global_context| {
-        reallocate_slice(
-            lhs,
-            elem_size,
-            rhs.as_bytes(elem_size),
-            global_context.allocator(),
-        )
+        reallocate_slice(lhs, elem_size, rhs_bytes, global_context.allocator())
     });
 
     let frame = ctx.stack_frame_mut::<StackFrameSliceAppend>();
@@ -305,6 +305,20 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn test_slice_extend_bytes_clamps_to_size() {
+        let mut buf = [0u8; 64];
+        buf[0] = 10;
+        buf[1] = 20;
+        buf[2] = 30;
+        let ptr = buf.as_mut_ptr() as *mut ();
+        let slice = SliceObject::new(ptr, 2, 10);
+        let bytes = slice_extend_bytes(&slice, 1);
+        assert_eq!(bytes.len(), 2);
+        assert_eq!(bytes[0], 10);
+        assert_eq!(bytes[1], 20);
     }
 
     #[test]

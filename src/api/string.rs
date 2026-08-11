@@ -309,6 +309,30 @@ pub extern "C" fn gox5_string_substr(ctx: &mut LightWeightThreadContext) -> Func
     ctx.pop_frame()
 }
 
+#[repr(C)]
+struct StackFrameStringSearchByte<'a> {
+    common: StackFrameCommon,
+    result_ptr: &'a mut isize,
+    string: StringObject,
+    byte: u8,
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn gox5_string_search_byte(ctx: &mut LightWeightThreadContext) -> FunctionObject {
+    let frame = ctx.stack_frame::<StackFrameStringSearchByte>();
+    let result = frame
+        .string
+        .as_bytes()
+        .iter()
+        .position(|&b| b == frame.byte)
+        .map_or(-1, |i| isize::try_from(i).unwrap());
+
+    let frame = ctx.stack_frame_mut::<StackFrameStringSearchByte>();
+    *frame.result_ptr = result;
+
+    ctx.pop_frame()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -765,5 +789,55 @@ mod tests {
         }
         assert_eq!(found_sequence, vec![true, true, true, false]);
         assert_eq!(count, 5);
+    }
+
+    fn search_byte(ctx: &mut LightWeightThreadContext, s: &StringObject, byte: u8) -> isize {
+        let prev_sp = ctx.stack_pointer();
+        ctx.grow_stack(mem::size_of::<isize>());
+        let result_raw = ctx.stack_pointer() as *mut isize;
+        ctx.grow_stack(mem::size_of::<StackFrameStringSearchByte>());
+        ctx.push_frame(
+            prev_sp,
+            Some(result_raw as *const ()),
+            &[],
+            FunctionObject::new_null(),
+        );
+
+        let frame = ctx.stack_frame_mut::<StackFrameStringSearchByte>();
+        frame.string = s.clone();
+        frame.byte = byte;
+        frame.result_ptr = unsafe { &mut *result_raw };
+
+        let result = gox5_string_search_byte(ctx);
+        assert_eq!(result, FunctionObject::new_null());
+        unsafe { *result_raw }
+    }
+
+    #[test]
+    fn test_gox5_string_search_byte_found() {
+        let (mut ctx, _gc) = create_ctx();
+        let s = make_string(&mut ctx, b"hello");
+        assert_eq!(search_byte(&mut ctx, &s, b'l'), 2);
+    }
+
+    #[test]
+    fn test_gox5_string_search_byte_first() {
+        let (mut ctx, _gc) = create_ctx();
+        let s = make_string(&mut ctx, b"hello");
+        assert_eq!(search_byte(&mut ctx, &s, b'h'), 0);
+    }
+
+    #[test]
+    fn test_gox5_string_search_byte_not_found() {
+        let (mut ctx, _gc) = create_ctx();
+        let s = make_string(&mut ctx, b"hello");
+        assert_eq!(search_byte(&mut ctx, &s, b'x'), -1);
+    }
+
+    #[test]
+    fn test_gox5_string_search_byte_empty() {
+        let (mut ctx, _gc) = create_ctx();
+        let s = make_string(&mut ctx, b"");
+        assert_eq!(search_byte(&mut ctx, &s, b'a'), -1);
     }
 }
