@@ -65,6 +65,7 @@ type Context struct {
 	builtinPrintWrapperNames map[*ssa.CallCommon]string
 	extraFunctions           []*ssa.Function
 	instanceOwners           map[*ssa.Function]*ssa.Package
+	cachedFunctions          []*ssa.Function
 }
 
 func encode(str string) string {
@@ -2864,52 +2865,58 @@ func sortedPackageMembers(pkg *ssa.Package) []ssa.Member {
 }
 
 func (ctx *Context) traverseFunction(pkg *ssa.Package, procedure func(function *ssa.Function)) {
-	visited := make(map[*ssa.Function]struct{})
-	var f func(function *ssa.Function)
-	f = func(function *ssa.Function) {
-		if function == nil {
-			return
-		}
-		if _, ok := visited[function]; ok {
-			return
-		}
-		visited[function] = struct{}{}
-		if function.TypeParams().Len() > 0 && len(function.TypeArgs()) == 0 {
-			return
-		}
-		if hasTypeParamInSignature(function.Signature) {
-			return
-		}
-		procedure(function)
-		for _, anonFunc := range function.AnonFuncs {
-			f(anonFunc)
-		}
-	}
-
-	g := func(t types.Type) {
-		methodSet := ctx.program.MethodSets.MethodSet(t)
-		for i := 0; i < methodSet.Len(); i++ {
-			function := ctx.program.MethodValue(methodSet.At(i))
+	if ctx.cachedFunctions == nil {
+		visited := make(map[*ssa.Function]struct{})
+		var f func(function *ssa.Function)
+		f = func(function *ssa.Function) {
 			if function == nil {
-				continue
+				return
 			}
-			f(function)
+			if _, ok := visited[function]; ok {
+				return
+			}
+			visited[function] = struct{}{}
+			if function.TypeParams().Len() > 0 && len(function.TypeArgs()) == 0 {
+				return
+			}
+			if hasTypeParamInSignature(function.Signature) {
+				return
+			}
+			ctx.cachedFunctions = append(ctx.cachedFunctions, function)
+			for _, anonFunc := range function.AnonFuncs {
+				f(anonFunc)
+			}
+		}
+
+		g := func(t types.Type) {
+			methodSet := ctx.program.MethodSets.MethodSet(t)
+			for i := 0; i < methodSet.Len(); i++ {
+				function := ctx.program.MethodValue(methodSet.At(i))
+				if function == nil {
+					continue
+				}
+				f(function)
+			}
+		}
+
+		ctx.traversePackageMember(pkg, func(member ssa.Member) {
+			switch member := member.(type) {
+			case *ssa.Function:
+				f(member)
+			case *ssa.Type:
+				t := member.Type()
+				g(t)
+				g(types.NewPointer(t))
+			}
+		})
+
+		for _, fn := range ctx.extraFunctions {
+			f(fn)
 		}
 	}
 
-	ctx.traversePackageMember(pkg, func(member ssa.Member) {
-		switch member := member.(type) {
-		case *ssa.Function:
-			f(member)
-		case *ssa.Type:
-			t := member.Type()
-			g(t)
-			g(types.NewPointer(t))
-		}
-	})
-
-	for _, fn := range ctx.extraFunctions {
-		f(fn)
+	for _, function := range ctx.cachedFunctions {
+		procedure(function)
 	}
 }
 
