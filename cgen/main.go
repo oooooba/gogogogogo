@@ -274,7 +274,14 @@ func createValueRelName(value ssa.Value) string {
 	}
 }
 
+// ToDo: refactor to avoid using a global variable
+var typeNameCache sync.Map
+
 func createTypeName(typ types.Type) string {
+	if cached, ok := typeNameCache.Load(typ); ok {
+		return cached.(string)
+	}
+
 	var f func(typ types.Type) string
 	f = func(typ types.Type) string {
 		switch t := typ.(type) {
@@ -285,48 +292,48 @@ func createTypeName(typ types.Type) string {
 		case *types.Basic:
 			switch t.Kind() {
 			case types.Bool, types.UntypedBool:
-				return fmt.Sprintf("BoolObject")
+				return "BoolObject"
 			case types.Complex64:
-				return fmt.Sprintf("Complex64Object")
+				return "Complex64Object"
 			case types.Complex128:
-				return fmt.Sprintf("Complex128Object")
+				return "Complex128Object"
 			case types.Float32:
-				return fmt.Sprintf("Float32Object")
+				return "Float32Object"
 			case types.Float64:
-				return fmt.Sprintf("Float64Object")
+				return "Float64Object"
 			case types.Int:
-				return fmt.Sprintf("IntObject")
+				return "IntObject"
 			case types.Int8:
-				return fmt.Sprintf("Int8Object")
+				return "Int8Object"
 			case types.Int16:
-				return fmt.Sprintf("Int16Object")
+				return "Int16Object"
 			case types.Int32:
-				return fmt.Sprintf("Int32Object")
+				return "Int32Object"
 			case types.Int64:
-				return fmt.Sprintf("Int64Object")
+				return "Int64Object"
 			case types.Invalid:
-				return fmt.Sprintf("InvalidObject")
+				return "InvalidObject"
 			case types.String, types.UntypedString:
-				return fmt.Sprintf("StringObject")
+				return "StringObject"
 			case types.UnsafePointer:
-				return fmt.Sprintf("UnsafePointerObject")
+				return "UnsafePointerObject"
 			case types.Uint:
-				return fmt.Sprintf("UintObject")
+				return "UintObject"
 			case types.Uint8:
-				return fmt.Sprintf("Uint8Object")
+				return "Uint8Object"
 			case types.Uint16:
-				return fmt.Sprintf("Uint16Object")
+				return "Uint16Object"
 			case types.Uint32:
-				return fmt.Sprintf("Uint32Object")
+				return "Uint32Object"
 			case types.Uint64:
-				return fmt.Sprintf("Uint64Object")
+				return "Uint64Object"
 			case types.Uintptr:
-				return fmt.Sprintf("UintptrObject")
+				return "UintptrObject"
 			}
 		case *types.Chan:
 			return fmt.Sprintf("Channel<%s>", f(t.Elem()))
 		case *types.Interface:
-			return fmt.Sprintf("Interface")
+			return "Interface"
 		case *types.Map:
 			k := f(t.Key())
 			v := f(t.Elem())
@@ -336,7 +343,7 @@ func createTypeName(typ types.Type) string {
 		case *types.Pointer:
 			return fmt.Sprintf("Pointer<%s>", f(t.Elem()))
 		case *types.Signature:
-			return fmt.Sprintf("FunctionObject")
+			return "FunctionObject"
 		case *types.Slice:
 			return fmt.Sprintf("Slice<%s>", f(t.Elem()))
 		case *types.Struct:
@@ -361,7 +368,9 @@ func createTypeName(typ types.Type) string {
 		}
 		panic(fmt.Sprintf("type not supported: %s (%T)", typ.String(), typ))
 	}
-	return encode(f(typ))
+	name := encode(f(typ))
+	actual, _ := typeNameCache.LoadOrStore(typ, name)
+	return actual.(string)
 }
 
 func createRawTypeName(typ types.Type) string {
