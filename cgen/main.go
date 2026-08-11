@@ -1723,52 +1723,62 @@ func hasTypeParamInSignature(sig *types.Signature) bool {
 	return false
 }
 
-func hasTypeParameter(typ types.Type) bool {
-	return hasTypeParameterWithSeen(typ, make(map[types.Type]bool))
-}
+// ToDo: refactor to avoid using a global variable
+var hasTypeParamCache sync.Map
 
-func hasTypeParameterWithSeen(typ types.Type, seen map[types.Type]bool) bool {
-	if seen[typ] {
-		return false
+func hasTypeParameter(typ types.Type) bool {
+	if cached, ok := hasTypeParamCache.Load(typ); ok {
+		return cached.(bool)
 	}
-	seen[typ] = true
-	switch t := typ.(type) {
-	case *types.Alias:
-		return hasTypeParameterWithSeen(t.Underlying(), seen)
-	case *types.Array:
-		return hasTypeParameterWithSeen(t.Elem(), seen)
-	case *types.Chan:
-		return hasTypeParameterWithSeen(t.Elem(), seen)
-	case *types.Map:
-		return hasTypeParameterWithSeen(t.Key(), seen) || hasTypeParameterWithSeen(t.Elem(), seen)
-	case *types.Named:
-		if t.TypeParams().Len() > 0 && t.TypeArgs().Len() == 0 {
+
+	seen := map[types.Type]bool{}
+	var f func(typ types.Type) bool
+	f = func(typ types.Type) bool {
+		if seen[typ] {
+			return false
+		}
+		seen[typ] = true
+		switch t := typ.(type) {
+		case *types.Alias:
+			return f(t.Underlying())
+		case *types.Array:
+			return f(t.Elem())
+		case *types.Chan:
+			return f(t.Elem())
+		case *types.Map:
+			return f(t.Key()) || f(t.Elem())
+		case *types.Named:
+			if t.TypeParams().Len() > 0 && t.TypeArgs().Len() == 0 {
+				return true
+			}
+			return f(t.Underlying())
+		case *types.Pointer:
+			return f(t.Elem())
+		case *types.Slice:
+			return f(t.Elem())
+		case *types.Struct:
+			for i := 0; i < t.NumFields(); i++ {
+				if f(t.Field(i).Type()) {
+					return true
+				}
+			}
+			return false
+		case *types.Tuple:
+			for i := 0; i < t.Len(); i++ {
+				if f(t.At(i).Type()) {
+					return true
+				}
+			}
+			return false
+		case *types.TypeParam:
 			return true
+		default:
+			return false
 		}
-		return hasTypeParameterWithSeen(t.Underlying(), seen)
-	case *types.Pointer:
-		return hasTypeParameterWithSeen(t.Elem(), seen)
-	case *types.Slice:
-		return hasTypeParameterWithSeen(t.Elem(), seen)
-	case *types.Struct:
-		for i := 0; i < t.NumFields(); i++ {
-			if hasTypeParameterWithSeen(t.Field(i).Type(), seen) {
-				return true
-			}
-		}
-		return false
-	case *types.Tuple:
-		for i := 0; i < t.Len(); i++ {
-			if hasTypeParameterWithSeen(t.At(i).Type(), seen) {
-				return true
-			}
-		}
-		return false
-	case *types.TypeParam:
-		return true
-	default:
-		return false
 	}
+	result := f(typ)
+	hasTypeParamCache.Store(typ, result)
+	return result
 }
 
 func createPackageName(pkg *types.Package) string {
