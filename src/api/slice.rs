@@ -254,6 +254,137 @@ pub extern "C" fn gox5_slice_size(ctx: &mut LightWeightThreadContext) -> Functio
     ctx.pop_frame()
 }
 
+fn slice_bytes(slice: &SliceObject) -> &[u8] {
+    &slice.as_bytes(mem::size_of::<u8>())[..slice.size()]
+}
+
+fn index_of(s: &[u8], sep: &[u8]) -> isize {
+    if sep.is_empty() {
+        return 0;
+    }
+    if sep.len() > s.len() {
+        return -1;
+    }
+    s.windows(sep.len())
+        .position(|window| window == sep)
+        .map_or(-1, |index| isize::try_from(index).unwrap())
+}
+
+#[repr(C)]
+struct StackFrameSliceCompare<'a> {
+    common: StackFrameCommon,
+    result_ptr: &'a mut isize,
+    lhs: SliceObject,
+    rhs: SliceObject,
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn gox5_slice_compare(ctx: &mut LightWeightThreadContext) -> FunctionObject {
+    let frame = ctx.stack_frame::<StackFrameSliceCompare>();
+    let result = match slice_bytes(&frame.lhs).cmp(slice_bytes(&frame.rhs)) {
+        cmp::Ordering::Less => -1,
+        cmp::Ordering::Equal => 0,
+        cmp::Ordering::Greater => 1,
+    };
+
+    let frame = ctx.stack_frame_mut::<StackFrameSliceCompare>();
+    *frame.result_ptr = result;
+
+    ctx.pop_frame()
+}
+
+#[repr(C)]
+struct StackFrameSliceCount<'a> {
+    common: StackFrameCommon,
+    result_ptr: &'a mut isize,
+    b: SliceObject,
+    c: u8,
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn gox5_slice_count(ctx: &mut LightWeightThreadContext) -> FunctionObject {
+    let frame = ctx.stack_frame::<StackFrameSliceCount>();
+    let result = slice_bytes(&frame.b)
+        .iter()
+        .filter(|&&x| x == frame.c)
+        .count() as isize;
+
+    let frame = ctx.stack_frame_mut::<StackFrameSliceCount>();
+    *frame.result_ptr = result;
+
+    ctx.pop_frame()
+}
+
+#[repr(C)]
+struct StackFrameSliceSearchSlice<'a> {
+    common: StackFrameCommon,
+    result_ptr: &'a mut isize,
+    lhs: SliceObject,
+    rhs: SliceObject,
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn gox5_slice_search_slice(ctx: &mut LightWeightThreadContext) -> FunctionObject {
+    let frame = ctx.stack_frame::<StackFrameSliceSearchSlice>();
+    let result = index_of(slice_bytes(&frame.lhs), slice_bytes(&frame.rhs));
+
+    let frame = ctx.stack_frame_mut::<StackFrameSliceSearchSlice>();
+    *frame.result_ptr = result;
+
+    ctx.pop_frame()
+}
+
+#[repr(C)]
+struct StackFrameSliceSearchByte<'a> {
+    common: StackFrameCommon,
+    result_ptr: &'a mut isize,
+    b: SliceObject,
+    c: u8,
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn gox5_slice_search_byte(ctx: &mut LightWeightThreadContext) -> FunctionObject {
+    let frame = ctx.stack_frame::<StackFrameSliceSearchByte>();
+    let result = slice_bytes(&frame.b)
+        .iter()
+        .position(|&x| x == frame.c)
+        .map_or(-1, |i| isize::try_from(i).unwrap());
+
+    let frame = ctx.stack_frame_mut::<StackFrameSliceSearchByte>();
+    *frame.result_ptr = result;
+
+    ctx.pop_frame()
+}
+
+#[repr(C)]
+struct StackFrameSliceNewUninitialized<'a> {
+    common: StackFrameCommon,
+    result_ptr: &'a mut SliceObject,
+    n: isize,
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn gox5_slice_new_uninitialized(
+    ctx: &mut LightWeightThreadContext,
+) -> FunctionObject {
+    let frame = ctx.stack_frame::<StackFrameSliceNewUninitialized>();
+    let n = usize::try_from(frame.n).unwrap();
+
+    let result = if n == 0 {
+        SliceObject::new(ptr::null_mut(), 0, 0)
+    } else {
+        let ptr = ctx
+            .global_context()
+            .process(|mut global_context| global_context.allocator().allocate(n, |_ptr| {}));
+        SliceObject::new(ptr, n, n)
+    };
+
+    let frame = ctx.stack_frame_mut::<StackFrameSliceNewUninitialized>();
+    *frame.result_ptr = result;
+
+    ctx.pop_frame()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -506,5 +637,218 @@ mod tests {
         assert_eq!(result, FunctionObject::new_null());
         let res = unsafe { *result_raw };
         assert_eq!(res, 10);
+    }
+
+    fn raw_slice(bytes: &'static [u8]) -> SliceObject {
+        SliceObject::new(bytes.as_ptr() as *mut (), bytes.len(), bytes.len())
+    }
+
+    fn call_slice_compare(
+        ctx: &mut LightWeightThreadContext,
+        lhs: SliceObject,
+        rhs: SliceObject,
+    ) -> isize {
+        let prev_sp = ctx.stack_pointer();
+        ctx.grow_stack(mem::size_of::<isize>());
+        let result_raw = ctx.stack_pointer() as *mut isize;
+        ctx.grow_stack(mem::size_of::<StackFrameSliceCompare>());
+        ctx.push_frame(
+            prev_sp,
+            Some(result_raw as *const ()),
+            &[],
+            FunctionObject::new_null(),
+        );
+
+        let frame = ctx.stack_frame_mut::<StackFrameSliceCompare>();
+        frame.lhs = lhs;
+        frame.rhs = rhs;
+        frame.result_ptr = unsafe { &mut *result_raw };
+
+        assert_eq!(gox5_slice_compare(ctx), FunctionObject::new_null());
+        unsafe { *result_raw }
+    }
+
+    fn call_slice_count(ctx: &mut LightWeightThreadContext, b: SliceObject, c: u8) -> isize {
+        let prev_sp = ctx.stack_pointer();
+        ctx.grow_stack(mem::size_of::<isize>());
+        let result_raw = ctx.stack_pointer() as *mut isize;
+        ctx.grow_stack(mem::size_of::<StackFrameSliceCount>());
+        ctx.push_frame(
+            prev_sp,
+            Some(result_raw as *const ()),
+            &[],
+            FunctionObject::new_null(),
+        );
+
+        let frame = ctx.stack_frame_mut::<StackFrameSliceCount>();
+        frame.b = b;
+        frame.c = c;
+        frame.result_ptr = unsafe { &mut *result_raw };
+
+        assert_eq!(gox5_slice_count(ctx), FunctionObject::new_null());
+        unsafe { *result_raw }
+    }
+
+    fn call_slice_search_slice(
+        ctx: &mut LightWeightThreadContext,
+        lhs: SliceObject,
+        rhs: SliceObject,
+    ) -> isize {
+        let prev_sp = ctx.stack_pointer();
+        ctx.grow_stack(mem::size_of::<isize>());
+        let result_raw = ctx.stack_pointer() as *mut isize;
+        ctx.grow_stack(mem::size_of::<StackFrameSliceSearchSlice>());
+        ctx.push_frame(
+            prev_sp,
+            Some(result_raw as *const ()),
+            &[],
+            FunctionObject::new_null(),
+        );
+
+        let frame = ctx.stack_frame_mut::<StackFrameSliceSearchSlice>();
+        frame.lhs = lhs;
+        frame.rhs = rhs;
+        frame.result_ptr = unsafe { &mut *result_raw };
+
+        assert_eq!(gox5_slice_search_slice(ctx), FunctionObject::new_null());
+        unsafe { *result_raw }
+    }
+
+    fn call_slice_search_byte(ctx: &mut LightWeightThreadContext, b: SliceObject, c: u8) -> isize {
+        let prev_sp = ctx.stack_pointer();
+        ctx.grow_stack(mem::size_of::<isize>());
+        let result_raw = ctx.stack_pointer() as *mut isize;
+        ctx.grow_stack(mem::size_of::<StackFrameSliceSearchByte>());
+        ctx.push_frame(
+            prev_sp,
+            Some(result_raw as *const ()),
+            &[],
+            FunctionObject::new_null(),
+        );
+
+        let frame = ctx.stack_frame_mut::<StackFrameSliceSearchByte>();
+        frame.b = b;
+        frame.c = c;
+        frame.result_ptr = unsafe { &mut *result_raw };
+
+        assert_eq!(gox5_slice_search_byte(ctx), FunctionObject::new_null());
+        unsafe { *result_raw }
+    }
+
+    fn call_slice_new_uninitialized(ctx: &mut LightWeightThreadContext, n: isize) -> SliceObject {
+        let prev_sp = ctx.stack_pointer();
+        ctx.grow_stack(mem::size_of::<SliceObject>());
+        let result_raw = ctx.stack_pointer() as *mut SliceObject;
+        ctx.grow_stack(mem::size_of::<StackFrameSliceNewUninitialized>());
+        ctx.push_frame(
+            prev_sp,
+            Some(result_raw as *const ()),
+            &[],
+            FunctionObject::new_null(),
+        );
+
+        let frame = ctx.stack_frame_mut::<StackFrameSliceNewUninitialized>();
+        frame.n = n;
+        frame.result_ptr = unsafe { &mut *result_raw };
+
+        assert_eq!(
+            gox5_slice_new_uninitialized(ctx),
+            FunctionObject::new_null()
+        );
+        unsafe { (result_raw as *const SliceObject).read() }
+    }
+
+    #[test]
+    fn test_gox5_slice_compare() {
+        let (mut ctx, _gc) = create_ctx();
+        assert_eq!(
+            call_slice_compare(&mut ctx, raw_slice(b"abc"), raw_slice(b"abd")),
+            -1
+        );
+        assert_eq!(
+            call_slice_compare(&mut ctx, raw_slice(b"abd"), raw_slice(b"abc")),
+            1
+        );
+        assert_eq!(
+            call_slice_compare(&mut ctx, raw_slice(b"abc"), raw_slice(b"abc")),
+            0
+        );
+        assert_eq!(
+            call_slice_compare(&mut ctx, raw_slice(b""), raw_slice(b"abc")),
+            -1
+        );
+        assert_eq!(
+            call_slice_compare(&mut ctx, raw_slice(b"abc"), raw_slice(b"ab")),
+            1
+        );
+    }
+
+    #[test]
+    fn test_gox5_slice_count() {
+        let (mut ctx, _gc) = create_ctx();
+        assert_eq!(call_slice_count(&mut ctx, raw_slice(b"abacada"), b'a'), 4);
+        assert_eq!(call_slice_count(&mut ctx, raw_slice(b"abacada"), b'x'), 0);
+        assert_eq!(call_slice_count(&mut ctx, raw_slice(b""), b'a'), 0);
+    }
+
+    #[test]
+    fn test_gox5_slice_search_slice() {
+        let (mut ctx, _gc) = create_ctx();
+        assert_eq!(
+            call_slice_search_slice(&mut ctx, raw_slice(b"hello world"), raw_slice(b"lo wo")),
+            3
+        );
+        assert_eq!(
+            call_slice_search_slice(&mut ctx, raw_slice(b"hello"), raw_slice(b"xyz")),
+            -1
+        );
+        assert_eq!(
+            call_slice_search_slice(&mut ctx, raw_slice(b"hello"), raw_slice(b"")),
+            0
+        );
+        assert_eq!(
+            call_slice_search_slice(&mut ctx, raw_slice(b""), raw_slice(b"hello")),
+            -1
+        );
+        assert_eq!(
+            call_slice_search_slice(&mut ctx, raw_slice(b"abab"), raw_slice(b"ba")),
+            1
+        );
+    }
+
+    #[test]
+    fn test_gox5_slice_search_byte() {
+        let (mut ctx, _gc) = create_ctx();
+        assert_eq!(
+            call_slice_search_byte(&mut ctx, raw_slice(b"hello"), b'l'),
+            2
+        );
+        assert_eq!(
+            call_slice_search_byte(&mut ctx, raw_slice(b"hello"), b'h'),
+            0
+        );
+        assert_eq!(
+            call_slice_search_byte(&mut ctx, raw_slice(b"hello"), b'x'),
+            -1
+        );
+        assert_eq!(call_slice_search_byte(&mut ctx, raw_slice(b""), b'a'), -1);
+    }
+
+    #[test]
+    fn test_gox5_slice_new_uninitialized() {
+        let (mut ctx, _gc) = create_ctx();
+        let s = call_slice_new_uninitialized(&mut ctx, 5);
+        assert_eq!(s.size(), 5);
+        assert_eq!(s.capacity(), 5);
+        let bytes = s.as_bytes(mem::size_of::<u8>());
+        assert_eq!(&bytes[..5], &[0u8; 5]);
+
+        let s = call_slice_new_uninitialized(&mut ctx, 16);
+        assert_eq!(s.size(), 16);
+        assert_eq!(s.capacity(), 16);
+
+        let s = call_slice_new_uninitialized(&mut ctx, 0);
+        assert_eq!(s.size(), 0);
+        assert_eq!(s.capacity(), 0);
     }
 }

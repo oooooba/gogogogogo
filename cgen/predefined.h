@@ -139,6 +139,14 @@ DECLARE_RUNTIME_API(slice_capacity, StackFrameSliceCapacity);
 typedef struct {
     StackFrameCommon common;
     IntObject *result_ptr;
+    SliceObject lhs;
+    SliceObject rhs;
+} StackFrameSliceCompare;
+DECLARE_RUNTIME_API(slice_compare, StackFrameSliceCompare);
+
+typedef struct {
+    StackFrameCommon common;
+    IntObject *result_ptr;
     TypeId type_id;
     SliceObject src;
     SliceObject dst;
@@ -156,9 +164,10 @@ DECLARE_RUNTIME_API(slice_copy_string, StackFrameSliceCopy);
 typedef struct {
     StackFrameCommon common;
     IntObject *result_ptr;
-    SliceObject slice;
-} StackFrameSliceSize;
-DECLARE_RUNTIME_API(slice_size, StackFrameSliceSize);
+    SliceObject b;
+    Uint8Object c;
+} StackFrameSliceCount;
+DECLARE_RUNTIME_API(slice_count, StackFrameSliceCount);
 
 typedef struct {
     StackFrameCommon common;
@@ -167,6 +176,35 @@ typedef struct {
     StringObject src;
 } StackFrameSliceFromString;
 DECLARE_RUNTIME_API(slice_from_string, StackFrameSliceFromString);
+
+typedef struct {
+    StackFrameCommon common;
+    SliceObject *result_ptr;
+    IntObject n;
+} StackFrameSliceNewUninitialized;
+DECLARE_RUNTIME_API(slice_new_uninitialized, StackFrameSliceNewUninitialized);
+typedef struct {
+    StackFrameCommon common;
+    IntObject *result_ptr;
+    SliceObject b;
+    Uint8Object c;
+} StackFrameSliceSearchByte;
+DECLARE_RUNTIME_API(slice_search_byte, StackFrameSliceSearchByte);
+
+typedef struct {
+    StackFrameCommon common;
+    IntObject *result_ptr;
+    SliceObject lhs;
+    SliceObject rhs;
+} StackFrameSliceSearchSlice;
+DECLARE_RUNTIME_API(slice_search_slice, StackFrameSliceSearchSlice);
+
+typedef struct {
+    StackFrameCommon common;
+    IntObject *result_ptr;
+    SliceObject slice;
+} StackFrameSliceSize;
+DECLARE_RUNTIME_API(slice_size, StackFrameSliceSize);
 
 typedef struct {
     StackFrameCommon common;
@@ -405,6 +443,14 @@ typedef struct {
     Uint8Object byte;
 } StackFrameStringSearchByte;
 DECLARE_RUNTIME_API(string_search_byte, StackFrameStringSearchByte);
+
+typedef struct {
+    StackFrameCommon common;
+    IntObject *result_ptr;
+    StringObject lhs;
+    StringObject rhs;
+} StackFrameStringSearchString;
+DECLARE_RUNTIME_API(string_search_string, StackFrameStringSearchString);
 
 typedef struct {
     StackFrameCommon common;

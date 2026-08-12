@@ -333,6 +333,37 @@ pub extern "C" fn gox5_string_search_byte(ctx: &mut LightWeightThreadContext) ->
     ctx.pop_frame()
 }
 
+fn index_of(s: &[u8], sep: &[u8]) -> isize {
+    if sep.is_empty() {
+        return 0;
+    }
+    if sep.len() > s.len() {
+        return -1;
+    }
+    s.windows(sep.len())
+        .position(|window| window == sep)
+        .map_or(-1, |index| isize::try_from(index).unwrap())
+}
+
+#[repr(C)]
+struct StackFrameStringSearchString<'a> {
+    common: StackFrameCommon,
+    result_ptr: &'a mut isize,
+    lhs: StringObject,
+    rhs: StringObject,
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn gox5_string_search_string(ctx: &mut LightWeightThreadContext) -> FunctionObject {
+    let frame = ctx.stack_frame::<StackFrameStringSearchString>();
+    let result = index_of(frame.lhs.as_bytes(), frame.rhs.as_bytes());
+
+    let frame = ctx.stack_frame_mut::<StackFrameStringSearchString>();
+    *frame.result_ptr = result;
+
+    ctx.pop_frame()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -839,5 +870,55 @@ mod tests {
         let (mut ctx, _gc) = create_ctx();
         let s = make_string(&mut ctx, b"");
         assert_eq!(search_byte(&mut ctx, &s, b'a'), -1);
+    }
+
+    fn search_string(
+        ctx: &mut LightWeightThreadContext,
+        s: &StringObject,
+        sep: &StringObject,
+    ) -> isize {
+        let prev_sp = ctx.stack_pointer();
+        ctx.grow_stack(mem::size_of::<isize>());
+        let result_raw = ctx.stack_pointer() as *mut isize;
+        ctx.grow_stack(mem::size_of::<StackFrameStringSearchString>());
+        ctx.push_frame(
+            prev_sp,
+            Some(result_raw as *const ()),
+            &[],
+            FunctionObject::new_null(),
+        );
+
+        let frame = ctx.stack_frame_mut::<StackFrameStringSearchString>();
+        frame.lhs = s.clone();
+        frame.rhs = sep.clone();
+        frame.result_ptr = unsafe { &mut *result_raw };
+
+        let result = gox5_string_search_string(ctx);
+        assert_eq!(result, FunctionObject::new_null());
+        unsafe { *result_raw }
+    }
+
+    #[test]
+    fn test_gox5_string_search_string() {
+        let (mut ctx, _gc) = create_ctx();
+        let s = make_string(&mut ctx, b"hello world");
+        let needle = make_string(&mut ctx, b"world");
+        assert_eq!(search_string(&mut ctx, &s, &needle), 6);
+    }
+
+    #[test]
+    fn test_gox5_string_search_string_not_found() {
+        let (mut ctx, _gc) = create_ctx();
+        let s = make_string(&mut ctx, b"hello");
+        let needle = make_string(&mut ctx, b"xyz");
+        assert_eq!(search_string(&mut ctx, &s, &needle), -1);
+    }
+
+    #[test]
+    fn test_gox5_string_search_string_empty() {
+        let (mut ctx, _gc) = create_ctx();
+        let s = make_string(&mut ctx, b"hello");
+        let empty = make_string(&mut ctx, b"");
+        assert_eq!(search_string(&mut ctx, &s, &empty), 0);
     }
 }

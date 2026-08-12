@@ -703,6 +703,34 @@ func (ctx *Context) emitSpecialRuntimeCall(callee *ssa.Function, instr *ssa.Call
 
 	if pkgPath == "internal/bytealg" {
 		switch funcName {
+		case "Compare":
+			result := createValueRelName(instr)
+			ctx.switchFunctionToCallRuntimeApi("gox5_slice_compare", "StackFrameSliceCompare", createInstructionName(instr), &result, nil,
+				paramArgPair{param: "lhs", arg: fmt.Sprintf("%s.raw", createValueRelName(callCommon.Args[0]))},
+				paramArgPair{param: "rhs", arg: fmt.Sprintf("%s.raw", createValueRelName(callCommon.Args[1]))},
+			)
+			return true
+		case "Count":
+			result := createValueRelName(instr)
+			ctx.switchFunctionToCallRuntimeApi("gox5_slice_count", "StackFrameSliceCount", createInstructionName(instr), &result, nil,
+				paramArgPair{param: "b", arg: fmt.Sprintf("%s.raw", createValueRelName(callCommon.Args[0]))},
+				paramArgPair{param: "c", arg: createValueRelName(callCommon.Args[1])},
+			)
+			return true
+		case "Index":
+			result := createValueRelName(instr)
+			ctx.switchFunctionToCallRuntimeApi("gox5_slice_search_slice", "StackFrameSliceSearchSlice", createInstructionName(instr), &result, nil,
+				paramArgPair{param: "lhs", arg: fmt.Sprintf("%s.raw", createValueRelName(callCommon.Args[0]))},
+				paramArgPair{param: "rhs", arg: fmt.Sprintf("%s.raw", createValueRelName(callCommon.Args[1]))},
+			)
+			return true
+		case "IndexByte":
+			result := createValueRelName(instr)
+			ctx.switchFunctionToCallRuntimeApi("gox5_slice_search_byte", "StackFrameSliceSearchByte", createInstructionName(instr), &result, nil,
+				paramArgPair{param: "b", arg: fmt.Sprintf("%s.raw", createValueRelName(callCommon.Args[0]))},
+				paramArgPair{param: "c", arg: createValueRelName(callCommon.Args[1])},
+			)
+			return true
 		case "IndexByteString":
 			result := createValueRelName(instr)
 			ctx.switchFunctionToCallRuntimeApi("gox5_string_search_byte", "StackFrameStringSearchByte", createInstructionName(instr), &result, nil,
@@ -710,10 +738,31 @@ func (ctx *Context) emitSpecialRuntimeCall(callee *ssa.Function, instr *ssa.Call
 				paramArgPair{param: "byte", arg: createValueRelName(callCommon.Args[1])},
 			)
 			return true
+		case "IndexString":
+			result := createValueRelName(instr)
+			ctx.switchFunctionToCallRuntimeApi("gox5_string_search_string", "StackFrameStringSearchString", createInstructionName(instr), &result, nil,
+				paramArgPair{param: "lhs", arg: createValueRelName(callCommon.Args[0])},
+				paramArgPair{param: "rhs", arg: createValueRelName(callCommon.Args[1])},
+			)
+			return true
+		case "MakeNoZero":
+			result := fmt.Sprintf("%s.raw", createValueRelName(instr))
+			ctx.switchFunctionToCallRuntimeApi("gox5_slice_new_uninitialized", "StackFrameSliceNewUninitialized", createInstructionName(instr), &result, nil,
+				paramArgPair{param: "n", arg: createValueRelName(callCommon.Args[0])},
+			)
+			return true
 		}
 	}
 
 	if pkgPath == "errors" && funcName == "init" {
+		fmt.Fprintf(ctx.stream, "\treturn %s;\n", wrapInFunctionObject(createInstructionName(instr)))
+		return true
+	}
+	if pkgPath == "sync" && funcName == "init" {
+		fmt.Fprintf(ctx.stream, "\treturn %s;\n", wrapInFunctionObject(createInstructionName(instr)))
+		return true
+	}
+	if pkgPath == "internal/cpu" && funcName == "init" {
 		fmt.Fprintf(ctx.stream, "\treturn %s;\n", wrapInFunctionObject(createInstructionName(instr)))
 		return true
 	}
@@ -1604,25 +1653,29 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 			}
 
 			ptr := ""
-			length := ""
+			endIndexDefault := ""
+			capacityDefault := ""
 			switch t := instr.X.Type().Underlying().(type) {
 			case *types.Pointer:
 				ptr = "raw->raw"
 				elemType := t.Elem().Underlying().(*types.Array)
-				length = fmt.Sprintf("%d", elemType.Len())
+				length := fmt.Sprintf("%d", elemType.Len())
+				endIndexDefault = length
+				capacityDefault = length
 			case *types.Slice:
 				ptr = "typed.ptr"
-				length = fmt.Sprintf("%s.typed.capacity", createValueRelName(instr.X))
+				endIndexDefault = fmt.Sprintf("%s.typed.size", createValueRelName(instr.X))
+				capacityDefault = fmt.Sprintf("%s.typed.capacity", createValueRelName(instr.X))
 			default:
 				panic(fmt.Sprintf("not implemented: %s (%T)", t, t))
 			}
 
-			endIndex := length
+			endIndex := endIndexDefault
 			if instr.High != nil {
 				endIndex = fmt.Sprintf("%s.raw", createValueRelName(instr.High))
 			}
 
-			capacity := length
+			capacity := capacityDefault
 			if instr.Max != nil {
 				capacity = fmt.Sprintf("%s.raw", createValueRelName(instr.Max))
 			}
@@ -1876,6 +1929,15 @@ func createSignatureName(signature *types.Signature, makesReceiverBound bool, ma
 
 func (ctx *Context) emitFunctionHeader(name string, end string) {
 	fmt.Fprintf(ctx.stream, "FunctionObject %s (LightWeightThreadContext* ctx)%s\n", name, end)
+}
+
+func (ctx *Context) emitBoundFunctionFreeVarsDeclaration(fn *ssa.Function) {
+	obj := fn.Object().(*types.Func)
+	recvType := obj.Type().(*types.Signature).Recv().Type()
+	fnName := createFunctionName(fn)
+	fmt.Fprintf(ctx.stream, "typedef struct {\n")
+	fmt.Fprintf(ctx.stream, "\t%s receiver; // %s\n", createTypeName(recvType), fn)
+	fmt.Fprintf(ctx.stream, "} FreeVars_%s;\n", fnName)
 }
 
 func (ctx *Context) emitFunctionVariableStructure(function *ssa.Function) {
@@ -2510,9 +2572,8 @@ func (ctx *Context) emitInterfaceTableDefinition(typ types.Type, allowSet map[st
 }
 
 func isMethodFromSkippedPackage(function *ssa.Function) bool {
-	origin := function.Origin()
-	if origin != nil {
-		function = origin
+	if isFunctionBodySkipped(function) {
+		return true
 	}
 	if function.Pkg != nil && isFunctionBodySkippedPackage(function.Pkg) {
 		return true
@@ -2770,49 +2831,51 @@ func computeInstanceOwners(program *ssa.Program) map[*ssa.Function]*ssa.Package 
 	reachers := map[*ssa.Function][]*ssa.Package{}
 
 	for _, pkg := range allPackagesSorted(program) {
-		for _, member := range sortedPackageMembers(pkg) {
-			fn, ok := member.(*ssa.Function)
-			if !ok {
-				continue
+		seen := map[*ssa.Function]bool{}
+		var walk func(fn *ssa.Function)
+		walk = func(fn *ssa.Function) {
+			if fn == nil || seen[fn] {
+				return
 			}
-			seen := map[*ssa.Function]bool{}
-			var walk func(fn *ssa.Function)
-			walk = func(fn *ssa.Function) {
-				if fn == nil || seen[fn] {
-					return
-				}
-				seen[fn] = true
+			seen[fn] = true
 
-				if fn.Blocks == nil {
-					return
-				}
+			if fn.Pkg == nil && len(fn.TypeArgs()) > 0 {
+				reachers[fn] = append(reachers[fn], pkg)
+			}
 
-				if fn.Pkg == nil && len(fn.TypeArgs()) > 0 {
-					reachers[fn] = append(reachers[fn], pkg)
-				}
+			if fn.Blocks == nil {
+				return
+			}
 
-				for _, block := range fn.Blocks {
-					for _, instr := range block.Instrs {
-						var callee *ssa.Function
-						switch instr := instr.(type) {
-						case *ssa.Call:
-							callee, _ = instr.Common().Value.(*ssa.Function)
-						case *ssa.Defer:
-							callee, _ = instr.Common().Value.(*ssa.Function)
-						case *ssa.Go:
-							callee, _ = instr.Common().Value.(*ssa.Function)
-						}
-						if callee != nil {
-							walk(callee)
-						}
+			for _, block := range fn.Blocks {
+				for _, instr := range block.Instrs {
+					var callee *ssa.Function
+					switch instr := instr.(type) {
+					case *ssa.Call:
+						callee, _ = instr.Common().Value.(*ssa.Function)
+					case *ssa.Defer:
+						callee, _ = instr.Common().Value.(*ssa.Function)
+					case *ssa.Go:
+						callee, _ = instr.Common().Value.(*ssa.Function)
+					}
+					if callee != nil {
+						walk(callee)
 					}
 				}
-
-				for _, anon := range fn.AnonFuncs {
-					walk(anon)
-				}
 			}
-			walk(fn)
+
+			for _, anon := range fn.AnonFuncs {
+				walk(anon)
+			}
+		}
+		for _, member := range sortedPackageMembers(pkg) {
+			switch member := member.(type) {
+			case *ssa.Function:
+				walk(member)
+			case *ssa.Type:
+				walkTypeMethods(program, member.Type(), walk)
+				walkTypeMethods(program, types.NewPointer(member.Type()), walk)
+			}
 		}
 	}
 
@@ -2843,6 +2906,12 @@ func (ctx *Context) collectInstances(pkg *ssa.Package) {
 			return
 		}
 		seen[fn] = true
+
+		if fn.Pkg == nil && len(fn.TypeArgs()) > 0 && fn.Parent() == nil {
+			if ctx.instanceOwners[fn] == pkg {
+				ctx.extraFunctions = append(ctx.extraFunctions, fn)
+			}
+		}
 
 		if fn.Blocks == nil {
 			return
@@ -2877,8 +2946,21 @@ func (ctx *Context) collectInstances(pkg *ssa.Package) {
 	}
 
 	for _, member := range sortedPackageMembers(pkg) {
-		if fn, ok := member.(*ssa.Function); ok {
-			walk(fn)
+		switch member := member.(type) {
+		case *ssa.Function:
+			walk(member)
+		case *ssa.Type:
+			walkTypeMethods(ctx.program, member.Type(), walk)
+			walkTypeMethods(ctx.program, types.NewPointer(member.Type()), walk)
+		}
+	}
+}
+
+func walkTypeMethods(program *ssa.Program, t types.Type, walk func(fn *ssa.Function)) {
+	methodSet := program.MethodSets.MethodSet(t)
+	for i := 0; i < methodSet.Len(); i++ {
+		if function := program.MethodValue(methodSet.At(i)); function != nil {
+			walk(function)
 		}
 	}
 }
@@ -3275,6 +3357,38 @@ func (ctx *Context) emitPackage(pkg *ssa.Package) {
 		})
 	})
 
+	functionPkg := func(f *ssa.Function) *types.Package {
+		if f.Pkg != nil {
+			return f.Pkg.Pkg
+		}
+		if obj := f.Object(); obj != nil {
+			return obj.Pkg()
+		}
+		return nil
+	}
+
+	emittedBoundFunctionFreeVars := make(map[string]struct{})
+	ctx.traverseFunction(pkg, func(function *ssa.Function) {
+		ctx.traverseValue(function, func(value ssa.Value) {
+			f, ok := value.(*ssa.Function)
+			if !ok {
+				return
+			}
+			if functionPkg(f) == pkg.Pkg {
+				return
+			}
+			ctx.emitFunctionHeader(createFunctionName(f), ";")
+			if strings.HasSuffix(f.Name(), "$bound") {
+				fnName := createFunctionName(f)
+				if _, ok := emittedBoundFunctionFreeVars[fnName]; ok {
+					return
+				}
+				emittedBoundFunctionFreeVars[fnName] = struct{}{}
+				ctx.emitBoundFunctionFreeVarsDeclaration(f)
+			}
+		})
+	})
+
 	ctx.traverseFunction(pkg, func(function *ssa.Function) {
 		ctx.traverseValue(function, func(value ssa.Value) {
 			if gv, ok := value.(*ssa.Global); ok {
@@ -3316,9 +3430,13 @@ func (ctx *Context) emitPackage(pkg *ssa.Package) {
 	foundConstValueSet := make(map[string]struct{})
 	ctx.traverseFunction(pkg, func(function *ssa.Function) {
 		if function.Blocks == nil {
+			if function.Pkg == nil {
+				fmt.Fprintf(ctx.stream, "FunctionObject %s(LightWeightThreadContext* ctx){ (void)ctx; assert(false); return (FunctionObject){NULL}; }\n", createFunctionName(function))
+			}
 			return
 		}
 		if isFunctionBodySkipped(function) {
+			fmt.Fprintf(ctx.stream, "FunctionObject %s(LightWeightThreadContext* ctx){ (void)ctx; assert(false); return (FunctionObject){NULL}; }\n", createFunctionName(function))
 			return
 		}
 		ctx.traverseValue(function, func(value ssa.Value) {
