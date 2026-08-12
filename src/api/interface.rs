@@ -96,12 +96,15 @@ pub extern "C" fn gox5_interface_convert_to_interface(
 ) -> FunctionObject {
     let frame = ctx.stack_frame_mut::<StackFrameInterfaceConvertToInterface>();
 
-    let success = frame.to_type.interface_table().iter().all(|entry| {
-        frame
-            .interface
-            .search(entry.method_name().clone())
-            .is_some()
-    });
+    let success = if frame.interface.is_nil() {
+        frame.to_type.interface_table().is_empty()
+    } else {
+        frame.to_type.interface_table().iter().all(|entry| {
+            frame
+                .interface
+                .search_by_signature(entry.method_name(), entry.method_signature())
+        })
+    };
 
     if success {
         *frame.value.as_mut::<Interface>() = frame.interface.clone();

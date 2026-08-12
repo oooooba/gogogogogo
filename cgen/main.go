@@ -66,6 +66,8 @@ type Context struct {
 	extraFunctions           []*ssa.Function
 	instanceOwners           map[*ssa.Function]*ssa.Package
 	cachedFunctions          []*ssa.Function
+	assertedInterfaceTypes   map[string]types.Type
+	visitedInterfaceNames    map[string]bool
 }
 
 func encode(str string) string {
@@ -408,7 +410,20 @@ func createRawTypeName(typ types.Type) string {
 }
 
 func createTypeIdName(typ types.Type) string {
-	return fmt.Sprintf("runtime_info_type_%s", createTypeName(typ))
+	return fmt.Sprintf("runtime_info_type_%s", createInterfaceTypeSymbolName(typ))
+}
+
+func createInterfaceTypeSymbolName(typ types.Type) string {
+	iface, ok := typ.(*types.Interface)
+	if !ok || iface.NumMethods() == 0 {
+		return createTypeName(typ)
+	}
+	methods := make([]string, 0, iface.NumMethods())
+	for i := 0; i < iface.NumMethods(); i++ {
+		methods = append(methods, iface.Method(i).Type().String())
+	}
+	sort.Strings(methods)
+	return encode(fmt.Sprintf("Interface<%s>", strings.Join(methods, "$")))
 }
 
 func createFieldName(field *types.Var, index int) string {
@@ -2367,7 +2382,7 @@ func (ctx *Context) emitTypeInfoDeclaration(typ types.Type) {
 }
 
 func (ctx *Context) emitTypeInfoDefinition(typ types.Type) {
-	interfaceTableName := fmt.Sprintf("interfaceTable_%s", createTypeName(typ))
+	interfaceTableName := fmt.Sprintf("interfaceTable_%s", createInterfaceTypeSymbolName(typ))
 	numMethods := fmt.Sprintf("sizeof(%s.entries)/sizeof(%s.entries[0])", interfaceTableName, interfaceTableName)
 	interfaceTable := fmt.Sprintf("&%s.entries[0]", interfaceTableName)
 
@@ -2533,9 +2548,15 @@ func (ctx *Context) emitHashFunctionDefinition(typ types.Type) {
 	fmt.Fprintf(ctx.stream, "}\n")
 }
 
-func (ctx *Context) emitInterfaceTableDeclaration(typ types.Type, allowSet map[string]struct{}) {
+func (ctx *Context) interfaceTableEntryIndexes(typ types.Type, allowSet map[string]struct{}) []int {
 	methodSet := ctx.program.MethodSets.MethodSet(typ)
 	entryIndexes := make([]int, 0)
+	if _, ok := typ.Underlying().(*types.Interface); ok {
+		for i := 0; i < methodSet.Len(); i++ {
+			entryIndexes = append(entryIndexes, i)
+		}
+		return entryIndexes
+	}
 	if _, ok := allowSet[createTypeName(typ)]; ok {
 		for i := 0; i < methodSet.Len(); i++ {
 			function := ctx.program.MethodValue(methodSet.At(i))
@@ -2544,31 +2565,141 @@ func (ctx *Context) emitInterfaceTableDeclaration(typ types.Type, allowSet map[s
 			}
 		}
 	}
-	name := createTypeName(typ)
+	return entryIndexes
+}
+
+func (ctx *Context) emitInterfaceTableDeclaration(typ types.Type, allowSet map[string]struct{}) {
+	entryIndexes := ctx.interfaceTableEntryIndexes(typ, allowSet)
+	name := createInterfaceTypeSymbolName(typ)
 	fmt.Fprintf(ctx.stream, "struct InterfaceTable_%s { InterfaceTableEntry entries[%d]; };\n", name, len(entryIndexes))
 	fmt.Fprintf(ctx.stream, "extern struct InterfaceTable_%s interfaceTable_%s;\n", name, name)
 }
 
 func (ctx *Context) emitInterfaceTableDefinition(typ types.Type, allowSet map[string]struct{}) {
+	entryIndexes := ctx.interfaceTableEntryIndexes(typ, allowSet)
 	methodSet := ctx.program.MethodSets.MethodSet(typ)
-	entryIndexes := make([]int, 0)
-	if _, ok := allowSet[createTypeName(typ)]; ok {
-		for i := 0; i < methodSet.Len(); i++ {
-			function := ctx.program.MethodValue(methodSet.At(i))
-			if function != nil && !isMethodFromSkippedPackage(function) {
-				entryIndexes = append(entryIndexes, i)
-			}
-		}
-	}
-	name := createTypeName(typ)
+	name := createInterfaceTypeSymbolName(typ)
 	fmt.Fprintf(ctx.stream, "struct InterfaceTable_%s interfaceTable_%s = {{\n", name, name)
 	for _, index := range entryIndexes {
-		function := ctx.program.MethodValue(methodSet.At(index))
-		methodName := function.Name()
-		method := wrapInFunctionObject(createFunctionName(function))
-		fmt.Fprintf(ctx.stream, "\t{ .method_name = (StringObject){.raw = \"%s\", .len = sizeof(\"%s\") - 1}, .method = %s },\n", methodName, methodName, method)
+		sel := methodSet.At(index)
+		var methodName, method string
+		if _, ok := typ.Underlying().(*types.Interface); ok {
+			methodName = sel.Obj().Name()
+			method = "(FunctionObject){.raw=NULL}"
+		} else {
+			function := ctx.program.MethodValue(sel)
+			methodName = function.Name()
+			method = wrapInFunctionObject(createFunctionName(function))
+		}
+		methodSignature := methodSignatureString(sel)
+		fmt.Fprintf(ctx.stream, "\t{ .method_name = (StringObject){.raw = \"%s\", .len = sizeof(\"%s\") - 1}, .method = %s, .method_signature = (StringObject){.raw = \"%s\", .len = sizeof(\"%s\") - 1} },\n", methodName, methodName, method, methodSignature, methodSignature)
 	}
 	fmt.Fprintln(ctx.stream, "}};")
+}
+
+func methodSignatureString(sel *types.Selection) string {
+	return signatureTypeString(sel.Obj().(*types.Func).Type())
+}
+
+func signatureTypeString(t types.Type) string {
+	switch t := t.(type) {
+	case *types.Alias:
+		return signatureTypeString(t.Rhs())
+	case *types.Named:
+		if t.Obj().Pkg() == nil {
+			return t.Obj().Name()
+		}
+		return fmt.Sprintf("%s.%s", t.Obj().Pkg().Path(), t.Obj().Name())
+	case *types.Basic:
+		return t.Name()
+	case *types.Array:
+		return fmt.Sprintf("[%d]%s", t.Len(), signatureTypeString(t.Elem()))
+	case *types.Slice:
+		return "[]" + signatureTypeString(t.Elem())
+	case *types.Struct:
+		var b strings.Builder
+		b.WriteString("struct{")
+		for i := 0; i < t.NumFields(); i++ {
+			if i > 0 {
+				b.WriteString("; ")
+			}
+			field := t.Field(i)
+			if !field.Embedded() {
+				b.WriteString(field.Name())
+				b.WriteString(" ")
+			}
+			b.WriteString(signatureTypeString(field.Type()))
+		}
+		b.WriteString("}")
+		return b.String()
+	case *types.Pointer:
+		return "*" + signatureTypeString(t.Elem())
+	case *types.Tuple:
+		var b strings.Builder
+		b.WriteString("(")
+		for i := 0; i < t.Len(); i++ {
+			if i > 0 {
+				b.WriteString(", ")
+			}
+			b.WriteString(signatureTypeString(t.At(i).Type()))
+		}
+		b.WriteString(")")
+		return b.String()
+	case *types.Signature:
+		var b strings.Builder
+		b.WriteString("func(")
+		if t.Variadic() {
+			for i := 0; i < t.Params().Len()-1; i++ {
+				if i > 0 {
+					b.WriteString(", ")
+				}
+				b.WriteString(signatureTypeString(t.Params().At(i).Type()))
+			}
+			if t.Params().Len() > 0 {
+				b.WriteString(", ")
+			}
+			last := t.Params().At(t.Params().Len() - 1).Type()
+			lastElem := last.Underlying().(*types.Slice).Elem()
+			b.WriteString("...")
+			b.WriteString(signatureTypeString(lastElem))
+		} else {
+			for i := 0; i < t.Params().Len(); i++ {
+				if i > 0 {
+					b.WriteString(", ")
+				}
+				b.WriteString(signatureTypeString(t.Params().At(i).Type()))
+			}
+		}
+		b.WriteString(")")
+		if t.Results().Len() > 0 {
+			b.WriteString(" (")
+			for i := 0; i < t.Results().Len(); i++ {
+				if i > 0 {
+					b.WriteString(", ")
+				}
+				b.WriteString(signatureTypeString(t.Results().At(i).Type()))
+			}
+			b.WriteString(")")
+		}
+		return b.String()
+	case *types.Interface:
+		return t.String()
+	case *types.Map:
+		return fmt.Sprintf("map[%s]%s", signatureTypeString(t.Key()), signatureTypeString(t.Elem()))
+	case *types.Chan:
+		switch t.Dir() {
+		case types.SendOnly:
+			return "chan<- " + signatureTypeString(t.Elem())
+		case types.RecvOnly:
+			return "<-chan " + signatureTypeString(t.Elem())
+		default:
+			return "chan " + signatureTypeString(t.Elem())
+		}
+	case *types.TypeParam:
+		return t.String()
+	default:
+		return t.String()
+	}
 }
 
 func isMethodFromSkippedPackage(function *ssa.Function) bool {
@@ -3270,6 +3401,13 @@ uintptr_t hash_Interface(const Interface* obj);
 		ctx.emitInterfaceTableDeclaration(typ, allowSet)
 		ctx.emitTypeInfoDeclaration(typ)
 	})
+	for _, typ := range sortedAssertedInterfaceTypes(ctx.assertedInterfaceTypes) {
+		if ctx.visitedInterfaceNames != nil && ctx.visitedInterfaceNames[createInterfaceTypeSymbolName(typ)] {
+			continue
+		}
+		ctx.emitInterfaceTableDeclaration(typ, allowSet)
+		ctx.emitTypeInfoDeclaration(typ)
+	}
 }
 
 func (ctx *Context) emitInterfaceDataDefinition() {
@@ -3334,6 +3472,13 @@ uintptr_t hash_Interface(const Interface* obj) {
 		ctx.emitInterfaceTableDefinition(typ, allowSet)
 		ctx.emitTypeInfoDefinition(typ)
 	})
+	for _, typ := range sortedAssertedInterfaceTypes(ctx.assertedInterfaceTypes) {
+		if ctx.visitedInterfaceNames != nil && ctx.visitedInterfaceNames[createInterfaceTypeSymbolName(typ)] {
+			continue
+		}
+		ctx.emitInterfaceTableDefinition(typ, allowSet)
+		ctx.emitTypeInfoDefinition(typ)
+	}
 }
 
 func (ctx *Context) emitPackage(pkg *ssa.Package) {
@@ -3570,7 +3715,45 @@ func generateMakefile(makefile *os.File, program *ssa.Program, buildDirname stri
 	fmt.Fprintf(makefile, "\t@$(CC) -o bin-debug-user-debug-runtime.exe %s $(LIBS_DEBUG) $(LDFLAGS_DEBUG)\n", strings.Join(objsDebug, " "))
 }
 
-func handleSharedDefinition(program *ssa.Program, instanceOwners map[*ssa.Function]*ssa.Package, outputPath string) {
+func sortedAssertedInterfaceTypes(types_ map[string]types.Type) []types.Type {
+	names := make([]string, 0, len(types_))
+	for name := range types_ {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	result := make([]types.Type, 0, len(names))
+	for _, name := range names {
+		result = append(result, types_[name])
+	}
+	return result
+}
+
+func collectAssertedInterfaceTypes(program *ssa.Program, instanceOwners map[*ssa.Function]*ssa.Package) map[string]types.Type {
+	ctx := Context{
+		program:        program,
+		latestNameMap:  make(map[*ssa.BasicBlock]string),
+		instanceOwners: instanceOwners,
+	}
+	for _, pkg := range allPackagesSorted(program) {
+		ctx.collectInstances(pkg)
+	}
+	result := map[string]types.Type{}
+	ctx.traverseFunction(nil, func(function *ssa.Function) {
+		for _, block := range function.Blocks {
+			for _, instr := range block.Instrs {
+				if ta, ok := instr.(*ssa.TypeAssert); ok {
+					iface, ok := ta.AssertedType.(*types.Interface)
+					if ok && iface.NumMethods() > 0 {
+						result[createInterfaceTypeSymbolName(iface)] = iface
+					}
+				}
+			}
+		}
+	})
+	return result
+}
+
+func handleSharedDefinition(program *ssa.Program, instanceOwners map[*ssa.Function]*ssa.Package, assertedInterfaceTypes map[string]types.Type, outputPath string) {
 	f, err := os.Create(outputPath)
 	if err != nil {
 		panic(err)
@@ -3578,10 +3761,11 @@ func handleSharedDefinition(program *ssa.Program, instanceOwners map[*ssa.Functi
 	defer f.Close()
 
 	ctx := Context{
-		stream:         f,
-		program:        program,
-		latestNameMap:  make(map[*ssa.BasicBlock]string),
-		instanceOwners: instanceOwners,
+		stream:                 f,
+		program:                program,
+		latestNameMap:          make(map[*ssa.BasicBlock]string),
+		instanceOwners:         instanceOwners,
+		assertedInterfaceTypes: assertedInterfaceTypes,
 	}
 
 	for _, pkg := range allPackagesSorted(program) {
@@ -3589,6 +3773,14 @@ func handleSharedDefinition(program *ssa.Program, instanceOwners map[*ssa.Functi
 	}
 
 	ctx.emitCommon()
+
+	visitedInterfaceNames := map[string]bool{}
+	ctx.traverseType(nil, func(typ types.Type) {
+		if _, ok := typ.(*types.Interface); ok {
+			visitedInterfaceNames[createInterfaceTypeSymbolName(typ)] = true
+		}
+	})
+	ctx.visitedInterfaceNames = visitedInterfaceNames
 
 	ctx.emitTypeDeclarationAndDefinition(nil)
 	ctx.emitInterfaceDataDeclaration(nil)
@@ -3611,7 +3803,7 @@ func handleSharedDefinition(program *ssa.Program, instanceOwners map[*ssa.Functi
 	ctx.emitRuntimeInfo()
 }
 
-func handlePackage(program *ssa.Program, pkg *ssa.Package, instanceOwners map[*ssa.Function]*ssa.Package, outputPath string) {
+func handlePackage(program *ssa.Program, pkg *ssa.Package, instanceOwners map[*ssa.Function]*ssa.Package, assertedInterfaceTypes map[string]types.Type, outputPath string) {
 	f, err := os.Create(outputPath)
 	if err != nil {
 		panic(err)
@@ -3619,10 +3811,11 @@ func handlePackage(program *ssa.Program, pkg *ssa.Package, instanceOwners map[*s
 	defer f.Close()
 
 	ctx := Context{
-		stream:         f,
-		program:        program,
-		latestNameMap:  make(map[*ssa.BasicBlock]string),
-		instanceOwners: instanceOwners,
+		stream:                 f,
+		program:                program,
+		latestNameMap:          make(map[*ssa.BasicBlock]string),
+		instanceOwners:         instanceOwners,
+		assertedInterfaceTypes: assertedInterfaceTypes,
 	}
 
 	ctx.collectInstances(pkg)
@@ -3642,11 +3835,12 @@ func emitProgram(program *ssa.Program, buildDirname string) {
 	waitGroup := sync.WaitGroup{}
 
 	instanceOwners := computeInstanceOwners(program)
+	assertedInterfaceTypes := collectAssertedInterfaceTypes(program, instanceOwners)
 
 	waitGroup.Add(1)
 	go func() {
 		definitionName := "shared_definition.c"
-		handleSharedDefinition(program, instanceOwners, fmt.Sprintf("%s/%s", buildDirname, definitionName))
+		handleSharedDefinition(program, instanceOwners, assertedInterfaceTypes, fmt.Sprintf("%s/%s", buildDirname, definitionName))
 		waitGroup.Done()
 	}()
 
@@ -3657,7 +3851,7 @@ func emitProgram(program *ssa.Program, buildDirname string) {
 		waitGroup.Add(1)
 		go func(pkg *ssa.Package) {
 			outputName := fmt.Sprintf("package_%s.c", createPackageName(pkg.Pkg))
-			handlePackage(program, pkg, instanceOwners, fmt.Sprintf("%s/%s", buildDirname, outputName))
+			handlePackage(program, pkg, instanceOwners, assertedInterfaceTypes, fmt.Sprintf("%s/%s", buildDirname, outputName))
 			waitGroup.Done()
 		}(pkg)
 	}

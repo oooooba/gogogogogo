@@ -13,11 +13,16 @@ static PANIC_NIL_ERROR_TYPE_ID_DUMMY: u8 = 0;
 pub(crate) struct InterfaceTableEntry {
     method_name: StringObject,
     method: FunctionObject,
+    method_signature: StringObject,
 }
 
 impl InterfaceTableEntry {
     pub(crate) fn method_name(&self) -> &StringObject {
         &self.method_name
+    }
+
+    pub(crate) fn method_signature(&self) -> &StringObject {
+        &self.method_signature
     }
 }
 
@@ -69,6 +74,20 @@ impl Interface {
             }
         }
         None
+    }
+
+    pub fn search_by_signature(
+        &self,
+        method_name: &StringObject,
+        method_signature: &StringObject,
+    ) -> bool {
+        let table = self.type_id.interface_table();
+        for entry in table {
+            if &entry.method_name == method_name && &entry.method_signature == method_signature {
+                return true;
+            }
+        }
+        false
     }
 
     pub fn panic_print(&self) {

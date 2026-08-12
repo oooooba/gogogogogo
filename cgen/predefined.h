@@ -90,6 +90,7 @@ typedef struct {
 typedef struct {
     StringObject method_name;
     FunctionObject method;
+    StringObject method_signature;
 } InterfaceTableEntry;
 
 typedef struct TypeInfo {
