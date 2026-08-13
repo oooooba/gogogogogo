@@ -1350,7 +1350,7 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 					}
 					for i := 0; i < signature.Params().Len(); i++ {
 						arg := callCommon.Args[argBase+i]
-						fmt.Fprintf(ctx.stream, "signature->param%d = %s; // %s\n", paramBase+i, createValueRelName(arg), signature.Params().At(i))
+						fmt.Fprintf(ctx.stream, "signature->param%d = %s; // param: %d\n", paramBase+i, createValueRelName(arg), i)
 					}
 				})
 			}
@@ -1857,6 +1857,19 @@ func createBasicBlockName(basicBlock *ssa.BasicBlock) string {
 
 func createFunctionName(function *ssa.Function) string {
 	return encode(fmt.Sprintf("f$%s", function.RelString(nil)))
+}
+
+func isGeneratedGenericInstance(fn *ssa.Function) bool {
+	return fn.Pkg == nil && len(fn.TypeArgs()) > 0 && fn.Parent() == nil
+}
+
+func isInGenericInstanceSubtree(fn *ssa.Function) bool {
+	for f := fn; f != nil; f = f.Parent() {
+		if isGeneratedGenericInstance(f) {
+			return true
+		}
+	}
+	return false
 }
 
 func hasTypeParamInSignature(sig *types.Signature) bool {
@@ -3084,12 +3097,7 @@ func computeInstanceOwners(program *ssa.Program) map[*ssa.Function]*ssa.Package 
 		}
 		owner := pkgs[0]
 		if origin := fn.Origin(); origin != nil && origin.Pkg != nil {
-			for _, pkg := range pkgs {
-				if pkg == origin.Pkg {
-					owner = origin.Pkg
-					break
-				}
-			}
+			owner = origin.Pkg
 		}
 		instanceOwners[fn] = owner
 	}
@@ -3106,7 +3114,7 @@ func (ctx *Context) collectInstances(pkg *ssa.Package) {
 		}
 		seen[fn] = true
 
-		if fn.Pkg == nil && len(fn.TypeArgs()) > 0 && fn.Parent() == nil {
+		if isGeneratedGenericInstance(fn) {
 			if ctx.instanceOwners[fn] == pkg {
 				ctx.extraFunctions = append(ctx.extraFunctions, fn)
 			}
@@ -3137,7 +3145,7 @@ func (ctx *Context) collectInstances(pkg *ssa.Package) {
 			walk(anon)
 		}
 
-		if fn.Pkg == nil && len(fn.TypeArgs()) > 0 && fn.Parent() == nil {
+		if isGeneratedGenericInstance(fn) {
 			if ctx.instanceOwners[fn] == pkg {
 				ctx.extraFunctions = append(ctx.extraFunctions, fn)
 			}
@@ -3153,6 +3161,19 @@ func (ctx *Context) collectInstances(pkg *ssa.Package) {
 			walkTypeMethods(ctx.program, types.NewPointer(member.Type()), walk)
 		}
 	}
+
+	unseen := []*ssa.Function{}
+	for fn, owner := range ctx.instanceOwners {
+		if owner == pkg && isGeneratedGenericInstance(fn) {
+			if !seen[fn] {
+				unseen = append(unseen, fn)
+			}
+		}
+	}
+	sort.Slice(unseen, func(i, j int) bool {
+		return unseen[i].RelString(nil) < unseen[j].RelString(nil)
+	})
+	ctx.extraFunctions = append(ctx.extraFunctions, unseen...)
 }
 
 func walkTypeMethods(program *ssa.Program, t types.Type, walk func(fn *ssa.Function)) {
@@ -3796,17 +3817,9 @@ func sortedAssertedInterfaceTypes(types_ map[string]types.Type) []types.Type {
 	return result
 }
 
-func collectAssertedInterfaceTypes(program *ssa.Program, instanceOwners map[*ssa.Function]*ssa.Package) map[string]types.Type {
-	ctx := Context{
-		program:        program,
-		latestNameMap:  make(map[*ssa.BasicBlock]string),
-		instanceOwners: instanceOwners,
-	}
-	for _, pkg := range allPackagesSorted(program) {
-		ctx.collectInstances(pkg)
-	}
+func collectAssertedInterfaceTypesOfFunctions(ctx *Context, pkg *ssa.Package) map[string]types.Type {
 	result := map[string]types.Type{}
-	ctx.traverseFunction(nil, func(function *ssa.Function) {
+	ctx.traverseFunction(pkg, func(function *ssa.Function) {
 		for _, block := range function.Blocks {
 			for _, instr := range block.Instrs {
 				if ta, ok := instr.(*ssa.TypeAssert); ok {
@@ -3819,6 +3832,18 @@ func collectAssertedInterfaceTypes(program *ssa.Program, instanceOwners map[*ssa
 		}
 	})
 	return result
+}
+
+func collectAssertedInterfaceTypes(program *ssa.Program, instanceOwners map[*ssa.Function]*ssa.Package) map[string]types.Type {
+	ctx := Context{
+		program:        program,
+		latestNameMap:  make(map[*ssa.BasicBlock]string),
+		instanceOwners: instanceOwners,
+	}
+	for _, pkg := range allPackagesSorted(program) {
+		ctx.collectInstances(pkg)
+	}
+	return collectAssertedInterfaceTypesOfFunctions(&ctx, nil)
 }
 
 func handleSharedDefinition(program *ssa.Program, instanceOwners map[*ssa.Function]*ssa.Package, assertedInterfaceTypes map[string]types.Type, outputPath string) {
@@ -3868,10 +3893,80 @@ func handleSharedDefinition(program *ssa.Program, instanceOwners map[*ssa.Functi
 		fmt.Fprintf(ctx.stream, "FunctionObject %s(LightWeightThreadContext* ctx){ (void)ctx; assert(false); return (FunctionObject){NULL}; }", createFunctionName(function))
 	})
 
+	ctx.emitSignature(nil)
+
+	ctx.traverseFunction(nil, func(function *ssa.Function) {
+		if !isInGenericInstanceSubtree(function) {
+			return
+		}
+		ctx.emitFunctionHeader(createFunctionName(function), ";")
+		ctx.emitFunctionVariableStructure(function)
+	})
+
+	ctx.traverseFunction(nil, func(function *ssa.Function) {
+		if !isInGenericInstanceSubtree(function) || function.Blocks == nil {
+			return
+		}
+		for _, basicBlock := range function.Blocks {
+			for _, instr := range basicBlock.Instrs {
+				if deferInstr, ok := instr.(*ssa.Defer); ok {
+					callCommon := deferInstr.Common()
+					if callCommon.Method == nil {
+						if builtin, ok := callCommon.Value.(*ssa.Builtin); ok && (builtin.Name() == "print" || builtin.Name() == "println") {
+							fmt.Fprintln(ctx.stream, ctx.emitBuiltinPrintWrapper(builtin.Name(), callCommon, deferInstr))
+						}
+					}
+				}
+			}
+		}
+	})
+
+	foundInstanceConstValueSet := make(map[string]struct{})
+	ctx.traverseFunction(nil, func(function *ssa.Function) {
+		if !isInGenericInstanceSubtree(function) {
+			return
+		}
+		if function.Blocks == nil {
+			return
+		}
+		if isFunctionBodySkipped(function) {
+			fmt.Fprintf(ctx.stream, "FunctionObject %s(LightWeightThreadContext* ctx){ (void)ctx; assert(false); return (FunctionObject){NULL}; }\n", createFunctionName(function))
+			return
+		}
+		ctx.traverseValue(function, func(value ssa.Value) {
+			if gv, ok := value.(*ssa.Global); ok {
+				ctx.emitGlobalVariableDeclaration(gv)
+			}
+		})
+		ctx.traverseValue(function, func(value ssa.Value) {
+			if cst, ok := value.(*ssa.Const); ok {
+				valueName := createValueName(cst)
+				if _, ok := foundInstanceConstValueSet[valueName]; ok {
+					return
+				}
+				foundInstanceConstValueSet[valueName] = struct{}{}
+				ctx.emitConstant(cst)
+			}
+		})
+		for _, basicBlock := range function.Blocks {
+			name := createBasicBlockName(basicBlock)
+			ctx.emitFunctionHeader(name, ";")
+			ctx.latestNameMap[basicBlock] = name
+			for _, instr := range basicBlock.Instrs {
+				if requireSwitchFunction(instr) {
+					continuationName := createInstructionName(instr)
+					ctx.emitFunctionHeader(continuationName, ";")
+					ctx.latestNameMap[basicBlock] = continuationName
+				}
+			}
+		}
+		ctx.emitFunctionDefinition(function)
+	})
+
 	ctx.emitRuntimeInfo()
 }
 
-func handlePackage(program *ssa.Program, pkg *ssa.Package, instanceOwners map[*ssa.Function]*ssa.Package, assertedInterfaceTypes map[string]types.Type, outputPath string) {
+func handlePackage(program *ssa.Program, pkg *ssa.Package, instanceOwners map[*ssa.Function]*ssa.Package, outputPath string) {
 	f, err := os.Create(outputPath)
 	if err != nil {
 		panic(err)
@@ -3879,14 +3974,15 @@ func handlePackage(program *ssa.Program, pkg *ssa.Package, instanceOwners map[*s
 	defer f.Close()
 
 	ctx := Context{
-		stream:                 f,
-		program:                program,
-		latestNameMap:          make(map[*ssa.BasicBlock]string),
-		instanceOwners:         instanceOwners,
-		assertedInterfaceTypes: assertedInterfaceTypes,
+		stream:         f,
+		program:        program,
+		latestNameMap:  make(map[*ssa.BasicBlock]string),
+		instanceOwners: instanceOwners,
 	}
 
 	ctx.collectInstances(pkg)
+	ctx.extraFunctions = nil
+	ctx.assertedInterfaceTypes = collectAssertedInterfaceTypesOfFunctions(&ctx, pkg)
 	ctx.emitPackage(pkg)
 }
 
@@ -3919,7 +4015,7 @@ func emitProgram(program *ssa.Program, buildDirname string) {
 		waitGroup.Add(1)
 		go func(pkg *ssa.Package) {
 			outputName := fmt.Sprintf("package_%s.c", createPackageName(pkg.Pkg))
-			handlePackage(program, pkg, instanceOwners, assertedInterfaceTypes, fmt.Sprintf("%s/%s", buildDirname, outputName))
+			handlePackage(program, pkg, instanceOwners, fmt.Sprintf("%s/%s", buildDirname, outputName))
 			waitGroup.Done()
 		}(pkg)
 	}
