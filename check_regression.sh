@@ -73,23 +73,25 @@ targets=(
     "strvar"
 )
 
-for target in ${targets[@]}; do
-    path=$go_root/test/ken/$target.go
+function check_ken() {
+    local target="$1"
+    local path=$go_root/test/ken/$target.go
 
-    (
-        if ! bash ./check_equivalence.sh "$path"; then
-            echo "[$path] FAIL"
-            exit 1
-        fi
-    ) &
-done
+    if ! bash ./check_equivalence.sh "$path"; then
+        echo "[$path] FAIL"
+        return 1
+    fi
+
+    return 0
+}
+
+export -f check_ken
+export go_root
 
 fail_count=0
-for job in $(jobs -p); do
-    if ! wait $job; then
-        fail_count=$((fail_count+1))
-    fi
-done
+if ! printf '%s\n' "${targets[@]}" | xargs -P 3 -I {} bash -c 'check_ken "$@"' _ {}; then
+    fail_count=1
+fi
 
 if [ $fail_count -eq 0 ]; then
     echo PASS

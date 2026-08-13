@@ -51,16 +51,16 @@ cd ..
 
 cd $build_directory
 if [ "$debug_user" = "true" ] && [ "$debug_runtime" = "true" ]; then
-    make -j bin-debug-user-debug-runtime.exe
+    make -j $(nproc) bin-debug-user-debug-runtime.exe
     bin_file_name=bin-debug-user-debug-runtime.exe
 elif [ "$debug_user" = "true" ]; then
-    make -j bin-debug-user.exe
+    make -j $(nproc) bin-debug-user.exe
     bin_file_name=bin-debug-user.exe
 elif [ "$debug_runtime" = "true" ]; then
-    make -j bin-debug-runtime.exe
+    make -j $(nproc) bin-debug-runtime.exe
     bin_file_name=bin-debug-runtime.exe
 else
-    make -j bin.exe
+    make -j $(nproc) bin.exe
     bin_file_name=bin.exe
 fi
 cd ..
