@@ -82,13 +82,20 @@ jobs:
           kill $(cat tmp/vmstat_pid.txt) || true
 
       - name: Metrics of ccache
-        run: ccache -s >tmp/ccache_metrics.txt
+        run: ccache -s >tmp/ccache.log
 
-      - name: Upload logs and temporary files
+      - name: Upload logs
         uses: actions/upload-artifact@v6
         with:
-          name: logs
+          name: metrics
+          path: tmp/**/*.log
+          retention-days: 7
+
+      - name: Upload temporary files
+        uses: actions/upload-artifact@v6
+        with:
+          name: temporary-files
           path: |
-            tmp/**/*.log
+            tmp/**/*.c
             tmp/**/*.txt
           retention-days: 7
