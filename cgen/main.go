@@ -495,7 +495,7 @@ func (ctx *Context) emitArgBufferCopies(args []ssa.Value) {
 		argPtr := fmt.Sprintf("ptr%d", i)
 		fmt.Fprintf(ctx.stream, "%s* %s = (void*)&next_frame->arg_buffer[num_arg_buffer_words]; // param[%d]\n", argType, argPtr, i)
 		fmt.Fprintf(ctx.stream, "*%s = %s;\n", argPtr, argValue)
-		fmt.Fprintf(ctx.stream, "num_arg_buffer_words += sizeof(%s) / sizeof(next_frame->arg_buffer[0]);\n", argType)
+		fmt.Fprintf(ctx.stream, "num_arg_buffer_words += (sizeof(%s) + sizeof(next_frame->arg_buffer[0]) - 1) / sizeof(next_frame->arg_buffer[0]);\n", argType)
 	}
 	fmt.Fprintf(ctx.stream, "next_frame->num_arg_buffer_words = num_arg_buffer_words;\n")
 }
@@ -546,6 +546,17 @@ func (ctx *Context) emitGoOrDefer(instr ssa.Instruction, callCommon *ssa.CallCom
 func (ctx *Context) emitCallCommon(callCommon *ssa.CallCommon, nextFunction string, nextFunctionFrame string, resumeFunction string) {
 	if callCommon.Method != nil {
 		panic("method not supported")
+	}
+
+	if function, ok := callCommon.Value.(*ssa.Function); ok {
+		callPath := ""
+		if function.Pkg != nil {
+			callPath = function.Pkg.Pkg.Path()
+		}
+		if strings.HasPrefix(callPath, "internal/race") || strings.HasPrefix(callPath, "internal/synctest") {
+			fmt.Fprintf(ctx.stream, "\treturn %s;\n", wrapInFunctionObject(resumeFunction))
+			return
+		}
 	}
 
 	var functionObject string
@@ -608,7 +619,7 @@ func (ctx *Context) emitCallCommonForMethod(callCommon *ssa.CallCommon, nextFunc
 				argPtr := fmt.Sprintf("ptr%d", i)
 				fmt.Fprintf(ctx.stream, "%s* %s = (void*)&next_frame->arg_buffer[num_arg_buffer_words]; // param[%d]\n", argType, argPtr, i)
 				fmt.Fprintf(ctx.stream, "*%s = %s;\n", argPtr, argValue)
-				fmt.Fprintf(ctx.stream, "num_arg_buffer_words += sizeof(%s) / sizeof(next_frame->arg_buffer[0]);\n", argType)
+				fmt.Fprintf(ctx.stream, "num_arg_buffer_words += (sizeof(%s) + sizeof(next_frame->arg_buffer[0]) - 1) / sizeof(next_frame->arg_buffer[0]);\n", argType)
 			}
 			fmt.Fprintf(ctx.stream, "next_frame->num_arg_buffer_words = num_arg_buffer_words;\n")
 		},
@@ -626,7 +637,7 @@ func isFunctionBodySkippedPackagePath(path string) bool {
 	if path == "runtime" || path == "internal/race" || path == "internal/abi" {
 		return true
 	}
-	if path == "internal/cpu" || path == "internal/strconv" || path == "internal/stringslite" || path == "internal/bytealg" {
+	if path == "internal/cpu" || path == "internal/strconv" || path == "internal/stringslite" || path == "internal/bytealg" || path == "internal/sync" {
 		return false
 	}
 	if strings.HasPrefix(path, "internal/") || strings.HasPrefix(path, "runtime/internal/") {
@@ -672,7 +683,7 @@ func isFunctionBodySkipped(fn *ssa.Function) bool {
 						continue
 					}
 				}
-				if strings.HasPrefix(f.Pkg.Pkg.Path(), "internal/race") {
+				if strings.HasPrefix(f.Pkg.Pkg.Path(), "internal/race") || strings.HasPrefix(f.Pkg.Pkg.Path(), "internal/synctest") {
 					continue
 				}
 				return true
@@ -780,6 +791,63 @@ func (ctx *Context) emitSpecialRuntimeCall(callee *ssa.Function, instr *ssa.Call
 	if pkgPath == "internal/cpu" && funcName == "init" {
 		fmt.Fprintf(ctx.stream, "\treturn %s;\n", wrapInFunctionObject(createInstructionName(instr)))
 		return true
+	}
+
+	// sync and internal/sync declare their blocking/waiting primitives as
+	// linkname stubs (runtime_Semacquire*, runtime_Semrelease, runtime_canSpin,
+	// runtime_doSpin, runtime_nanotime, runtime_rand, throw, fatal). Route calls
+	// to them into the Rust runtime instead of the assert(false) stubs.
+	{
+		origin := callee
+		if o := callee.Origin(); o != nil {
+			origin = o
+		}
+		originPkgPath := ""
+		if origin.Pkg != nil {
+			originPkgPath = origin.Pkg.Pkg.Path()
+		}
+		originFuncName := origin.Name()
+
+		if originPkgPath == "internal/synctest" {
+			switch originFuncName {
+			case "IsInBubble", "IsAssociated", "Associate":
+				result := createValueRelName(instr)
+				fmt.Fprintf(ctx.stream, "memset(&%s, 0, sizeof(%s));\n", result, result)
+			case "Disassociate", "init":
+				// no-op
+			default:
+				panic(fmt.Sprintf("unexpected call to internal/synctest.%s (called from %s)", originFuncName, createFunctionName(instr.Parent())))
+			}
+			fmt.Fprintf(ctx.stream, "\treturn %s;\n", wrapInFunctionObject(createInstructionName(instr)))
+			return true
+		}
+
+		if originPkgPath == "sync" || originPkgPath == "internal/sync" {
+			switch originFuncName {
+			case "runtime_Semacquire", "runtime_SemacquireWaitGroup", "runtime_SemacquireMutex", "runtime_SemacquireRWMutex", "runtime_SemacquireRWMutexR":
+				ctx.switchFunctionToCallRuntimeApi("gox5_semaphore_acquire", "StackFrameSemaphoreAcquire", createInstructionName(instr), nil, nil,
+					paramArgPair{param: "s", arg: fmt.Sprintf("%s.raw", createValueRelName(callCommon.Args[0]))},
+				)
+				return true
+			case "runtime_Semrelease":
+				ctx.switchFunctionToCallRuntimeApi("gox5_semaphore_release", "StackFrameSemaphoreRelease", createInstructionName(instr), nil, nil,
+					paramArgPair{param: "s", arg: fmt.Sprintf("%s.raw", createValueRelName(callCommon.Args[0]))},
+				)
+				return true
+			case "runtime_canSpin", "runtime_nanotime", "runtime_rand":
+				result := createValueRelName(instr)
+				fmt.Fprintf(ctx.stream, "memset(&%s, 0, sizeof(%s));\n", result, result)
+				fmt.Fprintf(ctx.stream, "\treturn %s;\n", wrapInFunctionObject(createInstructionName(instr)))
+				return true
+			case "runtime_doSpin":
+				fmt.Fprintf(ctx.stream, "\treturn %s;\n", wrapInFunctionObject(createInstructionName(instr)))
+				return true
+			case "throw", "fatal":
+				fmt.Fprintf(ctx.stream, "assert(false);\n")
+				fmt.Fprintf(ctx.stream, "\treturn %s;\n", wrapInFunctionObject(createInstructionName(instr)))
+				return true
+			}
+		}
 	}
 
 	if isFunctionBodySkippedPackagePath(pkgPath) {
@@ -1012,7 +1080,7 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 						argPtr := fmt.Sprintf("ptr%d", i)
 						fmt.Fprintf(ctx.stream, "%s* %s = (void*)&next_frame->arg_buffer[num_arg_buffer_words]; // param[%d]\n", argType, argPtr, i)
 						fmt.Fprintf(ctx.stream, "*%s = %s;\n", argPtr, argValue)
-						fmt.Fprintf(ctx.stream, "num_arg_buffer_words += sizeof(%s) / sizeof(next_frame->arg_buffer[0]);\n", argType)
+						fmt.Fprintf(ctx.stream, "num_arg_buffer_words += (sizeof(%s) + sizeof(next_frame->arg_buffer[0]) - 1) / sizeof(next_frame->arg_buffer[0]);\n", argType)
 					}
 					fmt.Fprintf(ctx.stream, "next_frame->num_arg_buffer_words = num_arg_buffer_words;\n")
 				},

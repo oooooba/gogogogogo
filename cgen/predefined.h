@@ -549,6 +549,17 @@ typedef struct {
     TypeId type_id;
 } StackFrameChannelSend;
 DECLARE_RUNTIME_API(channel_send, StackFrameChannelSend);
+typedef struct {
+    StackFrameCommon common;
+    Uint32Object *s;
+} StackFrameSemaphoreAcquire;
+DECLARE_RUNTIME_API(semaphore_acquire, StackFrameSemaphoreAcquire);
+
+typedef struct {
+    StackFrameCommon common;
+    Uint32Object *s;
+} StackFrameSemaphoreRelease;
+DECLARE_RUNTIME_API(semaphore_release, StackFrameSemaphoreRelease);
 
 typedef struct {
     StackFrameCommon common;
