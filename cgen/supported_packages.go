@@ -20,6 +20,7 @@ import (
 	_ "slices"
 	_ "sort"
 	_ "strconv"
+	_ "strings"
 	_ "structs"
 	_ "sync"
 	_ "sync/atomic"

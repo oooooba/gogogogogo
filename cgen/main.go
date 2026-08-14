@@ -687,6 +687,9 @@ func isFunctionBodySkipped(fn *ssa.Function) bool {
 				if strings.HasPrefix(f.Pkg.Pkg.Path(), "internal/race") || strings.HasPrefix(f.Pkg.Pkg.Path(), "internal/synctest") {
 					continue
 				}
+				if f.Pkg.Pkg.Path() == "internal/abi" && f.Name() == "NoEscape" {
+					continue
+				}
 				return true
 			}
 		}
@@ -728,6 +731,16 @@ func (ctx *Context) emitSpecialRuntimeCall(callee *ssa.Function, instr *ssa.Call
 		}
 	}
 
+	if pkgPath == "internal/abi" {
+		switch funcName {
+		case "NoEscape":
+			result := createValueRelName(instr)
+			fmt.Fprintf(ctx.stream, "%s = %s;\n", result, createValueRelName(callCommon.Args[0]))
+			fmt.Fprintf(ctx.stream, "\treturn %s;\n", wrapInFunctionObject(createInstructionName(instr)))
+			return true
+		}
+	}
+
 	if pkgPath == "internal/bytealg" {
 		switch funcName {
 		case "Compare":
@@ -737,10 +750,32 @@ func (ctx *Context) emitSpecialRuntimeCall(callee *ssa.Function, instr *ssa.Call
 				paramArgPair{param: "rhs", arg: fmt.Sprintf("%s.raw", createValueRelName(callCommon.Args[1]))},
 			)
 			return true
+		case "CompareString":
+			// bytealg.CompareString has a Go body whose abigen linkname
+			// (abigen_runtime_cmpstring) is a stub, so compare the strings'
+			// bytes via gox5_slice_compare.
+			result := createValueRelName(instr)
+			a := createValueRelName(callCommon.Args[0])
+			b := createValueRelName(callCommon.Args[1])
+			ctx.switchFunctionToCallRuntimeApi("gox5_slice_compare", "StackFrameSliceCompare", createInstructionName(instr), &result, nil,
+				paramArgPair{param: "lhs", arg: fmt.Sprintf("(SliceObject){.addr = (void*)%s.raw, .size = %s.len, .capacity = %s.len}", a, a, a)},
+				paramArgPair{param: "rhs", arg: fmt.Sprintf("(SliceObject){.addr = (void*)%s.raw, .size = %s.len, .capacity = %s.len}", b, b, b)},
+			)
+			return true
 		case "Count":
 			result := createValueRelName(instr)
 			ctx.switchFunctionToCallRuntimeApi("gox5_slice_count", "StackFrameSliceCount", createInstructionName(instr), &result, nil,
 				paramArgPair{param: "b", arg: fmt.Sprintf("%s.raw", createValueRelName(callCommon.Args[0]))},
+				paramArgPair{param: "c", arg: createValueRelName(callCommon.Args[1])},
+			)
+			return true
+		case "CountString":
+			// bytealg.CountString has no Go body on amd64 (assembly-backed),
+			// so route it to gox5_slice_count over the string's bytes.
+			result := createValueRelName(instr)
+			s := createValueRelName(callCommon.Args[0])
+			ctx.switchFunctionToCallRuntimeApi("gox5_slice_count", "StackFrameSliceCount", createInstructionName(instr), &result, nil,
+				paramArgPair{param: "b", arg: fmt.Sprintf("(SliceObject){.addr = (void*)%s.raw, .size = %s.len, .capacity = %s.len}", s, s, s)},
 				paramArgPair{param: "c", arg: createValueRelName(callCommon.Args[1])},
 			)
 			return true
@@ -1596,7 +1631,7 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 		fmt.Fprintf(ctx.stream, "%s.typed.size = %s.raw;\n", result, createValueRelName(instr.Len))
 		fmt.Fprintf(ctx.stream, "%s.typed.capacity = %s.raw;\n", result, createValueRelName(instr.Cap))
 		ptr := fmt.Sprintf("%s.typed.ptr", result)
-		size := fmt.Sprintf("(%s.raw) * sizeof(%s)", createValueRelName(instr.Cap), createTypeName(instr.Type().(*types.Slice).Elem()))
+		size := fmt.Sprintf("(%s.raw) * sizeof(%s)", createValueRelName(instr.Cap), createTypeName(instr.Type().Underlying().(*types.Slice).Elem()))
 		ctx.switchFunctionToCallRuntimeApi("gox5_new", "StackFrameNew", createInstructionName(instr), &ptr, nil,
 			paramArgPair{param: "size", arg: size},
 		)
