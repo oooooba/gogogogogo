@@ -25,6 +25,7 @@ import (
 func main() {
 	filename := flag.String("i", "/dev/stdin", "input file")
 	buildDirname := flag.String("b", "/tmp", "build directory")
+	cacheDirname := flag.String("cache", "cache", "cache directory")
 	flag.Parse()
 
 	cfg := packages.Config{Mode: packages.LoadAllSyntax}
@@ -53,7 +54,7 @@ func main() {
 		}
 	}
 
-	emitProgram(prog, *buildDirname)
+	emitProgram(prog, *buildDirname, *cacheDirname)
 }
 
 type Context struct {
@@ -3707,7 +3708,7 @@ func allPackagesSorted(program *ssa.Program) []*ssa.Package {
 	return pkgs
 }
 
-func generateMakefile(makefile *os.File, program *ssa.Program, buildDirname string) {
+func generateMakefile(makefile *os.File, program *ssa.Program, buildDirname string, cacheDirname string, cachedPackages map[string]bool) {
 	cgenDir, err := os.Getwd()
 	if err != nil {
 		panic(err)
@@ -3721,6 +3722,14 @@ func generateMakefile(makefile *os.File, program *ssa.Program, buildDirname stri
 		panic(err)
 	}
 	relToTarget, err := filepath.Rel(buildDirAbs, filepath.Join(cgenDir, "..", "target"))
+	if err != nil {
+		panic(err)
+	}
+	cacheDirAbs, err := filepath.Abs(cacheDirname)
+	if err != nil {
+		panic(err)
+	}
+	relToCache, err := filepath.Rel(buildDirAbs, cacheDirAbs)
 	if err != nil {
 		panic(err)
 	}
@@ -3782,6 +3791,10 @@ func generateMakefile(makefile *os.File, program *ssa.Program, buildDirname stri
 			continue
 		}
 		outputName := fmt.Sprintf("package_%s.c", createPackageName(pkg.Pkg))
+		if cachedPackages[createPackageName(pkg.Pkg)] {
+			fmt.Fprintf(makefile, "%s:\n", outputName)
+			fmt.Fprintf(makefile, "\t@ln -sf %s/%s %s\n", relToCache, outputName, outputName)
+		}
 		cFileRule(outputName, "shared_definition.c")
 	}
 
@@ -3986,18 +3999,39 @@ func handlePackage(program *ssa.Program, pkg *ssa.Package, instanceOwners map[*s
 	ctx.emitPackage(pkg)
 }
 
-func handleMakefile(program *ssa.Program, outputPath string, buildDirname string) {
+func handleMakefile(program *ssa.Program, outputPath string, buildDirname string, cacheDirname string, cachedPackages map[string]bool) {
 	makefile, err := os.Create(outputPath)
 	if err != nil {
 		panic(err)
 	}
 	defer makefile.Close()
-	generateMakefile(makefile, program, buildDirname)
+	generateMakefile(makefile, program, buildDirname, cacheDirname, cachedPackages)
 }
 
-func emitProgram(program *ssa.Program, buildDirname string) {
+func loadCachedPackages(cacheDirname string) map[string]bool {
+	result := map[string]bool{}
+	entries, err := os.ReadDir(cacheDirname)
+	if err != nil {
+		return result
+	}
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		if !strings.HasPrefix(name, "package_") || !strings.HasSuffix(name, ".c") {
+			continue
+		}
+		pkgName := strings.TrimSuffix(strings.TrimPrefix(name, "package_"), ".c")
+		result[pkgName] = true
+	}
+	return result
+}
+
+func emitProgram(program *ssa.Program, buildDirname string, cacheDirname string) {
 	waitGroup := sync.WaitGroup{}
 
+	cachedPackages := loadCachedPackages(cacheDirname)
 	instanceOwners := computeInstanceOwners(program)
 	assertedInterfaceTypes := collectAssertedInterfaceTypes(program, instanceOwners)
 
@@ -4012,6 +4046,9 @@ func emitProgram(program *ssa.Program, buildDirname string) {
 		if isFunctionBodySkippedPackage(pkg) {
 			continue
 		}
+		if cachedPackages[createPackageName(pkg.Pkg)] {
+			continue
+		}
 		waitGroup.Add(1)
 		go func(pkg *ssa.Package) {
 			outputName := fmt.Sprintf("package_%s.c", createPackageName(pkg.Pkg))
@@ -4023,7 +4060,7 @@ func emitProgram(program *ssa.Program, buildDirname string) {
 	waitGroup.Add(1)
 	go func() {
 		makefileName := "Makefile"
-		handleMakefile(program, fmt.Sprintf("%s/%s", buildDirname, makefileName), buildDirname)
+		handleMakefile(program, fmt.Sprintf("%s/%s", buildDirname, makefileName), buildDirname, cacheDirname, cachedPackages)
 		waitGroup.Done()
 	}()
 

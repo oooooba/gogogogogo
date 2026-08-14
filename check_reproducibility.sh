@@ -79,7 +79,7 @@ verify_package_c() {
                 fail_count=$((fail_count+1))
             fi
         fi
-    done < <(find "$tmp_dir" -name 'package_*.c' -type f | sort)
+    done < <(find -L "$tmp_dir" -name 'package_*.c' -type f | sort)
 
     rm -rf "$group_dir"
 
