@@ -3832,7 +3832,7 @@ func generateMakefile(makefile *os.File, program *ssa.Program, buildDirname stri
 	}
 	cflagsDebug := []string{
 		"-Wall", "-Wextra", "-Werror", "-std=c11",
-		"-g", "-O1", "--param max-vartrack-size=1000000000",
+		"-g", "-O1", "-fno-var-tracking-assignments",
 		"-fsanitize=undefined", "-fsanitize=address",
 		"-fno-omit-frame-pointer", "-fno-sanitize-recover=all",
 		"-fstrict-aliasing", "-Wstrict-aliasing",

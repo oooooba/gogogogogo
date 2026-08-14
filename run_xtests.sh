@@ -14,19 +14,6 @@ function check_one() {
         return 0
     fi
 
-    if [[ $base == "bytes.go" || $base == "strings.go" || $base == "unicode.go" ]]; then
-        local skip=false
-        for run_arg in "${run_args[@]}"; do
-            if [ "$run_arg" == "--debug-user" ]; then
-                skip=true
-            fi
-        done
-        if [ "$skip" = "true" ]; then
-            echo "[$path] SKIP ($base is too slow with --debug-user)"
-            return 0
-        fi
-    fi
-
     local check_args=()
     case $base in
         panic_*)
