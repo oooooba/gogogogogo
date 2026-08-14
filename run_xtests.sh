@@ -14,7 +14,7 @@ function check_one() {
         return 0
     fi
 
-    if [[ $base == "bytes.go" || $base == "unicode.go" ]]; then
+    if [[ $base == "bytes.go" || $base == "strings.go" || $base == "unicode.go" ]]; then
         local skip=false
         for run_arg in "${run_args[@]}"; do
             if [ "$run_arg" == "--debug-user" ]; then
