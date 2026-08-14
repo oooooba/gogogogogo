@@ -152,6 +152,29 @@ func (ctx *Context) emitAtomicCall(instruction *ssa.Call, callCommon *ssa.CallCo
 	if !ok || function.Pkg == nil || function.Pkg.Pkg.Path() != "sync/atomic" {
 		return false
 	}
+	switch function.Name() {
+	case "LoadPointer", "StorePointer", "SwapPointer", "CompareAndSwapPointer":
+		// These are linkname/asm without Go bodies; emit inline C11 atomics
+		// over the unsafe.Pointer field.
+		addr := fmt.Sprintf("(_Atomic void**)&(%s.raw->raw)", createValueRelName(callCommon.Args[0]))
+		result := createValueRelName(instruction)
+		switch function.Name() {
+		case "LoadPointer":
+			expr := fmt.Sprintf("atomic_load_explicit(%s, memory_order_seq_cst)", addr)
+			fmt.Fprintf(ctx.stream, "%s = %s;\n", result, wrapInObject(expr, instruction.Type()))
+		case "StorePointer":
+			fmt.Fprintf(ctx.stream, "atomic_store_explicit(%s, %s.raw, memory_order_seq_cst);\n", addr, createValueRelName(callCommon.Args[1]))
+		case "SwapPointer":
+			expr := fmt.Sprintf("atomic_exchange_explicit(%s, %s.raw, memory_order_seq_cst)", addr, createValueRelName(callCommon.Args[1]))
+			fmt.Fprintf(ctx.stream, "%s = %s;\n", result, wrapInObject(expr, instruction.Type()))
+		case "CompareAndSwapPointer":
+			fmt.Fprintf(ctx.stream, "void* expected = %s.raw;\n", createValueRelName(callCommon.Args[1]))
+			fmt.Fprintf(ctx.stream, "bool swapped = atomic_compare_exchange_strong_explicit(%s, &expected, %s.raw, memory_order_seq_cst, memory_order_seq_cst);\n", addr, createValueRelName(callCommon.Args[2]))
+			fmt.Fprintf(ctx.stream, "%s = %s;\n", result, wrapInObject("swapped", instruction.Type()))
+		}
+		fmt.Fprintf(ctx.stream, "\treturn %s;\n", wrapInFunctionObject(createInstructionName(instruction)))
+		return true
+	}
 	op, ok := atomicFunctionOperations[function.Name()]
 	if !ok {
 		return false
@@ -680,7 +703,9 @@ func isFunctionBodySkipped(fn *ssa.Function) bool {
 				}
 				switch f.Pkg.Pkg.Path() {
 				case "runtime":
-					if f.Name() == "Goexit" || f.Name() == "Gosched" {
+					// GOMAXPROCS is handled by emitSpecialRuntimeCall (sync.Pool
+					// queries it in pinSlow), so don't skip callers of it.
+					if f.Name() == "Goexit" || f.Name() == "Gosched" || f.Name() == "GOMAXPROCS" {
 						continue
 					}
 				}
@@ -878,6 +903,26 @@ func (ctx *Context) emitSpecialRuntimeCall(callee *ssa.Function, instr *ssa.Call
 			case "runtime_doSpin":
 				fmt.Fprintf(ctx.stream, "\treturn %s;\n", wrapInFunctionObject(createInstructionName(instr)))
 				return true
+			case "runtime_procPin":
+				// Single-threaded runtime: pin to P 0 (pool local index 0).
+				result := createValueRelName(instr)
+				fmt.Fprintf(ctx.stream, "memset(&%s, 0, sizeof(%s));\n", result, result)
+				fmt.Fprintf(ctx.stream, "\treturn %s;\n", wrapInFunctionObject(createInstructionName(instr)))
+				return true
+			case "runtime_procUnpin":
+				fmt.Fprintf(ctx.stream, "\treturn %s;\n", wrapInFunctionObject(createInstructionName(instr)))
+				return true
+			case "runtime_LoadAcquintptr":
+				// Acquire load of a uintptr through the given pointer (used by sync.Pool).
+				result := createValueRelName(instr)
+				fmt.Fprintf(ctx.stream, "%s.raw = atomic_load_explicit((_Atomic uintptr_t*)%s.raw, memory_order_acquire);\n", result, createValueRelName(callCommon.Args[0]))
+				fmt.Fprintf(ctx.stream, "\treturn %s;\n", wrapInFunctionObject(createInstructionName(instr)))
+				return true
+			case "runtime_StoreReluintptr":
+				// Release store of a uintptr through the given pointer (used by sync.Pool).
+				fmt.Fprintf(ctx.stream, "atomic_store_explicit((_Atomic uintptr_t*)%s.raw, %s.raw, memory_order_release);\n", createValueRelName(callCommon.Args[0]), createValueRelName(callCommon.Args[1]))
+				fmt.Fprintf(ctx.stream, "\treturn %s;\n", wrapInFunctionObject(createInstructionName(instr)))
+				return true
 			case "throw", "fatal":
 				fmt.Fprintf(ctx.stream, "assert(false);\n")
 				fmt.Fprintf(ctx.stream, "\treturn %s;\n", wrapInFunctionObject(createInstructionName(instr)))
@@ -898,6 +943,14 @@ func (ctx *Context) emitSpecialRuntimeCall(callee *ssa.Function, instr *ssa.Call
 		}
 		if pkgPath == "runtime" && funcName == "Gosched" {
 			ctx.switchFunctionToCallRuntimeApi("gox5_lwt_yield", "StackFrameLwtYield", createInstructionName(instr), nil, nil)
+			return true
+		}
+		if pkgPath == "runtime" && funcName == "GOMAXPROCS" {
+			// sync.Pool.pinSlow asks for the number of Ps; report 1.
+			result := createValueRelName(instr)
+			fmt.Fprintf(ctx.stream, "memset(&%s, 0, sizeof(%s));\n", result, result)
+			fmt.Fprintf(ctx.stream, "%s.raw = 1;\n", result)
+			fmt.Fprintf(ctx.stream, "\treturn %s;\n", wrapInFunctionObject(createInstructionName(instr)))
 			return true
 		}
 

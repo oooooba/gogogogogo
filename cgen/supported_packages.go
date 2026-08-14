@@ -10,6 +10,7 @@ import (
 	_ "errors"
 	_ "image/color"
 	_ "image/color/palette"
+	_ "io"
 	_ "iter"
 	_ "maps"
 	_ "math"
