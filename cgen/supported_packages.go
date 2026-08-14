@@ -1,6 +1,7 @@
 package main
 
 import (
+	_ "bufio"
 	_ "bytes"
 	_ "cmp"
 	_ "container/heap"
