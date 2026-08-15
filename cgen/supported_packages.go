@@ -7,6 +7,7 @@ import (
 	_ "container/heap"
 	_ "container/list"
 	_ "container/ring"
+	_ "context"
 	_ "encoding"
 	_ "errors"
 	_ "image/color"

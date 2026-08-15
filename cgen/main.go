@@ -661,7 +661,7 @@ func isFunctionBodySkippedPackagePath(path string) bool {
 	if path == "runtime" || path == "internal/race" || path == "internal/abi" {
 		return true
 	}
-	if path == "internal/cpu" || path == "internal/strconv" || path == "internal/stringslite" || path == "internal/bytealg" || path == "internal/sync" {
+	if path == "internal/cpu" || path == "internal/strconv" || path == "internal/stringslite" || path == "internal/bytealg" || path == "internal/sync" || path == "internal/oserror" {
 		return false
 	}
 	if strings.HasPrefix(path, "internal/") || strings.HasPrefix(path, "runtime/internal/") {
@@ -709,7 +709,24 @@ func isFunctionBodySkipped(fn *ssa.Function) bool {
 						continue
 					}
 				}
-				if strings.HasPrefix(f.Pkg.Pkg.Path(), "internal/race") || strings.HasPrefix(f.Pkg.Pkg.Path(), "internal/synctest") {
+				if strings.HasPrefix(f.Pkg.Pkg.Path(), "internal/race") ||
+					strings.HasPrefix(f.Pkg.Pkg.Path(), "internal/synctest") {
+					continue
+				}
+				if f.Pkg.Pkg.Path() == "internal/godebug" {
+					// godebug.New/Value/IncNonDefault are intercepted by
+					// emitSpecialRuntimeCall (see below), so don't skip their
+					// callers (time.init, time.syncTimer).
+					switch f.Name() {
+					case "New", "Value", "IncNonDefault", "init":
+						continue
+					}
+				}
+				if f.Pkg.Pkg.Path() == "internal/reflectlite" && f.Name() == "TypeOf" {
+					// reflectlite.TypeOf is intercepted by emitSpecialRuntimeCall
+					// (returns a zeroed Type interface); its interface method
+					// calls are intercepted during *ssa.Call emission. Keep
+					// callers such as context.WithValue emitted.
 					continue
 				}
 				if f.Pkg.Pkg.Path() == "internal/abi" && f.Name() == "NoEscape" {
@@ -853,6 +870,54 @@ func (ctx *Context) emitSpecialRuntimeCall(callee *ssa.Function, instr *ssa.Call
 		fmt.Fprintf(ctx.stream, "\treturn %s;\n", wrapInFunctionObject(createInstructionName(instr)))
 		return true
 	}
+	if pkgPath == "syscall" && funcName == "init" {
+		// syscall.init would run runtime_envs() and rlimit setup that call into
+		// the skipped runtime package (runtime_envs, Getrlimit via Syscall) and
+		// abort. No code in the supported tests uses the syscall environment or
+		// rlimit state, so skip the whole initializer.
+		fmt.Fprintf(ctx.stream, "\treturn %s;\n", wrapInFunctionObject(createInstructionName(instr)))
+		return true
+	}
+
+	if pkgPath == "internal/godebug" {
+		switch funcName {
+		case "New":
+			// godebug.New is called by time.init (asynctimerchan) and other
+			// package initializers to register a GODEBUG setting. The runtime
+			// has no GODEBUG support, so return a fresh zeroed *Setting; the
+			// (*Setting).Value accessor is intercepted below to return "".
+			result := createValueRelName(instr)
+			ctx.switchFunctionToCallRuntimeApi("gox5_new", "StackFrameNew", createInstructionName(instr), &result, nil,
+				paramArgPair{param: "size", arg: fmt.Sprintf("sizeof(%s)", createTypeName(instr.Type().Underlying().(*types.Pointer).Elem()))},
+			)
+			fmt.Fprintf(ctx.stream, "\treturn %s;\n", wrapInFunctionObject(createInstructionName(instr)))
+			return true
+		case "Value":
+			result := createValueRelName(instr)
+			fmt.Fprintf(ctx.stream, "memset(&%s, 0, sizeof(%s));\n", result, result)
+			fmt.Fprintf(ctx.stream, "\treturn %s;\n", wrapInFunctionObject(createInstructionName(instr)))
+			return true
+		case "IncNonDefault":
+			fmt.Fprintf(ctx.stream, "\treturn %s;\n", wrapInFunctionObject(createInstructionName(instr)))
+			return true
+		case "init":
+			fmt.Fprintf(ctx.stream, "\treturn %s;\n", wrapInFunctionObject(createInstructionName(instr)))
+			return true
+		default:
+			panic(fmt.Sprintf("unexpected call to internal/godebug.%s (called from %s)", funcName, createFunctionName(instr.Parent())))
+		}
+	}
+
+	if pkgPath == "internal/reflectlite" && funcName == "TypeOf" {
+		// context.WithValue checks reflectlite.TypeOf(key).Comparable(); there is
+		// no reflectlite support in the runtime, so return a zeroed Type
+		// interface. Interface method invocations on reflectlite.Type are
+		// intercepted in the *ssa.Call emission below.
+		result := createValueRelName(instr)
+		fmt.Fprintf(ctx.stream, "memset(&%s, 0, sizeof(%s));\n", result, result)
+		fmt.Fprintf(ctx.stream, "\treturn %s;\n", wrapInFunctionObject(createInstructionName(instr)))
+		return true
+	}
 
 	// sync and internal/sync declare their blocking/waiting primitives as
 	// linkname stubs (runtime_Semacquire*, runtime_Semrelease, runtime_canSpin,
@@ -878,6 +943,17 @@ func (ctx *Context) emitSpecialRuntimeCall(callee *ssa.Function, instr *ssa.Call
 				// no-op
 			default:
 				panic(fmt.Sprintf("unexpected call to internal/synctest.%s (called from %s)", originFuncName, createFunctionName(instr.Parent())))
+			}
+			fmt.Fprintf(ctx.stream, "\treturn %s;\n", wrapInFunctionObject(createInstructionName(instr)))
+			return true
+		}
+
+		if originPkgPath == "sync/atomic" && (originFuncName == "runtime_procPin" || originFuncName == "runtime_procUnpin") {
+			// sync/atomic.Value (value.go) uses these linkname stubs to disable
+			// preemption around the first Store; single-threaded runtime: no-op.
+			if callCommon.Signature().Results().Len() > 0 {
+				result := createValueRelName(instr)
+				fmt.Fprintf(ctx.stream, "memset(&%s, 0, sizeof(%s));\n", result, result)
 			}
 			fmt.Fprintf(ctx.stream, "\treturn %s;\n", wrapInFunctionObject(createInstructionName(instr)))
 			return true
@@ -929,6 +1005,15 @@ func (ctx *Context) emitSpecialRuntimeCall(callee *ssa.Function, instr *ssa.Call
 				return true
 			}
 		}
+	}
+
+	if pkgPath == "time" && funcName == "runtimeNano" {
+		// time.runtimeNano is a //go:linkname to runtime.nanotime with no Go
+		// body; return 0 (single-threaded runtime has no real clock source).
+		result := createValueRelName(instr)
+		fmt.Fprintf(ctx.stream, "memset(&%s, 0, sizeof(%s));\n", result, result)
+		fmt.Fprintf(ctx.stream, "\treturn %s;\n", wrapInFunctionObject(createInstructionName(instr)))
+		return true
 	}
 
 	if isFunctionBodySkippedPackagePath(pkgPath) {
@@ -1156,6 +1241,25 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 			result_ptr := "NULL"
 			if signature.Results().Len() > 0 {
 				result_ptr = fmt.Sprintf("&%s", createValueRelName(instr))
+			}
+			if callCommon.Method.Pkg() != nil && callCommon.Method.Pkg().Path() == "internal/reflectlite" {
+				// Method call on the internal/reflectlite.Type interface. There
+				// is no reflectlite support in the runtime; the value produced by
+				// reflectlite.TypeOf is a zeroed interface, so a concrete
+				// dispatch would fail. Provide fixed answers: Comparable() ->
+				// true (all WithValue keys are comparable), everything else ->
+				// zero. Bodies calling these (e.g. errors.init) are never
+				// invoked at runtime; they only need to compile.
+				result := createValueRelName(instr)
+				switch callCommon.Method.Name() {
+				case "Comparable":
+					fmt.Fprintf(ctx.stream, "%s.raw = 1;\n", result)
+				default:
+					fmt.Fprintf(ctx.stream, "memset(&%s, 0, sizeof(%s));\n", result, result)
+				}
+				fmt.Fprintf(ctx.stream, "\treturn %s;\n", wrapInFunctionObject(createInstructionName(instr)))
+				fmt.Fprintf(ctx.stream, "\t}\n")
+				return
 			}
 			ctx.switchFunctionToCallRuntimeApi("gox5_interface_invoke", "StackFrameInterfaceInvoke", createInstructionName(instr), nil,
 				func() {
@@ -2690,11 +2794,15 @@ func (ctx *Context) emitHashFunctionDefinition(typ types.Type) {
 			default:
 				body += "return (uintptr_t)obj->raw;\n"
 			}
+		case *types.Chan:
+			body += "return (uintptr_t)obj->raw.raw;\n"
 		case *types.Interface:
 			panic(typ)
 		case *types.Map:
 			body += "assert(false); /// not implemented\n"
 			body += "return 0;\n"
+		case *types.Pointer:
+			body += "return (uintptr_t)obj->raw;\n"
 		case *types.Struct:
 			body += "uintptr_t hash = 0;\n"
 			for i := 0; i < t.NumFields(); i++ {
@@ -3630,9 +3738,14 @@ bool equal_Interface(const Interface* lhs, const Interface* rhs) {
 }
 
 uintptr_t hash_Interface(const Interface* obj) {
-	(void)obj;
-	assert(false); /// not implemented
-	return 0;
+	if (obj->type_id.info == NULL) {
+		return 0;
+	}
+	if (obj->receiver == NULL) {
+		return 0;
+	}
+	uintptr_t (*f)(const void*) = obj->type_id.info->hash;
+	return f(obj->receiver);
 }
 `)
 
