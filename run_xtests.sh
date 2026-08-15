@@ -10,10 +10,6 @@ function check_one() {
     local run_args=("$@")
     local base=`basename $path`
 
-    if [ "$base" == "reflect.go" ]; then
-        return 0
-    fi
-
     local check_args=()
     case $base in
         panic_*)

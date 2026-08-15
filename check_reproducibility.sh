@@ -10,10 +10,6 @@ function check_one() {
     local path="$1"
     local base=`basename $path`
 
-    if [ "$base" == "reflect.go" ]; then
-        return 0
-    fi
-
     build_dir="$tmp_dir/${path#xtests/}.d"
 
     if ! bin1=$(bash ./build.sh -b $build_dir $path); then

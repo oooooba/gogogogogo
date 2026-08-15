@@ -114,6 +114,14 @@ typedef struct {
 } SliceObject;
 
 typedef struct {
+    uintptr_t pc;
+    StringObject name;
+} UserFunctionInfo;
+
+const UserFunctionInfo *gox5_runtime_func_for_pc(uintptr_t pc);
+StringObject gox5_runtime_func_name(const UserFunctionInfo *func);
+
+typedef struct {
     StackFrameCommon common;
     SliceObject *result_ptr;
     TypeId type_id;

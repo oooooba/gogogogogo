@@ -703,9 +703,19 @@ func isFunctionBodySkipped(fn *ssa.Function) bool {
 				}
 				switch f.Pkg.Pkg.Path() {
 				case "runtime":
-					// GOMAXPROCS is handled by emitSpecialRuntimeCall (sync.Pool
-					// queries it in pinSlow), so don't skip callers of it.
-					if f.Name() == "Goexit" || f.Name() == "Gosched" || f.Name() == "GOMAXPROCS" {
+					// These are handled by emitSpecialRuntimeCall, so don't skip
+					// their callers (Goexit/Gosched for sync.Pool via pinSlow,
+					// GOMAXPROCS for sync.Pool, FuncForPC/Name for the function
+					// identity tests in xtests/reflect.go).
+					if f.Name() == "Goexit" || f.Name() == "Gosched" || f.Name() == "GOMAXPROCS" || f.Name() == "FuncForPC" || f.Name() == "Name" {
+						continue
+					}
+				case "reflect":
+					// ValueOf/Pointer/rtypeOf are handled by
+					// emitSpecialRuntimeCall (function identity tests), so don't
+					// skip callers of them.
+					switch f.Name() {
+					case "ValueOf", "Pointer", "rtypeOf":
 						continue
 					}
 				}
@@ -917,6 +927,55 @@ func (ctx *Context) emitSpecialRuntimeCall(callee *ssa.Function, instr *ssa.Call
 		fmt.Fprintf(ctx.stream, "memset(&%s, 0, sizeof(%s));\n", result, result)
 		fmt.Fprintf(ctx.stream, "\treturn %s;\n", wrapInFunctionObject(createInstructionName(instr)))
 		return true
+	}
+
+	if pkgPath == "reflect" || pkgPath == "runtime" {
+		switch {
+		case pkgPath == "reflect" && funcName == "ValueOf":
+			// reflect.ValueOf inspects the interface's type word and data pointer
+			// through the unsafe abi.EmptyInterface layout. The runtime stores a
+			// FunctionObject for function-valued interfaces, so build a
+			// reflect.Value whose ptr field carries the function's raw address.
+			result := createValueRelName(instr)
+			arg := createValueRelName(callCommon.Args[0])
+			fmt.Fprintf(ctx.stream, "memset(&%s, 0, sizeof(%s));\n", result, result)
+			fmt.Fprintf(ctx.stream, "if (%s.receiver != NULL) {\n", arg)
+			fmt.Fprintf(ctx.stream, "\t%s.ptr.raw = (void*)((FunctionObject*)%s.receiver)->raw;\n", result, arg)
+			fmt.Fprintf(ctx.stream, "}\n")
+			fmt.Fprintf(ctx.stream, "\treturn %s;\n", wrapInFunctionObject(createInstructionName(instr)))
+			return true
+		case pkgPath == "reflect" && funcName == "Pointer":
+			// (reflect.Value).Pointer returns the data pointer stored in the Value.
+			result := createValueRelName(instr)
+			fmt.Fprintf(ctx.stream, "%s.raw = (uintptr_t)%s.ptr.raw;\n", result, createValueRelName(callCommon.Args[0]))
+			fmt.Fprintf(ctx.stream, "\treturn %s;\n", wrapInFunctionObject(createInstructionName(instr)))
+			return true
+		case pkgPath == "reflect" && funcName == "rtypeOf":
+			// reflect.rtypeOf is called from reflect.init to initialize package
+			// variables (stringType, bytesType); its body calls internal/abi.TypeOf
+			// which is a skipped stub. Return a zeroed *abi.Type.
+			result := createValueRelName(instr)
+			fmt.Fprintf(ctx.stream, "memset(&%s, 0, sizeof(%s));\n", result, result)
+			fmt.Fprintf(ctx.stream, "\treturn %s;\n", wrapInFunctionObject(createInstructionName(instr)))
+			return true
+		case pkgPath == "runtime" && funcName == "FuncForPC":
+			// runtime.FuncForPC looks the code address up in the function name
+			// registry emitted into shared_definition.c and returns a
+			// *runtime.Func pointing into it (or NULL when unknown).
+			result := createValueRelName(instr)
+			pc := fmt.Sprintf("%s.raw", createValueRelName(callCommon.Args[0]))
+			fmt.Fprintf(ctx.stream, "%s.raw = (void*)gox5_runtime_func_for_pc(%s);\n", result, pc)
+			fmt.Fprintf(ctx.stream, "\treturn %s;\n", wrapInFunctionObject(createInstructionName(instr)))
+			return true
+		case pkgPath == "runtime" && funcName == "Name":
+			// (runtime.Func).Name returns the registered name for the function
+			// address that the *runtime.Func points at.
+			result := createValueRelName(instr)
+			recv := fmt.Sprintf("%s.raw", createValueRelName(callCommon.Args[0]))
+			fmt.Fprintf(ctx.stream, "%s = gox5_runtime_func_name((const UserFunctionInfo*)%s);\n", result, recv)
+			fmt.Fprintf(ctx.stream, "\treturn %s;\n", wrapInFunctionObject(createInstructionName(instr)))
+			return true
+		}
 	}
 
 	// sync and internal/sync declare their blocking/waiting primitives as
@@ -1771,8 +1830,16 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 
 	case *ssa.MakeInterface:
 		result := createValueRelName(instr)
+		receiverArg := fmt.Sprintf("&%s", createValueRelName(instr.X))
+		if _, ok := instr.X.(*ssa.Function); ok {
+			// See the makeInterfaceReceiver field comment in
+			// emitFunctionVariableStructure: keep the function object in a stable
+			// frame slot before handing its address to the runtime.
+			fmt.Fprintf(ctx.stream, "frame->makeInterfaceReceiver = %s;\n", createValueRelName(instr.X))
+			receiverArg = "&frame->makeInterfaceReceiver"
+		}
 		ctx.switchFunctionToCallRuntimeApi("gox5_interface_new", "StackFrameInterfaceNew", createInstructionName(instr), &result, nil,
-			paramArgPair{param: "receiver", arg: fmt.Sprintf("&%s", createValueRelName(instr.X))},
+			paramArgPair{param: "receiver", arg: receiverArg},
 			paramArgPair{param: "type_id", arg: wrapInTypeId(instr.X.Type())},
 		)
 
@@ -1904,7 +1971,7 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 		)
 
 	case *ssa.Slice:
-		if t, ok := instr.Type().(*types.Basic); ok {
+		if t, ok := instr.Type().Underlying().(*types.Basic); ok {
 			if t.Kind() != types.String {
 				panic(fmt.Sprintf("%s (%T)", t, t))
 			}
@@ -2173,7 +2240,7 @@ func requireSwitchFunction(instruction ssa.Instruction) bool {
 	case *ssa.Next:
 		return true
 	case *ssa.Slice:
-		if dstType, ok := t.Type().(*types.Basic); ok && dstType.Kind() == types.String {
+		if dstType, ok := t.Type().Underlying().(*types.Basic); ok && dstType.Kind() == types.String {
 			return true
 		}
 		return false
@@ -2289,7 +2356,32 @@ func (ctx *Context) emitFunctionVariableStructure(function *ssa.Function) {
 		})
 	}
 
+	if hasFunctionValueMakeInterface(function) {
+		// reflect.ValueOf wraps function values in interfaces via
+		// gox5_interface_new, which copies the receiver through a pointer.
+		// Passing the address of a block-scoped compound literal is invalid by
+		// the time the runtime reads it (the machine-stack slot is dead and may
+		// be reused), so keep a stable copy in the frame instead.
+		fmt.Fprintf(ctx.stream, "\tFunctionObject makeInterfaceReceiver;\n")
+	}
+
 	fmt.Fprintf(ctx.stream, "} StackFrame_%s;\n", createFunctionName(function))
+}
+
+func hasFunctionValueMakeInterface(function *ssa.Function) bool {
+	if function.Blocks == nil {
+		return false
+	}
+	for _, basicBlock := range function.Blocks {
+		for _, instr := range basicBlock.Instrs {
+			if makeInterface, ok := instr.(*ssa.MakeInterface); ok {
+				if _, ok := makeInterface.X.(*ssa.Function); ok {
+					return true
+				}
+			}
+		}
+	}
+	return false
 }
 
 func (ctx *Context) emitFunctionDefinitionPrologue(functionName string, frameName string, hasFreeVariables bool) {
@@ -4178,6 +4270,54 @@ func handleSharedDefinition(program *ssa.Program, instanceOwners map[*ssa.Functi
 	})
 
 	ctx.emitRuntimeInfo()
+	ctx.emitFunctionNameRegistry()
+
+	fmt.Fprintf(ctx.stream, `
+const UserFunctionInfo* gox5_runtime_func_for_pc(uintptr_t pc) {
+	for (uintptr_t i = 0; i < sizeof(userFunctionInfoTable) / sizeof(userFunctionInfoTable[0]); i++) {
+		if (userFunctionInfoTable[i].pc == pc) {
+			return &userFunctionInfoTable[i];
+		}
+	}
+	return NULL;
+}
+
+StringObject gox5_runtime_func_name(const UserFunctionInfo* func) {
+	if (func == NULL) {
+		return (StringObject){.raw = NULL, .len = 0};
+	}
+	return func->name;	
+}
+`)
+}
+
+func (ctx *Context) emitFunctionNameRegistry() {
+	fmt.Fprintln(ctx.stream, "static const UserFunctionInfo userFunctionInfoTable[] = {")
+	for _, pkg := range allPackagesSorted(ctx.program) {
+		if isFunctionBodySkippedPackage(pkg) {
+			continue
+		}
+		for _, member := range sortedPackageMembers(pkg) {
+			fn, ok := member.(*ssa.Function)
+			if !ok {
+				continue
+			}
+			if fn.TypeParams().Len() > 0 {
+				continue
+			}
+			name := functionRuntimeName(fn)
+			fmt.Fprintf(ctx.stream, "\t{ (uintptr_t)%s, (StringObject){.raw = \"%s\", .len = sizeof(\"%s\") - 1} }, // %s\n",
+				createFunctionName(fn), name, name, fn.RelString(nil))
+		}
+	}
+	fmt.Fprintln(ctx.stream, "};")
+}
+
+func functionRuntimeName(fn *ssa.Function) string {
+	if fn.Pkg == nil {
+		return fn.Name()
+	}
+	return fn.Pkg.Pkg.Name() + "." + fn.Name()
 }
 
 func handlePackage(program *ssa.Program, pkg *ssa.Package, instanceOwners map[*ssa.Function]*ssa.Package, outputPath string) {
