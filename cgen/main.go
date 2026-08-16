@@ -2318,6 +2318,9 @@ func (ctx *Context) emitFunctionVariableStructure(function *ssa.Function) {
 		fmt.Fprintf(ctx.stream, "\tStackFrameCommon common;\n")
 		fmt.Fprintf(ctx.stream, "\t%s signature;\n", receiverBoundSignatureName)
 		fmt.Fprintf(ctx.stream, "} StackFrame_%s;\n", receiverBoundFuncName)
+
+		receiverThunkFuncName := fmt.Sprintf("%s%s", createFunctionName(function), encode("$thunk"))
+		ctx.emitFunctionHeader(receiverThunkFuncName, ";")
 	}
 
 	fmt.Fprintf(ctx.stream, "typedef struct {\n")
@@ -2529,6 +2532,27 @@ func (ctx *Context) emitFunctionDefinition(function *ssa.Function) {
 			fmt.Fprintf(ctx.stream, "signature->param%d = frame->signature.param%d;\n", i+1, i)
 		}
 		fmt.Fprintf(ctx.stream, "signature->param0 = ((FreeVars_%s*)(frame->common.free_vars))->receiver;\n", boundFuncName)
+	})
+	ctx.emitFunctionDefinitionEpilogue()
+
+	thunkFuncName := fmt.Sprintf("%s%s", origFuncName, encode("$thunk"))
+	thunkResumeFuncName := fmt.Sprintf("%s_return", thunkFuncName)
+	ctx.emitFunctionDefinitionPrologue(thunkResumeFuncName, frameName, false)
+	fmt.Fprintf(ctx.stream, `
+	assert(ctx->marker == 0xdeadbeef);
+	ctx->stack_pointer = frame->common.prev_stack_pointer;
+	return frame->common.resume_func;
+`)
+	ctx.emitFunctionDefinitionEpilogue()
+
+	ctx.emitFunctionDefinitionPrologue(thunkFuncName, frameName, false)
+	nextFuncName = wrapInFunctionObject(origFuncName)
+	signatureName = createSignatureName(signature, false, false)
+	result = "*frame->signature.result_ptr"
+	ctx.switchFunction(nextFuncName, signature, signatureName, result, thunkResumeFuncName, func() {
+		for i := 0; i <= signature.Params().Len(); i++ {
+			fmt.Fprintf(ctx.stream, "signature->param%d = frame->signature.param%d;\n", i, i)
+		}
 	})
 	ctx.emitFunctionDefinitionEpilogue()
 }

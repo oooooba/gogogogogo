@@ -20,6 +20,8 @@ import (
 	_ "math/cmplx"
 	_ "path"
 	_ "reflect"
+	_ "regexp"
+	_ "regexp/syntax"
 	_ "runtime"
 	_ "slices"
 	_ "sort"
