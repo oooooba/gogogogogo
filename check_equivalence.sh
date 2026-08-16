@@ -2,29 +2,41 @@
 
 panic=false
 build_args=()
+build_dir=""
 path=""
 
-for arg in "$@"; do
-    case "$arg" in
+while [ $# -gt 0 ]; do
+    case "$1" in
         --panic)
             panic=true
+            shift
             ;;
         --debug-user|--debug-runtime)
-            build_args+=("$arg")
+            build_args+=("$1")
+            shift
+            ;;
+        -b)
+            if [ -z "$2" ]; then
+                echo "option -b requires an argument" >&2
+                exit 1
+            fi
+            build_dir="$2"
+            shift 2
             ;;
         *)
             if [ -z "$path" ]; then
-                path="$arg"
+                path="$1"
             else
-                echo "unexpected argument: $arg" >&2
+                echo "unexpected argument: $1" >&2
                 exit 1
             fi
+            shift
             ;;
     esac
 done
 
 if [ -z "$path" ]; then
-    echo "usage: check_equivalence.sh [--panic] [--debug-user] [--debug-runtime] <path.go>" >&2
+    echo "usage: check_equivalence.sh [--panic] [--debug-user] [--debug-runtime] [-b <build_dir>] <path.go>" >&2
     exit 1
 fi
 
@@ -35,8 +47,10 @@ expect_result="$tmp_dir/raw_expect.txt"
 actual_result="$tmp_dir/raw_actual.txt"
 compare_result="$tmp_dir/compare.txt"
 
-build_args+=("-b")
-build_args+=("$tmp_dir/build")
+if [ -n "$build_dir" ]; then
+    build_args+=("-b")
+    build_args+=("$build_dir")
+fi
 
 exit_status=0
 
