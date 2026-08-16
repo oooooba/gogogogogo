@@ -1,5 +1,7 @@
 package main
 
+import "strings"
+
 func Test1() int {
 	s := "a"
 	return len(s)
@@ -68,7 +70,6 @@ func Test6() int {
 	return 6
 }
 
-/*
 func Test7() int {
 	s := "a"
 	ss := strings.Split(s, ".")
@@ -98,7 +99,6 @@ func Test8() int {
 	}
 	return 8
 }
-*/
 
 func Test9() int {
 	s := "abc"
@@ -415,10 +415,8 @@ func main() {
 	runTest("Test4", Test4)
 	runTest("Test5", Test5)
 	runTest("Test6", Test6)
-	/*
-		runTest("Test7", Test7)
-		runTest("Test8", Test8)
-	*/
+	runTest("Test7", Test7)
+	runTest("Test8", Test8)
 	runTest("Test9", Test9)
 	runTest("Test10", Test10)
 	runTest("Test11", Test11)
