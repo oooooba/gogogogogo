@@ -18,6 +18,7 @@ import (
 	_ "math"
 	_ "math/bits"
 	_ "math/cmplx"
+	_ "math/rand"
 	_ "path"
 	_ "reflect"
 	_ "regexp"

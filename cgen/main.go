@@ -399,6 +399,18 @@ func createTypeName(typ types.Type) string {
 	return actual.(string)
 }
 
+func isSignedIntegerType(typ types.Type) bool {
+	b, ok := typ.Underlying().(*types.Basic)
+	if !ok {
+		return false
+	}
+	switch b.Kind() {
+	case types.Int, types.Int8, types.Int16, types.Int32, types.Int64:
+		return true
+	}
+	return false
+}
+
 func createRawTypeName(typ types.Type) string {
 	switch typ.Underlying().(*types.Basic).Kind() {
 	case types.Bool, types.UntypedBool:
@@ -1242,6 +1254,14 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 					paramArgPair{param: "rhs", arg: createValueRelName(instr.Y)},
 				)
 				needToCallRuntimeApi = true
+			} else if isSignedIntegerType(instr.Type()) {
+				// Go wraps signed integer arithmetic at the type width;
+				// compute via unsigned arithmetic so C does not invoke
+				// undefined signed-overflow behavior (e.g. under UBSan).
+				raw = fmt.Sprintf("(%s)((%s)%s.raw + (%s)%s.raw)",
+					createRawTypeName(instr.Type()),
+					"u"+createRawTypeName(instr.Type()), createValueRelName(instr.X),
+					"u"+createRawTypeName(instr.Type()), createValueRelName(instr.Y))
 			} else {
 				raw = fmt.Sprintf("%s.raw %s %s.raw", createValueRelName(instr.X), instr.Op.String(), createValueRelName(instr.Y))
 			}
@@ -1287,7 +1307,15 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 			}
 			raw = fmt.Sprintf("((size_t)rhs) < %s ? (%s) : (%s)", bitLen, calcExpr, overflowExpr)
 		default:
-			raw = fmt.Sprintf("%s.raw %s %s.raw", createValueRelName(instr.X), instr.Op.String(), createValueRelName(instr.Y))
+			if isSignedIntegerType(instr.Type()) && (instr.Op == token.SUB || instr.Op == token.MUL) {
+				// See the token.ADD case: wrap signed arithmetic via unsigned.
+				raw = fmt.Sprintf("(%s)((%s)%s.raw %s (%s)%s.raw)",
+					createRawTypeName(instr.Type()),
+					"u"+createRawTypeName(instr.Type()), createValueRelName(instr.X), instr.Op.String(),
+					"u"+createRawTypeName(instr.Type()), createValueRelName(instr.Y))
+			} else {
+				raw = fmt.Sprintf("%s.raw %s %s.raw", createValueRelName(instr.X), instr.Op.String(), createValueRelName(instr.Y))
+			}
 		}
 		if !needToCallRuntimeApi {
 			fmt.Fprintf(ctx.stream, "%s = %s;\n", createValueRelName(instr), wrapInObject(raw, instr.Type()))
