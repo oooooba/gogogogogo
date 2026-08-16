@@ -1837,6 +1837,13 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 			// frame slot before handing its address to the runtime.
 			fmt.Fprintf(ctx.stream, "frame->makeInterfaceReceiver = %s;\n", createValueRelName(instr.X))
 			receiverArg = "&frame->makeInterfaceReceiver"
+		} else if _, ok := instr.X.(*ssa.Global); ok {
+			// A package global is referenced through an inline compound literal,
+			// so taking its address would point at a machine-stack slot that is
+			// dead by the time gox5_interface_new reads the receiver. Keep a
+			// stable copy in the frame instead (see emitFunctionVariableStructure).
+			fmt.Fprintf(ctx.stream, "frame->makeInterfaceReceiver_%s = %s;\n", createValueName(instr), createValueRelName(instr.X))
+			receiverArg = fmt.Sprintf("&frame->makeInterfaceReceiver_%s", createValueName(instr))
 		}
 		ctx.switchFunctionToCallRuntimeApi("gox5_interface_new", "StackFrameInterfaceNew", createInstructionName(instr), &result, nil,
 			paramArgPair{param: "receiver", arg: receiverArg},
@@ -2365,6 +2372,14 @@ func (ctx *Context) emitFunctionVariableStructure(function *ssa.Function) {
 		fmt.Fprintf(ctx.stream, "\tFunctionObject makeInterfaceReceiver;\n")
 	}
 
+	for _, makeInterface := range globalValueMakeInterfaces(function) {
+		// Same rationale as makeInterfaceReceiver: a MakeInterface whose source
+		// is a package global would otherwise hand gox5_interface_new the
+		// address of a block-scoped compound literal, which is invalid by the
+		// time the runtime reads it. Keep a stable copy in the frame instead.
+		fmt.Fprintf(ctx.stream, "\t%s makeInterfaceReceiver_%s;\n", createTypeName(makeInterface.X.Type()), createValueName(makeInterface))
+	}
+
 	fmt.Fprintf(ctx.stream, "} StackFrame_%s;\n", createFunctionName(function))
 }
 
@@ -2382,6 +2397,23 @@ func hasFunctionValueMakeInterface(function *ssa.Function) bool {
 		}
 	}
 	return false
+}
+
+func globalValueMakeInterfaces(function *ssa.Function) []*ssa.MakeInterface {
+	var result []*ssa.MakeInterface
+	if function.Blocks == nil {
+		return result
+	}
+	for _, basicBlock := range function.Blocks {
+		for _, instr := range basicBlock.Instrs {
+			if makeInterface, ok := instr.(*ssa.MakeInterface); ok {
+				if _, ok := makeInterface.X.(*ssa.Global); ok {
+					result = append(result, makeInterface)
+				}
+			}
+		}
+	}
+	return result
 }
 
 func (ctx *Context) emitFunctionDefinitionPrologue(functionName string, frameName string, hasFreeVariables bool) {
