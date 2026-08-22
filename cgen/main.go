@@ -8,6 +8,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -362,7 +363,17 @@ func createTypeName(typ types.Type) string {
 			return "Interface"
 		case *types.Map:
 			k := f(t.Key())
+			if n, ok := t.Key().(*types.Named); ok {
+				if _, ok := n.Underlying().(*types.Interface); ok {
+					k = "Interface"
+				}
+			}
 			v := f(t.Elem())
+			if n, ok := t.Elem().(*types.Named); ok {
+				if _, ok := n.Underlying().(*types.Interface); ok {
+					v = "Interface"
+				}
+			}
 			return fmt.Sprintf("Map<%s$%s>", k, v)
 		case *types.Named:
 			return fmt.Sprintf("Named<%s$%s>", typ.String(), f(typ.Underlying()))
@@ -371,7 +382,17 @@ func createTypeName(typ types.Type) string {
 		case *types.Signature:
 			return "FunctionObject"
 		case *types.Slice:
-			return fmt.Sprintf("Slice<%s>", f(t.Elem()))
+			var en string
+			if n, ok := t.Elem().(*types.Named); ok {
+				if _, ok := n.Underlying().(*types.Interface); ok {
+					en = "Interface"
+				} else {
+					en = f(t.Elem())
+				}
+			} else {
+				en = f(t.Elem())
+			}
+			return fmt.Sprintf("Slice<%s>", en)
 		case *types.Struct:
 			return fmt.Sprintf("Struct<%s>", typ.String())
 		case *types.Tuple:
@@ -676,6 +697,12 @@ func isFunctionBodySkippedPackagePath(path string) bool {
 	if path == "internal/cpu" || path == "internal/strconv" || path == "internal/stringslite" || path == "internal/bytealg" || path == "internal/sync" || path == "internal/oserror" {
 		return false
 	}
+	if path == "internal/poll" || path == "internal/intern" || path == "internal/unsafeheader" {
+		return false
+	}
+	if path == "internal/syscall/unix" {
+		return false
+	}
 	if strings.HasPrefix(path, "internal/") || strings.HasPrefix(path, "runtime/internal/") {
 		return true
 	}
@@ -719,7 +746,19 @@ func isFunctionBodySkipped(fn *ssa.Function) bool {
 					// their callers (Goexit/Gosched for sync.Pool via pinSlow,
 					// GOMAXPROCS for sync.Pool, FuncForPC/Name for the function
 					// identity tests in xtests/reflect.go).
-					if f.Name() == "Goexit" || f.Name() == "Gosched" || f.Name() == "GOMAXPROCS" || f.Name() == "FuncForPC" || f.Name() == "Name" {
+					if f.Name() == "Goexit" || f.Name() == "Gosched" || f.Name() == "GOMAXPROCS" || f.Name() == "FuncForPC" || f.Name() == "Name" || f.Name() == "SetFinalizer" || f.Name() == "fcntl" || f.Name() == "beforeExit" {
+						continue
+					}
+				case "syscall":
+					// Exit is handled by emitSpecialRuntimeCall (terminates the
+					// process directly), so don't skip its callers (os.Exit).
+					if f.Name() == "Exit" {
+						continue
+					}
+				case "internal/testlog":
+					// PanicOnExit0 is intercepted by emitSpecialRuntimeCall (returns
+					// false for a non-test binary); don't skip its callers (os.Exit).
+					if f.Name() == "PanicOnExit0" {
 						continue
 					}
 				case "reflect":
@@ -768,6 +807,72 @@ func (ctx *Context) emitSpecialRuntimeCall(callee *ssa.Function, instr *ssa.Call
 	}
 	funcName := callee.Name()
 
+	if pkgPath == "runtime" {
+		switch funcName {
+		case "SetFinalizer":
+			// The runtime has no finalizer support; this is a no-op so that
+			// callers such as os.newFile are emitted instead of being skipped.
+			fmt.Fprintf(ctx.stream, "\treturn %s;\n", wrapInFunctionObject(createInstructionName(instr)))
+			return true
+		case "beforeExit":
+			// runtime_beforeExit is invoked by os.Exit; it has no effect on the
+			// C runtime (no race detector / coverage). Treat as a no-op.
+			fmt.Fprintf(ctx.stream, "\treturn %s;\n", wrapInFunctionObject(createInstructionName(instr)))
+			return true
+		}
+	}
+	if pkgPath == "internal/syscall/unix" {
+		switch funcName {
+		case "fcntl":
+			// internal/syscall/unix.fcntl is the Go wrapper around the runtime
+			// fcntl syscall. fcntl is not supported, so return a zeroed
+			// (val, errno) tuple; callers treat val != -1 as success.
+			result := createValueRelName(instr)
+			fmt.Fprintf(ctx.stream, "%s.raw.e0 = (Int32Object){.raw = 0};\n", result)
+			fmt.Fprintf(ctx.stream, "%s.raw.e1 = (Int32Object){.raw = 0};\n", result)
+			fmt.Fprintf(ctx.stream, "\treturn %s;\n", wrapInFunctionObject(createInstructionName(instr)))
+			return true
+		}
+	}
+	if pkgPath == "os" {
+		switch funcName {
+		case "runtime_args":
+			// os.runtime_args forwards to runtime.args, which is not supported.
+			// Return an empty []string; the os.Stdin/Stdout/Stderr tests do not
+			// depend on os.Args.
+			result := createValueRelName(instr)
+			fmt.Fprintf(ctx.stream, "%s.raw = (SliceObject){0};\n", result)
+			fmt.Fprintf(ctx.stream, "\treturn %s;\n", wrapInFunctionObject(createInstructionName(instr)))
+			return true
+		case "runtime_beforeExit":
+			// os.runtime_beforeExit forwards to runtime.beforeExit (race/coverage
+			// hooks). There is no effect on the C runtime; treat as a no-op.
+			fmt.Fprintf(ctx.stream, "\treturn %s;\n", wrapInFunctionObject(createInstructionName(instr)))
+			return true
+		}
+	}
+	if pkgPath == "syscall" {
+		switch funcName {
+		case "Exit":
+			// syscall.Exit forwards to the (unsupported) runtime exit. Exit the
+			// whole process directly; os.Exit is expected to terminate.
+			arg := createValueRelName(callCommon.Args[0])
+			fmt.Fprintf(ctx.stream, "exit(%s.raw);\n", arg)
+			return true
+		}
+	}
+
+	if pkgPath == "internal/testlog" {
+		switch funcName {
+		case "PanicOnExit0":
+			// For a non-test binary there is no registered test log, so this
+			// returns false (never panic on os.Exit(0)).
+			result := createValueRelName(instr)
+			fmt.Fprintf(ctx.stream, "%s.raw = false;\n", result)
+			fmt.Fprintf(ctx.stream, "\treturn %s;\n", wrapInFunctionObject(createInstructionName(instr)))
+			return true
+		}
+	}
 	if pkgPath == "iter" {
 		switch funcName {
 		case "newcoro":
@@ -3201,6 +3306,9 @@ func (ctx *Context) emitGlobalVariableDefinition(gv *ssa.Global) {
 
 func (ctx *Context) emitRuntimeInfo() {
 	mainPkg := findMainPackage(ctx.program)
+	if mainPkg == nil {
+		return
+	}
 	mainFunctionName := createFunctionName(mainPkg.Members["main"].(*ssa.Function))
 	initFunctionName := createFunctionName(mainPkg.Members["init"].(*ssa.Function))
 
@@ -3223,7 +3331,7 @@ func findMainPackage(program *ssa.Program) *ssa.Package {
 			return pkg
 		}
 	}
-	panic("main package not found")
+	return nil
 }
 
 func (ctx *Context) traverseValue(function *ssa.Function, procedure func(value ssa.Value)) {
@@ -3437,11 +3545,11 @@ func computeInstanceOwners(program *ssa.Program) map[*ssa.Function]*ssa.Package 
 					var callee *ssa.Function
 					switch instr := instr.(type) {
 					case *ssa.Call:
-						callee, _ = instr.Common().Value.(*ssa.Function)
+						callee = getCallCallee(instr.Common())
 					case *ssa.Defer:
-						callee, _ = instr.Common().Value.(*ssa.Function)
+						callee = getCallCallee(instr.Common())
 					case *ssa.Go:
-						callee, _ = instr.Common().Value.(*ssa.Function)
+						callee = getCallCallee(instr.Common())
 					}
 					if callee != nil {
 						walk(callee)
@@ -3465,16 +3573,31 @@ func computeInstanceOwners(program *ssa.Program) map[*ssa.Function]*ssa.Package 
 	}
 
 	for fn, pkgs := range reachers {
-		if origin := fn.Origin(); origin != nil && origin.Pkg != nil && isFunctionBodySkippedPackagePath(origin.Pkg.Pkg.Path()) {
+		origin := fn.Origin()
+		if origin != nil && origin.Pkg != nil && isFunctionBodySkippedPackagePath(origin.Pkg.Pkg.Path()) {
 			continue
 		}
 		owner := pkgs[0]
-		if origin := fn.Origin(); origin != nil && origin.Pkg != nil {
+		if origin != nil && origin.Pkg != nil {
 			owner = origin.Pkg
 		}
 		instanceOwners[fn] = owner
 	}
 	return instanceOwners
+}
+
+func isAnyGenericInstance(fn *ssa.Function) bool {
+	return fn.Pkg == nil && len(fn.TypeArgs()) > 0
+}
+
+func getCallCallee(common *ssa.CallCommon) *ssa.Function {
+	if fn := common.StaticCallee(); fn != nil {
+		return fn
+	}
+	if fn, ok := common.Value.(*ssa.Function); ok {
+		return fn
+	}
+	return nil
 }
 
 func (ctx *Context) collectInstances(pkg *ssa.Package) {
@@ -3487,7 +3610,7 @@ func (ctx *Context) collectInstances(pkg *ssa.Package) {
 		}
 		seen[fn] = true
 
-		if isGeneratedGenericInstance(fn) {
+		if isAnyGenericInstance(fn) {
 			if ctx.instanceOwners[fn] == pkg {
 				ctx.extraFunctions = append(ctx.extraFunctions, fn)
 			}
@@ -3502,11 +3625,11 @@ func (ctx *Context) collectInstances(pkg *ssa.Package) {
 				var callee *ssa.Function
 				switch instr := instr.(type) {
 				case *ssa.Call:
-					callee, _ = instr.Common().Value.(*ssa.Function)
+					callee = getCallCallee(instr.Common())
 				case *ssa.Defer:
-					callee, _ = instr.Common().Value.(*ssa.Function)
+					callee = getCallCallee(instr.Common())
 				case *ssa.Go:
-					callee, _ = instr.Common().Value.(*ssa.Function)
+					callee = getCallCallee(instr.Common())
 				}
 				if callee != nil {
 					walk(callee)
@@ -3537,7 +3660,7 @@ func (ctx *Context) collectInstances(pkg *ssa.Package) {
 
 	unseen := []*ssa.Function{}
 	for fn, owner := range ctx.instanceOwners {
-		if owner == pkg && isGeneratedGenericInstance(fn) {
+		if owner == pkg && isAnyGenericInstance(fn) {
 			if !seen[fn] {
 				unseen = append(unseen, fn)
 			}
@@ -3547,6 +3670,25 @@ func (ctx *Context) collectInstances(pkg *ssa.Package) {
 		return unseen[i].RelString(nil) < unseen[j].RelString(nil)
 	})
 	ctx.extraFunctions = append(ctx.extraFunctions, unseen...)
+}
+
+func receiverPackage(function *ssa.Function) *types.Package {
+	if function.Signature == nil || function.Signature.Recv() == nil {
+		return nil
+	}
+	t := function.Signature.Recv().Type()
+	for {
+		switch u := t.(type) {
+		case *types.Pointer:
+			t = u.Elem()
+		case *types.Alias:
+			t = u.Rhs()
+		case *types.Named:
+			return t.(*types.Named).Obj().Pkg()
+		default:
+			return nil
+		}
+	}
 }
 
 func walkTypeMethods(program *ssa.Program, t types.Type, walk func(fn *ssa.Function)) {
@@ -3578,6 +3720,7 @@ func sortedPackageMembers(pkg *ssa.Package) []ssa.Member {
 func (ctx *Context) traverseFunction(pkg *ssa.Package, procedure func(function *ssa.Function)) {
 	if ctx.cachedFunctions == nil {
 		visited := make(map[*ssa.Function]struct{})
+		seenNames := make(map[string]struct{})
 		var f func(function *ssa.Function)
 		f = func(function *ssa.Function) {
 			if function == nil {
@@ -3587,12 +3730,29 @@ func (ctx *Context) traverseFunction(pkg *ssa.Package, procedure func(function *
 				return
 			}
 			visited[function] = struct{}{}
+			if pkg != nil {
+				owner := ""
+				if function.Pkg != nil {
+					owner = function.Pkg.Pkg.Path()
+				}
+				if rp := receiverPackage(function); rp != nil {
+					owner = rp.Path()
+				}
+				if owner != "" && owner != pkg.Pkg.Path() {
+					return
+				}
+			}
 			if function.TypeParams().Len() > 0 && len(function.TypeArgs()) == 0 {
 				return
 			}
 			if hasTypeParamInSignature(function.Signature) {
 				return
 			}
+			name := createFunctionName(function)
+			if _, ok := seenNames[name]; ok {
+				return
+			}
+			seenNames[name] = struct{}{}
 			ctx.cachedFunctions = append(ctx.cachedFunctions, function)
 			for _, anonFunc := range function.AnonFuncs {
 				f(anonFunc)
@@ -4075,6 +4235,45 @@ func (ctx *Context) emitPackage(pkg *ssa.Package) {
 		}
 		ctx.emitFunctionDefinition(function)
 	})
+
+	if pkg.Pkg.Path() == "os" {
+		if fileObj := pkg.Pkg.Scope().Lookup("File"); fileObj != nil {
+			if fileInnerObj := pkg.Pkg.Scope().Lookup("file"); fileInnerObj != nil {
+				fileStructName := createTypeName(fileObj.Type())
+				fileInnerStructName := createTypeName(fileInnerObj.Type())
+				streams := []struct {
+					global string
+					name   string
+					fd     int
+				}{
+					{"gv_24_Stdin_24_os", "/dev/stdin", 0},
+					{"gv_24_Stdout_24_os", "/dev/stdout", 1},
+					{"gv_24_Stderr_24_os", "/dev/stderr", 2},
+				}
+				fmt.Fprintf(ctx.stream, "\n// Custom C initialization of os.Stdin/Stdout/Stderr at program start\n")
+				for i := range streams {
+					inner := fmt.Sprintf("gox5_os_inner_std_%d", i)
+					fileVar := fmt.Sprintf("gox5_os_file_std_%d", i)
+					fmt.Fprintf(ctx.stream, "static %s %s;\n", fileInnerStructName, inner)
+					fmt.Fprintf(ctx.stream, "static %s %s;\n", fileStructName, fileVar)
+				}
+				fmt.Fprintf(ctx.stream, "__attribute__((constructor)) static void gox5_init_os_std_streams(void) {\n")
+				fmt.Fprintf(ctx.stream, "\tgv_24_Stdin_24_syscall.raw = 0;\n")
+				fmt.Fprintf(ctx.stream, "\tgv_24_Stdout_24_syscall.raw = 1;\n")
+				fmt.Fprintf(ctx.stream, "\tgv_24_Stderr_24_syscall.raw = 2;\n")
+
+				for i, st := range streams {
+					inner := fmt.Sprintf("gox5_os_inner_std_%d", i)
+					fileVar := fmt.Sprintf("gox5_os_file_std_%d", i)
+					fmt.Fprintf(ctx.stream, "\t%s.file.raw = &%s;\n", fileVar, inner)
+					fmt.Fprintf(ctx.stream, "\t%s.pfd.Sysfd = (IntObject){.raw = %d};\n", inner, st.fd)
+					fmt.Fprintf(ctx.stream, "\t%s.name = (StringObject){.raw = \"%s\", .len = sizeof(\"%s\") - 1};\n", inner, st.name, st.name)
+					fmt.Fprintf(ctx.stream, "\t%s.raw = &%s;\n", st.global, fileVar)
+				}
+				fmt.Fprintf(ctx.stream, "}\n")
+			}
+		}
+	}
 }
 
 func allPackagesSorted(program *ssa.Program) []*ssa.Package {
@@ -4433,6 +4632,51 @@ func handleMakefile(program *ssa.Program, outputPath string, buildDirname string
 	generateMakefile(makefile, program, buildDirname, cacheDirname, cachedPackages)
 }
 
+var candidateInstancePattern = regexp.MustCompile(`f_[0-9A-Za-z_]*_5B_[0-9A-Za-z_]*_5D_[0-9A-Za-z_]*`)
+
+func isGenericInstanceToken(tok string) bool {
+	i := strings.Index(tok, "_5B_")
+	j := strings.LastIndex(tok, "_5D_")
+	if i < 0 || j < 0 || j < i {
+		return false
+	}
+	inner := tok[i+4 : j]
+	return strings.Contains(inner, "_2C_") || strings.Contains(inner, "_5B_")
+}
+
+// isCachePackageSafe reports whether a cached package file is safe to reuse:
+// it must not reference a generic-instance function that it does not itself
+// define (such instances live in the uncached shared_definition.c, whose
+// contents vary between programs, so referencing them from a cached file
+// would produce nondeterministic link errors).
+func isCachePackageSafe(path string) bool {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+	content := string(data)
+	tokens := candidateInstancePattern.FindAllString(content, -1)
+	seen := map[string]bool{}
+	for _, tok := range tokens {
+		if seen[tok] {
+			continue
+		}
+		seen[tok] = true
+		if !isGenericInstanceToken(tok) {
+			continue
+		}
+		defRe := regexp.MustCompile(regexp.QuoteMeta(tok) + `\s*\([^;{]*\)\s*\{`)
+		if defRe.MatchString(content) {
+			continue
+		}
+		refRe := regexp.MustCompile(regexp.QuoteMeta(tok) + `\s*\(`)
+		if refRe.MatchString(content) {
+			return false
+		}
+	}
+	return true
+}
+
 func loadCachedPackages(cacheDirname string) map[string]bool {
 	result := map[string]bool{}
 	entries, err := os.ReadDir(cacheDirname)
@@ -4448,6 +4692,9 @@ func loadCachedPackages(cacheDirname string) map[string]bool {
 			continue
 		}
 		pkgName := strings.TrimSuffix(strings.TrimPrefix(name, "package_"), ".c")
+		if !isCachePackageSafe(filepath.Join(cacheDirname, name)) {
+			continue
+		}
 		result[pkgName] = true
 	}
 	return result
