@@ -8,7 +8,6 @@ import (
 	"math"
 	"os"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -66,10 +65,24 @@ type Context struct {
 	builtinPrintWrapperBuf   strings.Builder
 	builtinPrintWrapperNames map[*ssa.CallCommon]string
 	extraFunctions           []*ssa.Function
-	instanceOwners           map[*ssa.Function]*ssa.Package
 	cachedFunctions          []*ssa.Function
 	assertedInterfaceTypes   map[string]types.Type
+	instantiatedNamedTypes   map[string]types.Type
 	visitedInterfaceNames    map[string]bool
+	emittedTypeDefinitions   map[string]struct{}
+	instanceOrderedTypes     []types.Type
+}
+
+func (ctx *Context) markTypeDefinition(kind, name string) bool {
+	if ctx.emittedTypeDefinitions == nil {
+		ctx.emittedTypeDefinitions = make(map[string]struct{})
+	}
+	key := kind + ":" + name
+	if _, ok := ctx.emittedTypeDefinitions[key]; ok {
+		return false
+	}
+	ctx.emittedTypeDefinitions[key] = struct{}{}
+	return true
 }
 
 func encode(str string) string {
@@ -2272,6 +2285,53 @@ func isInGenericInstanceSubtree(fn *ssa.Function) bool {
 	return false
 }
 
+// isGenericInstanceSubtreeMember reports whether fn belongs to some generic
+// instance's subtree, including the synthetic $bound/$thunk wrappers that
+// go/ssa creates for method values on instantiated receivers.
+func isGenericInstanceSubtreeMember(fn *ssa.Function) bool {
+	if isInGenericInstanceSubtree(fn) {
+		return true
+	}
+	if fn == nil || fn.Pkg != nil || fn.Parent() != nil {
+		return false
+	}
+	name := fn.Name()
+	return strings.HasSuffix(name, "$bound") || strings.HasSuffix(name, "$thunk")
+}
+
+// wrapperTargetFunction returns the function that a synthetic $bound/$thunk
+// wrapper forwards to.
+func wrapperTargetFunction(fn *ssa.Function) *ssa.Function {
+	if fn.Blocks == nil {
+		return nil
+	}
+	for _, block := range fn.Blocks {
+		for _, instr := range block.Instrs {
+			for _, operand := range instr.Operands(nil) {
+				if ref, ok := (*operand).(*ssa.Function); ok && ref != fn {
+					return ref
+				}
+			}
+		}
+	}
+	return nil
+}
+
+// isPlainSyntheticWrapper reports whether fn is a synthetic $bound/$thunk
+// wrapper around a non-generic method. Such wrappers belong to no generic
+// instance subtree, so shared_definition.c defines them once with external
+// linkage instead of every user file carrying a private copy.
+func isPlainSyntheticWrapper(fn *ssa.Function) bool {
+	if isInGenericInstanceSubtree(fn) {
+		return false
+	}
+	if fn == nil || fn.Pkg != nil || fn.Parent() != nil {
+		return false
+	}
+	name := fn.Name()
+	return strings.HasSuffix(name, "$bound") || strings.HasSuffix(name, "$thunk")
+}
+
 func hasTypeParamInSignature(sig *types.Signature) bool {
 	if sig.Recv() != nil && hasTypeParameter(sig.Recv().Type()) {
 		return true
@@ -2336,6 +2396,11 @@ func hasTypeParameter(typ types.Type) bool {
 				}
 			}
 			return false
+		case *types.Signature:
+			if t.Recv() != nil && f(t.Recv().Type()) {
+				return true
+			}
+			return f(t.Params()) || f(t.Results())
 		case *types.TypeParam:
 			return true
 		default:
@@ -2427,6 +2492,41 @@ func (ctx *Context) emitFunctionHeader(name string, end string) {
 	fmt.Fprintf(ctx.stream, "FunctionObject %s (LightWeightThreadContext* ctx)%s\n", name, end)
 }
 
+// functionStorageClass returns the C storage-class keyword for the given
+// function. Generic instances (and their closures/bound wrappers) get a
+// private copy per translation unit under monomorphization, so they must be
+// static to allow several packages to embed the same instantiation. The
+// unused attribute keeps -Werror happy when a copy ends up referenced only
+// through eliminated code paths.
+func functionStorageClass(function *ssa.Function) string {
+	if isInGenericInstanceSubtree(function) {
+		return "static __attribute__((unused)) "
+	}
+	return ""
+}
+
+// emitFunctionDeclarationHeader emits a prototype for the given function,
+// matching the storage class used by its definition.
+func (ctx *Context) emitFunctionDeclarationHeader(function *ssa.Function, end string) {
+	fmt.Fprintf(ctx.stream, "%sFunctionObject %s (LightWeightThreadContext* ctx)%s\n", functionStorageClass(function), createFunctionName(function), end)
+}
+
+// declarationStorageClass returns the storage class for a bare prototype.
+// Static is only sound when this file also defines the function; references
+// discovered inside stubbed bodies point at functions no file defines, and a
+// static declaration for those would trip -Wunused-function.
+func (ctx *Context) declarationStorageClass(function *ssa.Function) string {
+	if functionStorageClass(function) == "" {
+		return ""
+	}
+	for _, cached := range ctx.cachedFunctions {
+		if cached == function {
+			return functionStorageClass(function)
+		}
+	}
+	return ""
+}
+
 func (ctx *Context) emitBoundFunctionFreeVarsDeclaration(fn *ssa.Function) {
 	obj := fn.Object().(*types.Func)
 	recvType := obj.Type().(*types.Signature).Recv().Type()
@@ -2440,7 +2540,7 @@ func (ctx *Context) emitFunctionVariableStructure(function *ssa.Function) {
 	signature := function.Signature
 	if signature.Recv() != nil {
 		receiverBoundFuncName := fmt.Sprintf("%s%s", createFunctionName(function), encode("$bound"))
-		ctx.emitFunctionHeader(receiverBoundFuncName, ";")
+		fmt.Fprintf(ctx.stream, "%sFunctionObject %s (LightWeightThreadContext* ctx);\n", functionStorageClass(function), receiverBoundFuncName)
 
 		fmt.Fprintf(ctx.stream, "typedef struct {\n")
 		fmt.Fprintf(ctx.stream, "\t%s receiver; // %s\n", createTypeName(signature.Recv().Type()), signature)
@@ -2453,7 +2553,7 @@ func (ctx *Context) emitFunctionVariableStructure(function *ssa.Function) {
 		fmt.Fprintf(ctx.stream, "} StackFrame_%s;\n", receiverBoundFuncName)
 
 		receiverThunkFuncName := fmt.Sprintf("%s%s", createFunctionName(function), encode("$thunk"))
-		ctx.emitFunctionHeader(receiverThunkFuncName, ";")
+		fmt.Fprintf(ctx.stream, "%sFunctionObject %s (LightWeightThreadContext* ctx);\n", functionStorageClass(function), receiverThunkFuncName)
 	}
 
 	fmt.Fprintf(ctx.stream, "typedef struct {\n")
@@ -2552,8 +2652,8 @@ func globalValueMakeInterfaces(function *ssa.Function) []*ssa.MakeInterface {
 	return result
 }
 
-func (ctx *Context) emitFunctionDefinitionPrologue(functionName string, frameName string, hasFreeVariables bool) {
-	ctx.emitFunctionHeader(functionName, "{")
+func (ctx *Context) emitFunctionDefinitionPrologue(storage string, functionName string, frameName string, hasFreeVariables bool) {
+	fmt.Fprintf(ctx.stream, "%sFunctionObject %s (LightWeightThreadContext* ctx){\n", storage, functionName)
 	freeVarsCompareOp := "=="
 	if hasFreeVariables {
 		freeVarsCompareOp = "!="
@@ -2613,7 +2713,8 @@ func (ctx *Context) emitFunctionDefinition(function *ssa.Function) {
 		fmt.Fprintf(ctx.stream, "}\n")
 		return
 	}
-	ctx.emitFunctionHeader(createFunctionName(function), "{")
+	storage := functionStorageClass(function)
+	fmt.Fprintf(ctx.stream, "%sFunctionObject %s (LightWeightThreadContext* ctx){\n", storage, createFunctionName(function))
 	fmt.Fprintf(ctx.stream, "\tassert(ctx->marker == 0xdeadbeef);\n")
 	fmt.Fprintf(ctx.stream, "\treturn %s;\n", wrapInFunctionObject(createBasicBlockName(function.Blocks[0])))
 	fmt.Fprintf(ctx.stream, "}\n")
@@ -2621,7 +2722,7 @@ func (ctx *Context) emitFunctionDefinition(function *ssa.Function) {
 	frameName := createFunctionName(function)
 	hasFreeVariables := len(function.FreeVars) != 0
 	for _, basicBlock := range function.Blocks {
-		ctx.emitFunctionDefinitionPrologue(createBasicBlockName(basicBlock), frameName, hasFreeVariables)
+		ctx.emitFunctionDefinitionPrologue(storage, createBasicBlockName(basicBlock), frameName, hasFreeVariables)
 
 		ctx.emitBlockPhis(basicBlock)
 
@@ -2633,13 +2734,20 @@ func (ctx *Context) emitFunctionDefinition(function *ssa.Function) {
 
 			if requireSwitchFunction(instr) {
 				ctx.emitFunctionDefinitionEpilogue()
-				ctx.emitFunctionDefinitionPrologue(createInstructionName(instr), frameName, hasFreeVariables)
+				ctx.emitFunctionDefinitionPrologue(storage, createInstructionName(instr), frameName, hasFreeVariables)
 			}
 		}
 
 		ctx.emitFunctionDefinitionEpilogue()
 	}
 
+	ctx.emitReceiverBoundThunkGlue(function, storage)
+}
+
+// emitReceiverBoundThunkGlue emits the bodies of the synthetic $bound and
+// $thunk wrappers that pair with a method definition. It must run for every
+// emitted method, including ones whose own body is reduced to a stub.
+func (ctx *Context) emitReceiverBoundThunkGlue(function *ssa.Function, storage string) {
 	signature := function.Signature
 	if signature.Recv() == nil {
 		return
@@ -2648,7 +2756,7 @@ func (ctx *Context) emitFunctionDefinition(function *ssa.Function) {
 	origFuncName := createFunctionName(function)
 	boundFuncName := fmt.Sprintf("%s%s", origFuncName, encode("$bound"))
 	resumeFuncName := fmt.Sprintf("%s_return", boundFuncName)
-	ctx.emitFunctionDefinitionPrologue(resumeFuncName, boundFuncName, true)
+	ctx.emitFunctionDefinitionPrologue(storage, resumeFuncName, boundFuncName, true)
 	fmt.Fprintf(ctx.stream, `
 	assert(ctx->marker == 0xdeadbeef);
 	ctx->stack_pointer = frame->common.prev_stack_pointer;
@@ -2656,7 +2764,7 @@ func (ctx *Context) emitFunctionDefinition(function *ssa.Function) {
 `)
 	ctx.emitFunctionDefinitionEpilogue()
 
-	ctx.emitFunctionDefinitionPrologue(boundFuncName, boundFuncName, true)
+	ctx.emitFunctionDefinitionPrologue(storage, boundFuncName, boundFuncName, true)
 	nextFuncName := wrapInFunctionObject(origFuncName)
 	signatureName := createSignatureName(signature, false, false)
 	result := "*frame->signature.result_ptr"
@@ -2670,7 +2778,7 @@ func (ctx *Context) emitFunctionDefinition(function *ssa.Function) {
 
 	thunkFuncName := fmt.Sprintf("%s%s", origFuncName, encode("$thunk"))
 	thunkResumeFuncName := fmt.Sprintf("%s_return", thunkFuncName)
-	ctx.emitFunctionDefinitionPrologue(thunkResumeFuncName, frameName, false)
+	ctx.emitFunctionDefinitionPrologue(storage, thunkResumeFuncName, origFuncName, false)
 	fmt.Fprintf(ctx.stream, `
 	assert(ctx->marker == 0xdeadbeef);
 	ctx->stack_pointer = frame->common.prev_stack_pointer;
@@ -2678,7 +2786,7 @@ func (ctx *Context) emitFunctionDefinition(function *ssa.Function) {
 `)
 	ctx.emitFunctionDefinitionEpilogue()
 
-	ctx.emitFunctionDefinitionPrologue(thunkFuncName, frameName, false)
+	ctx.emitFunctionDefinitionPrologue(storage, thunkFuncName, origFuncName, false)
 	nextFuncName = wrapInFunctionObject(origFuncName)
 	signatureName = createSignatureName(signature, false, false)
 	result = "*frame->signature.result_ptr"
@@ -2690,7 +2798,16 @@ func (ctx *Context) emitFunctionDefinition(function *ssa.Function) {
 	ctx.emitFunctionDefinitionEpilogue()
 }
 
-func (ctx *Context) retrieveOrderedTypes(pkg *ssa.Package) []types.Type {
+func (ctx *Context) retrieveOrderedTypes(pkg *ssa.Package, extraSeeds []types.Type) []types.Type {
+	return ctx.orderTypes(func(procedure func(types.Type)) {
+		ctx.traverseType(pkg, procedure)
+		for _, typ := range extraSeeds {
+			procedure(typ)
+		}
+	})
+}
+
+func (ctx *Context) orderTypes(seeds func(procedure func(types.Type))) []types.Type {
 	pointerTypes := make([]types.Type, 0)
 	nonPointerTypes := make([]types.Type, 0)
 
@@ -2760,9 +2877,7 @@ func (ctx *Context) retrieveOrderedTypes(pkg *ssa.Package) []types.Type {
 		}
 	}
 
-	ctx.traverseType(pkg, func(typ types.Type) {
-		f(typ)
-	})
+	seeds(f)
 
 	return append(pointerTypes, nonPointerTypes...)
 }
@@ -2937,6 +3052,9 @@ func (ctx *Context) emitTypeInfoDeclaration(typ types.Type) {
 }
 
 func (ctx *Context) emitTypeInfoDefinition(typ types.Type) {
+	if !ctx.markTypeDefinition("typeinfo", createTypeIdName(typ)) {
+		return
+	}
 	interfaceTableName := fmt.Sprintf("interfaceTable_%s", createInterfaceTypeSymbolName(typ))
 	numMethods := fmt.Sprintf("sizeof(%s.entries)/sizeof(%s.entries[0])", interfaceTableName, interfaceTableName)
 	interfaceTable := fmt.Sprintf("&%s.entries[0]", interfaceTableName)
@@ -3006,6 +3124,9 @@ func (ctx *Context) emitEqualFunctionDeclaration(typ types.Type) {
 
 func (ctx *Context) emitEqualFunctionDefinition(typ types.Type) {
 	typeName := createTypeName(typ)
+	if !ctx.markTypeDefinition("equal", typeName) {
+		return
+	}
 	underlyingType := typ.Underlying()
 	var body = ""
 	body += "\tassert(lhs != NULL);\n"
@@ -3057,6 +3178,9 @@ func (ctx *Context) emitHashFunctionDeclaration(typ types.Type) {
 
 func (ctx *Context) emitHashFunctionDefinition(typ types.Type) {
 	typeName := createTypeName(typ)
+	if !ctx.markTypeDefinition("hash", typeName) {
+		return
+	}
 	underlyingType := typ.Underlying()
 	var body = ""
 	body += "\tassert(obj != NULL);\n"
@@ -3128,6 +3252,9 @@ func (ctx *Context) interfaceTableEntryIndexes(typ types.Type, allowSet map[stri
 }
 
 func (ctx *Context) emitInterfaceTableDeclaration(typ types.Type, allowSet map[string]struct{}) {
+	if !ctx.markTypeDefinition("itabledecl", createInterfaceTypeSymbolName(typ)) {
+		return
+	}
 	entryIndexes := ctx.interfaceTableEntryIndexes(typ, allowSet)
 	name := createInterfaceTypeSymbolName(typ)
 	fmt.Fprintf(ctx.stream, "struct InterfaceTable_%s { InterfaceTableEntry entries[%d]; };\n", name, len(entryIndexes))
@@ -3135,6 +3262,9 @@ func (ctx *Context) emitInterfaceTableDeclaration(typ types.Type, allowSet map[s
 }
 
 func (ctx *Context) emitInterfaceTableDefinition(typ types.Type, allowSet map[string]struct{}) {
+	if !ctx.markTypeDefinition("itable", createInterfaceTypeSymbolName(typ)) {
+		return
+	}
 	entryIndexes := ctx.interfaceTableEntryIndexes(typ, allowSet)
 	methodSet := ctx.program.MethodSets.MethodSet(typ)
 	name := createInterfaceTypeSymbolName(typ)
@@ -3519,75 +3649,20 @@ func (ctx *Context) traverseCallCommon(function *ssa.Function, procedure func(ca
 	}
 }
 
-func computeInstanceOwners(program *ssa.Program) map[*ssa.Function]*ssa.Package {
-	instanceOwners := map[*ssa.Function]*ssa.Package{}
-	reachers := map[*ssa.Function][]*ssa.Package{}
-
-	for _, pkg := range allPackagesSorted(program) {
-		seen := map[*ssa.Function]bool{}
-		var walk func(fn *ssa.Function)
-		walk = func(fn *ssa.Function) {
-			if fn == nil || seen[fn] {
-				return
-			}
-			seen[fn] = true
-
-			if fn.Pkg == nil && len(fn.TypeArgs()) > 0 {
-				reachers[fn] = append(reachers[fn], pkg)
-			}
-
-			if fn.Blocks == nil {
-				return
-			}
-
-			for _, block := range fn.Blocks {
-				for _, instr := range block.Instrs {
-					var callee *ssa.Function
-					switch instr := instr.(type) {
-					case *ssa.Call:
-						callee = getCallCallee(instr.Common())
-					case *ssa.Defer:
-						callee = getCallCallee(instr.Common())
-					case *ssa.Go:
-						callee = getCallCallee(instr.Common())
-					}
-					if callee != nil {
-						walk(callee)
-					}
-				}
-			}
-
-			for _, anon := range fn.AnonFuncs {
-				walk(anon)
-			}
-		}
-		for _, member := range sortedPackageMembers(pkg) {
-			switch member := member.(type) {
-			case *ssa.Function:
-				walk(member)
-			case *ssa.Type:
-				walkTypeMethods(program, member.Type(), walk)
-				walkTypeMethods(program, types.NewPointer(member.Type()), walk)
-			}
-		}
-	}
-
-	for fn, pkgs := range reachers {
-		origin := fn.Origin()
-		if origin != nil && origin.Pkg != nil && isFunctionBodySkippedPackagePath(origin.Pkg.Pkg.Path()) {
-			continue
-		}
-		owner := pkgs[0]
-		if origin != nil && origin.Pkg != nil {
-			owner = origin.Pkg
-		}
-		instanceOwners[fn] = owner
-	}
-	return instanceOwners
-}
-
 func isAnyGenericInstance(fn *ssa.Function) bool {
 	return fn.Pkg == nil && len(fn.TypeArgs()) > 0
+}
+
+// hasUnboundTypeArgs reports whether fn is a partially instantiated instance
+// whose type arguments still contain type parameters. Such functions only
+// appear inside generic origin bodies and must never be emitted.
+func hasUnboundTypeArgs(fn *ssa.Function) bool {
+	for _, typ := range fn.TypeArgs() {
+		if hasTypeParameter(typ) {
+			return true
+		}
+	}
+	return false
 }
 
 func getCallCallee(common *ssa.CallCommon) *ssa.Function {
@@ -3600,76 +3675,144 @@ func getCallCallee(common *ssa.CallCommon) *ssa.Function {
 	return nil
 }
 
-func (ctx *Context) collectInstances(pkg *ssa.Package) {
-	seen := map[*ssa.Function]bool{}
+// instanceCollector gathers generic instances reachable through function
+// bodies. With monomorphization every file that uses an instance emits its
+// own private copy, so instances are attributed by usage instead of origin.
+type instanceCollector struct {
+	seen                map[*ssa.Function]struct{}
+	result              []*ssa.Function
+	recordPlainWrappers bool
+}
 
-	var walk func(fn *ssa.Function)
-	walk = func(fn *ssa.Function) {
-		if fn == nil || seen[fn] {
-			return
+// walk records generic instances reachable from fn. Recursion only descends
+// into instance subtrees and their synthetic $bound/$thunk wrappers; entering
+// ordinary foreign functions is skipped so their private instance usage stays
+// attributed to the file that defines them. Starters passed with force=true
+// (the collecting file's own members) are entered unconditionally.
+func (collector *instanceCollector) walk(fn *ssa.Function, force bool) {
+	if fn == nil {
+		return
+	}
+	if _, ok := collector.seen[fn]; ok {
+		return
+	}
+	// Gate BEFORE remembering: a function rejected here must stay eligible
+	// for a later forced visit, otherwise bodies reached first through
+	// ordinary references would never be scanned.
+	if !force && !isGenericInstanceSubtreeMember(fn) {
+		return
+	}
+	if fn.Blocks != nil && isFunctionBodySkipped(fn) && !isAnyGenericInstance(fn) {
+		return
+	}
+	collector.seen[fn] = struct{}{}
+
+	// Bound-method and thunk synthetics of an instance ride along with the
+	// instance definition itself, so only genuine roots are recorded.
+	if isAnyGenericInstance(fn) && !strings.HasSuffix(fn.Name(), "$bound") && !strings.HasSuffix(fn.Name(), "$thunk") && !hasUnboundTypeArgs(fn) {
+		collector.result = append(collector.result, fn)
+	}
+	// Wrappers of generic-origin methods keep parameterized signatures and
+	// cannot be emitted anywhere. Methods from emitted packages define their
+	// own wrappers, so only wrappers of body-skipped targets belong here.
+	if collector.recordPlainWrappers && isPlainSyntheticWrapper(fn) &&
+		fn.TypeParams().Len() == 0 && !hasTypeParamInSignature(fn.Signature) {
+		target := wrapperTargetFunction(fn)
+		if target != nil && isFunctionBodySkipped(target) {
+			collector.result = append(collector.result, fn)
 		}
-		seen[fn] = true
+	}
 
-		if isAnyGenericInstance(fn) {
-			if ctx.instanceOwners[fn] == pkg {
-				ctx.extraFunctions = append(ctx.extraFunctions, fn)
-			}
-		}
+	if fn.Blocks == nil {
+		return
+	}
 
-		if fn.Blocks == nil {
-			return
-		}
-
-		for _, block := range fn.Blocks {
-			for _, instr := range block.Instrs {
-				var callee *ssa.Function
-				switch instr := instr.(type) {
-				case *ssa.Call:
-					callee = getCallCallee(instr.Common())
-				case *ssa.Defer:
-					callee = getCallCallee(instr.Common())
-				case *ssa.Go:
-					callee = getCallCallee(instr.Common())
+	for _, block := range fn.Blocks {
+		for _, instr := range block.Instrs {
+			for _, operand := range instr.Operands(nil) {
+				if ref, ok := (*operand).(*ssa.Function); ok {
+					collector.walk(ref, false)
 				}
-				if callee != nil {
-					walk(callee)
-				}
 			}
-		}
-
-		for _, anon := range fn.AnonFuncs {
-			walk(anon)
-		}
-
-		if isGeneratedGenericInstance(fn) {
-			if ctx.instanceOwners[fn] == pkg {
-				ctx.extraFunctions = append(ctx.extraFunctions, fn)
+			var callee *ssa.Function
+			switch instr := instr.(type) {
+			case *ssa.Call:
+				callee = getCallCallee(instr.Common())
+			case *ssa.Defer:
+				callee = getCallCallee(instr.Common())
+			case *ssa.Go:
+				callee = getCallCallee(instr.Common())
+			}
+			if callee != nil {
+				collector.walk(callee, false)
 			}
 		}
 	}
 
+	for _, anon := range fn.AnonFuncs {
+		collector.walk(anon, force)
+	}
+}
+
+func (collector *instanceCollector) sortedResult() []*ssa.Function {
+	sort.Slice(collector.result, func(i, j int) bool {
+		return collector.result[i].RelString(nil) < collector.result[j].RelString(nil)
+	})
+	return collector.result
+}
+
+// collectInstances appends to ctx.extraFunctions every generic instance used
+// by pkg's own code, directly or transitively.
+func (ctx *Context) collectInstances(pkg *ssa.Package) {
+	collector := &instanceCollector{seen: map[*ssa.Function]struct{}{}}
+	ctx.appendReachableInstances(pkg, collector)
+	ctx.extraFunctions = append(ctx.extraFunctions, collector.sortedResult()...)
+}
+
+func (ctx *Context) appendReachableInstances(pkg *ssa.Package, collector *instanceCollector) {
 	for _, member := range sortedPackageMembers(pkg) {
 		switch member := member.(type) {
 		case *ssa.Function:
-			walk(member)
+			collector.walk(member, true)
 		case *ssa.Type:
-			walkTypeMethods(ctx.program, member.Type(), walk)
-			walkTypeMethods(ctx.program, types.NewPointer(member.Type()), walk)
+			walkTypeMethods(ctx.program, member.Type(), func(fn *ssa.Function) { collector.walk(fn, true) })
+			walkTypeMethods(ctx.program, types.NewPointer(member.Type()), func(fn *ssa.Function) { collector.walk(fn, true) })
 		}
 	}
+}
 
-	unseen := []*ssa.Function{}
-	for fn, owner := range ctx.instanceOwners {
-		if owner == pkg && isAnyGenericInstance(fn) {
-			if !seen[fn] {
-				unseen = append(unseen, fn)
+// collectSharedInstances appends to ctx.extraFunctions every generic instance
+// referenced from shared_definition.c itself. Interface method tables are
+// defined only there, so their concrete methods seed the set; the rest comes
+// from transitive usage inside the seeded instances.
+func (ctx *Context) collectSharedInstances() {
+	collector := &instanceCollector{seen: map[*ssa.Function]struct{}{}, recordPlainWrappers: true}
+	allowSet := ctx.buildAllowSet(nil)
+
+	seed := func(typ types.Type) {
+		methodSet := ctx.program.MethodSets.MethodSet(typ)
+		for _, index := range ctx.interfaceTableEntryIndexes(typ, allowSet) {
+			function := ctx.program.MethodValue(methodSet.At(index))
+			if function != nil {
+				collector.walk(function, isGenericInstanceSubtreeMember(function))
 			}
 		}
 	}
-	sort.Slice(unseen, func(i, j int) bool {
-		return unseen[i].RelString(nil) < unseen[j].RelString(nil)
-	})
-	ctx.extraFunctions = append(ctx.extraFunctions, unseen...)
+
+	ctx.traverseBasicType(seed)
+	for _, pkg := range allPackagesSorted(ctx.program) {
+		for _, member := range sortedPackageMembers(pkg) {
+			switch member := member.(type) {
+			case *ssa.Type:
+				seed(member.Type())
+				seed(types.NewPointer(member.Type()))
+			case *ssa.Function:
+				collector.walk(member, true)
+			}
+		}
+	}
+
+	ctx.extraFunctions = append(ctx.extraFunctions, collector.sortedResult()...)
 }
 
 func receiverPackage(function *ssa.Function) *types.Package {
@@ -3721,8 +3864,8 @@ func (ctx *Context) traverseFunction(pkg *ssa.Package, procedure func(function *
 	if ctx.cachedFunctions == nil {
 		visited := make(map[*ssa.Function]struct{})
 		seenNames := make(map[string]struct{})
-		var f func(function *ssa.Function)
-		f = func(function *ssa.Function) {
+		var f func(function *ssa.Function, force bool)
+		f = func(function *ssa.Function, force bool) {
 			if function == nil {
 				return
 			}
@@ -3730,7 +3873,7 @@ func (ctx *Context) traverseFunction(pkg *ssa.Package, procedure func(function *
 				return
 			}
 			visited[function] = struct{}{}
-			if pkg != nil {
+			if pkg != nil && !force {
 				owner := ""
 				if function.Pkg != nil {
 					owner = function.Pkg.Pkg.Path()
@@ -3755,7 +3898,7 @@ func (ctx *Context) traverseFunction(pkg *ssa.Package, procedure func(function *
 			seenNames[name] = struct{}{}
 			ctx.cachedFunctions = append(ctx.cachedFunctions, function)
 			for _, anonFunc := range function.AnonFuncs {
-				f(anonFunc)
+				f(anonFunc, force)
 			}
 		}
 
@@ -3766,14 +3909,14 @@ func (ctx *Context) traverseFunction(pkg *ssa.Package, procedure func(function *
 				if function == nil {
 					continue
 				}
-				f(function)
+				f(function, false)
 			}
 		}
 
 		ctx.traversePackageMember(pkg, func(member ssa.Member) {
 			switch member := member.(type) {
 			case *ssa.Function:
-				f(member)
+				f(member, false)
 			case *ssa.Type:
 				t := member.Type()
 				g(t)
@@ -3782,7 +3925,9 @@ func (ctx *Context) traverseFunction(pkg *ssa.Package, procedure func(function *
 		})
 
 		for _, fn := range ctx.extraFunctions {
-			f(fn)
+			// Instances are placed in this file by design; never let the
+			// owner filter reassign them to their origin package.
+			f(fn, true)
 		}
 	}
 
@@ -3975,8 +4120,17 @@ func (ctx *Context) emitCommon() {
 	fmt.Fprintln(ctx.stream, `#include "predefined.h"`)
 }
 
-func (ctx *Context) emitTypeDeclarationAndDefinition(pkg *ssa.Package) {
-	orderedTypes := ctx.retrieveOrderedTypes(pkg)
+func (ctx *Context) emitTypeDeclarationAndDefinition(pkg *ssa.Package, extraTypeSeeds []types.Type) {
+	orderedTypes := ctx.retrieveOrderedTypes(pkg, extraTypeSeeds)
+	if len(extraTypeSeeds) > 0 {
+		ctx.instanceOrderedTypes = ctx.orderTypes(func(procedure func(types.Type)) {
+			for _, typ := range extraTypeSeeds {
+				procedure(typ)
+			}
+		})
+	} else {
+		ctx.instanceOrderedTypes = nil
+	}
 	for _, typ := range orderedTypes {
 		ctx.emitTypeDeclaration(typ)
 	}
@@ -4026,6 +4180,17 @@ uintptr_t hash_Interface(const Interface* obj);
 	for _, typ := range sortedAssertedInterfaceTypes(ctx.assertedInterfaceTypes) {
 		if ctx.visitedInterfaceNames != nil && ctx.visitedInterfaceNames[createInterfaceTypeSymbolName(typ)] {
 			continue
+		}
+		ctx.emitInterfaceTableDeclaration(typ, allowSet)
+		ctx.emitTypeInfoDeclaration(typ)
+	}
+	for _, typ := range sortedInstantiatedNamedTypes(ctx.instantiatedNamedTypes) {
+		ctx.emitTypeInfoDeclaration(typ)
+	}
+	for _, typ := range ctx.instanceOrderedTypes {
+		if _, ok := typ.(*types.Interface); !ok {
+			ctx.emitEqualFunctionDeclaration(typ)
+			ctx.emitHashFunctionDeclaration(typ)
 		}
 		ctx.emitInterfaceTableDeclaration(typ, allowSet)
 		ctx.emitTypeInfoDeclaration(typ)
@@ -4106,25 +4271,33 @@ uintptr_t hash_Interface(const Interface* obj) {
 		ctx.emitInterfaceTableDefinition(typ, allowSet)
 		ctx.emitTypeInfoDefinition(typ)
 	}
+	for _, typ := range ctx.instanceOrderedTypes {
+		if _, ok := typ.(*types.Interface); !ok {
+			ctx.emitEqualFunctionDefinition(typ)
+			ctx.emitHashFunctionDefinition(typ)
+		}
+		ctx.emitInterfaceTableDefinition(typ, allowSet)
+		ctx.emitTypeInfoDefinition(typ)
+	}
 }
 
 func (ctx *Context) emitPackage(pkg *ssa.Package) {
 	ctx.emitCommon()
 
-	ctx.emitTypeDeclarationAndDefinition(pkg)
+	ctx.emitTypeDeclarationAndDefinition(pkg, nil)
 	ctx.emitInterfaceDataDeclaration(pkg)
 
 	ctx.emitSignature(pkg)
 
 	ctx.traverseFunction(pkg, func(function *ssa.Function) {
-		ctx.emitFunctionHeader(createFunctionName(function), ";")
+		ctx.emitFunctionDeclarationHeader(function, ";")
 		ctx.emitFunctionVariableStructure(function)
 	})
 
 	ctx.traverseFunction(pkg, func(function *ssa.Function) {
 		ctx.traverseCallCommon(function, func(callCommon *ssa.CallCommon) {
 			if f, ok := callCommon.Value.(*ssa.Function); ok {
-				ctx.emitFunctionHeader(createFunctionName(f), ";")
+				fmt.Fprintf(ctx.stream, "%sFunctionObject %s (LightWeightThreadContext* ctx);\n", ctx.declarationStorageClass(f), createFunctionName(f))
 			}
 		})
 	})
@@ -4146,10 +4319,18 @@ func (ctx *Context) emitPackage(pkg *ssa.Package) {
 			if !ok {
 				return
 			}
+			if isInGenericInstanceSubtree(f) {
+				return
+			}
+			if strings.HasSuffix(f.Name(), "$bound") || strings.HasSuffix(f.Name(), "$thunk") {
+				if target := wrapperTargetFunction(f); target != nil && len(target.TypeArgs()) > 0 {
+					return
+				}
+			}
 			if functionPkg(f) == pkg.Pkg {
 				return
 			}
-			ctx.emitFunctionHeader(createFunctionName(f), ";")
+			ctx.emitFunctionDeclarationHeader(f, ";")
 			if strings.HasSuffix(f.Name(), "$bound") {
 				fnName := createFunctionName(f)
 				if _, ok := emittedBoundFunctionFreeVars[fnName]; ok {
@@ -4203,12 +4384,13 @@ func (ctx *Context) emitPackage(pkg *ssa.Package) {
 	ctx.traverseFunction(pkg, func(function *ssa.Function) {
 		if function.Blocks == nil {
 			if function.Pkg == nil {
-				fmt.Fprintf(ctx.stream, "FunctionObject %s(LightWeightThreadContext* ctx){ (void)ctx; assert(false); return (FunctionObject){NULL}; }\n", createFunctionName(function))
+				fmt.Fprintf(ctx.stream, "%sFunctionObject %s(LightWeightThreadContext* ctx){ (void)ctx; assert(false); return (FunctionObject){NULL}; }\n", functionStorageClass(function), createFunctionName(function))
 			}
 			return
 		}
 		if isFunctionBodySkipped(function) {
-			fmt.Fprintf(ctx.stream, "FunctionObject %s(LightWeightThreadContext* ctx){ (void)ctx; assert(false); return (FunctionObject){NULL}; }\n", createFunctionName(function))
+			fmt.Fprintf(ctx.stream, "%sFunctionObject %s(LightWeightThreadContext* ctx){ (void)ctx; assert(false); return (FunctionObject){NULL}; }\n", functionStorageClass(function), createFunctionName(function))
+			ctx.emitReceiverBoundThunkGlue(function, functionStorageClass(function))
 			return
 		}
 		ctx.traverseValue(function, func(value ssa.Value) {
@@ -4223,12 +4405,12 @@ func (ctx *Context) emitPackage(pkg *ssa.Package) {
 		})
 		for _, basicBlock := range function.Blocks {
 			name := createBasicBlockName(basicBlock)
-			ctx.emitFunctionHeader(name, ";")
+			fmt.Fprintf(ctx.stream, "%sFunctionObject %s (LightWeightThreadContext* ctx);\n", functionStorageClass(function), name)
 			ctx.latestNameMap[basicBlock] = name
 			for _, instr := range basicBlock.Instrs {
 				if requireSwitchFunction(instr) {
 					continuationName := createInstructionName(instr)
-					ctx.emitFunctionHeader(continuationName, ";")
+					fmt.Fprintf(ctx.stream, "%sFunctionObject %s (LightWeightThreadContext* ctx);\n", functionStorageClass(function), continuationName)
 					ctx.latestNameMap[basicBlock] = continuationName
 				}
 			}
@@ -4406,6 +4588,136 @@ func sortedAssertedInterfaceTypes(types_ map[string]types.Type) []types.Type {
 	return result
 }
 
+// collectInstantiatedNamedTypes gathers every instantiated named type that is
+// reachable anywhere in the program. Their equal/hash helpers and TypeInfo are
+// defined once in shared_definition.c with external linkage.
+func collectInstantiatedNamedTypes(program *ssa.Program) map[string]types.Type {
+	result := map[string]types.Type{}
+	seenFunctions := map[*ssa.Function]struct{}{}
+	seenTypes := map[string]struct{}{}
+
+	var harvestType func(typ types.Type)
+	harvestType = func(typ types.Type) {
+		name := createTypeName(typ)
+		if _, ok := seenTypes[name]; ok {
+			return
+		}
+		seenTypes[name] = struct{}{}
+		if !hasTypeParameter(typ) {
+			switch typ.(type) {
+			case *types.Alias, *types.Basic, *types.Interface, *types.TypeParam:
+				// only their components are harvested
+			default:
+				result[name] = typ
+			}
+		}
+		switch typ := typ.(type) {
+		case *types.Alias:
+			harvestType(typ.Underlying())
+		case *types.Array:
+			harvestType(typ.Elem())
+		case *types.Chan:
+			harvestType(typ.Elem())
+		case *types.Map:
+			harvestType(typ.Key())
+			harvestType(typ.Elem())
+		case *types.Named:
+			instantiated := typ.TypeArgs().Len() > 0 && !hasTypeParameter(typ)
+			if instantiated {
+				result[name] = typ
+				for i := 0; i < typ.TypeArgs().Len(); i++ {
+					harvestType(typ.TypeArgs().At(i))
+				}
+			}
+			harvestType(typ.Underlying())
+		case *types.Pointer:
+			harvestType(typ.Elem())
+		case *types.Slice:
+			harvestType(typ.Elem())
+		case *types.Signature:
+			if typ.Recv() != nil {
+				harvestType(typ.Recv().Type())
+			}
+			harvestType(typ.Params())
+			harvestType(typ.Results())
+		case *types.Struct:
+			for i := 0; i < typ.NumFields(); i++ {
+				harvestType(typ.Field(i).Type())
+			}
+		case *types.Tuple:
+			for i := 0; i < typ.Len(); i++ {
+				harvestType(typ.At(i).Type())
+			}
+		}
+	}
+
+	var walkFunction func(fn *ssa.Function)
+	walkFunction = func(fn *ssa.Function) {
+		if fn == nil {
+			return
+		}
+		if _, ok := seenFunctions[fn]; ok {
+			return
+		}
+		seenFunctions[fn] = struct{}{}
+		harvestType(fn.Signature)
+		if fn.Blocks == nil {
+			return
+		}
+		for _, block := range fn.Blocks {
+			for _, instr := range block.Instrs {
+				for _, operand := range instr.Operands(nil) {
+					if value, ok := (*operand).(ssa.Value); ok {
+						harvestType(value.Type())
+					}
+					if ref, ok := (*operand).(*ssa.Function); ok {
+						walkFunction(ref)
+					}
+				}
+			}
+		}
+		for _, anon := range fn.AnonFuncs {
+			walkFunction(anon)
+		}
+	}
+
+	collector := &instanceCollector{seen: map[*ssa.Function]struct{}{}}
+	helperCtx := &Context{program: program}
+	for _, pkg := range allPackagesSorted(program) {
+		for _, member := range sortedPackageMembers(pkg) {
+			switch member := member.(type) {
+			case *ssa.Function:
+				walkFunction(member)
+			case *ssa.Global:
+				harvestType(member.Type())
+			case *ssa.Type:
+				harvestType(member.Type())
+				harvestType(types.NewPointer(member.Type()))
+			}
+		}
+		helperCtx.appendReachableInstances(pkg, collector)
+	}
+	for _, fn := range collector.sortedResult() {
+		walkFunction(fn)
+	}
+
+	delete(result, "error")
+	return result
+}
+
+func sortedInstantiatedNamedTypes(types_ map[string]types.Type) []types.Type {
+	names := make([]string, 0, len(types_))
+	for name := range types_ {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	result := make([]types.Type, 0, len(names))
+	for _, name := range names {
+		result = append(result, types_[name])
+	}
+	return result
+}
+
 func collectAssertedInterfaceTypesOfFunctions(ctx *Context, pkg *ssa.Package) map[string]types.Type {
 	result := map[string]types.Type{}
 	ctx.traverseFunction(pkg, func(function *ssa.Function) {
@@ -4423,19 +4735,20 @@ func collectAssertedInterfaceTypesOfFunctions(ctx *Context, pkg *ssa.Package) ma
 	return result
 }
 
-func collectAssertedInterfaceTypes(program *ssa.Program, instanceOwners map[*ssa.Function]*ssa.Package) map[string]types.Type {
+func collectAssertedInterfaceTypes(program *ssa.Program) map[string]types.Type {
 	ctx := Context{
-		program:        program,
-		latestNameMap:  make(map[*ssa.BasicBlock]string),
-		instanceOwners: instanceOwners,
+		program:       program,
+		latestNameMap: make(map[*ssa.BasicBlock]string),
 	}
+	collector := &instanceCollector{seen: map[*ssa.Function]struct{}{}}
 	for _, pkg := range allPackagesSorted(program) {
-		ctx.collectInstances(pkg)
+		ctx.appendReachableInstances(pkg, collector)
 	}
+	ctx.extraFunctions = append(ctx.extraFunctions, collector.sortedResult()...)
 	return collectAssertedInterfaceTypesOfFunctions(&ctx, nil)
 }
 
-func handleSharedDefinition(program *ssa.Program, instanceOwners map[*ssa.Function]*ssa.Package, assertedInterfaceTypes map[string]types.Type, outputPath string) {
+func handleSharedDefinition(program *ssa.Program, assertedInterfaceTypes map[string]types.Type, instantiatedNamedTypes map[string]types.Type, outputPath string) {
 	f, err := os.Create(outputPath)
 	if err != nil {
 		panic(err)
@@ -4446,13 +4759,11 @@ func handleSharedDefinition(program *ssa.Program, instanceOwners map[*ssa.Functi
 		stream:                 f,
 		program:                program,
 		latestNameMap:          make(map[*ssa.BasicBlock]string),
-		instanceOwners:         instanceOwners,
 		assertedInterfaceTypes: assertedInterfaceTypes,
+		instantiatedNamedTypes: instantiatedNamedTypes,
 	}
 
-	for _, pkg := range allPackagesSorted(program) {
-		ctx.collectInstances(pkg)
-	}
+	ctx.collectSharedInstances()
 
 	ctx.emitCommon()
 
@@ -4464,10 +4775,10 @@ func handleSharedDefinition(program *ssa.Program, instanceOwners map[*ssa.Functi
 	})
 	ctx.visitedInterfaceNames = visitedInterfaceNames
 
-	ctx.emitTypeDeclarationAndDefinition(nil)
+	ctx.emitTypeDeclarationAndDefinition(nil, sortedInstantiatedNamedTypes(ctx.instantiatedNamedTypes))
 	ctx.emitInterfaceDataDeclaration(nil)
 	ctx.traverseFunction(nil, func(function *ssa.Function) {
-		ctx.emitFunctionHeader(createFunctionName(function), ";")
+		ctx.emitFunctionDeclarationHeader(function, ";")
 	})
 
 	ctx.emitInterfaceDataDefinition()
@@ -4485,15 +4796,15 @@ func handleSharedDefinition(program *ssa.Program, instanceOwners map[*ssa.Functi
 	ctx.emitSignature(nil)
 
 	ctx.traverseFunction(nil, func(function *ssa.Function) {
-		if !isInGenericInstanceSubtree(function) {
+		if !isInGenericInstanceSubtree(function) && !isPlainSyntheticWrapper(function) {
 			return
 		}
-		ctx.emitFunctionHeader(createFunctionName(function), ";")
+		ctx.emitFunctionDeclarationHeader(function, ";")
 		ctx.emitFunctionVariableStructure(function)
 	})
 
 	ctx.traverseFunction(nil, func(function *ssa.Function) {
-		if !isInGenericInstanceSubtree(function) || function.Blocks == nil {
+		if !isInGenericInstanceSubtree(function) && !isPlainSyntheticWrapper(function) || function.Blocks == nil {
 			return
 		}
 		for _, basicBlock := range function.Blocks {
@@ -4512,14 +4823,15 @@ func handleSharedDefinition(program *ssa.Program, instanceOwners map[*ssa.Functi
 
 	foundInstanceConstValueSet := make(map[string]struct{})
 	ctx.traverseFunction(nil, func(function *ssa.Function) {
-		if !isInGenericInstanceSubtree(function) {
+		if !isInGenericInstanceSubtree(function) && !isPlainSyntheticWrapper(function) {
 			return
 		}
 		if function.Blocks == nil {
 			return
 		}
 		if isFunctionBodySkipped(function) {
-			fmt.Fprintf(ctx.stream, "FunctionObject %s(LightWeightThreadContext* ctx){ (void)ctx; assert(false); return (FunctionObject){NULL}; }\n", createFunctionName(function))
+			fmt.Fprintf(ctx.stream, "%sFunctionObject %s(LightWeightThreadContext* ctx){ (void)ctx; assert(false); return (FunctionObject){NULL}; }\n", functionStorageClass(function), createFunctionName(function))
+			ctx.emitReceiverBoundThunkGlue(function, functionStorageClass(function))
 			return
 		}
 		ctx.traverseValue(function, func(value ssa.Value) {
@@ -4539,12 +4851,12 @@ func handleSharedDefinition(program *ssa.Program, instanceOwners map[*ssa.Functi
 		})
 		for _, basicBlock := range function.Blocks {
 			name := createBasicBlockName(basicBlock)
-			ctx.emitFunctionHeader(name, ";")
+			fmt.Fprintf(ctx.stream, "%sFunctionObject %s (LightWeightThreadContext* ctx);\n", functionStorageClass(function), name)
 			ctx.latestNameMap[basicBlock] = name
 			for _, instr := range basicBlock.Instrs {
 				if requireSwitchFunction(instr) {
 					continuationName := createInstructionName(instr)
-					ctx.emitFunctionHeader(continuationName, ";")
+					fmt.Fprintf(ctx.stream, "%sFunctionObject %s (LightWeightThreadContext* ctx);\n", functionStorageClass(function), continuationName)
 					ctx.latestNameMap[basicBlock] = continuationName
 				}
 			}
@@ -4603,7 +4915,7 @@ func functionRuntimeName(fn *ssa.Function) string {
 	return fn.Pkg.Pkg.Name() + "." + fn.Name()
 }
 
-func handlePackage(program *ssa.Program, pkg *ssa.Package, instanceOwners map[*ssa.Function]*ssa.Package, outputPath string) {
+func handlePackage(program *ssa.Program, pkg *ssa.Package, outputPath string) {
 	f, err := os.Create(outputPath)
 	if err != nil {
 		panic(err)
@@ -4611,14 +4923,14 @@ func handlePackage(program *ssa.Program, pkg *ssa.Package, instanceOwners map[*s
 	defer f.Close()
 
 	ctx := Context{
-		stream:         f,
-		program:        program,
-		latestNameMap:  make(map[*ssa.BasicBlock]string),
-		instanceOwners: instanceOwners,
+		stream:        f,
+		program:       program,
+		latestNameMap: make(map[*ssa.BasicBlock]string),
 	}
 
+	// The package file defines static copies of every generic instance its
+	// own code uses (monomorphization), so keep them in ctx.extraFunctions.
 	ctx.collectInstances(pkg)
-	ctx.extraFunctions = nil
 	ctx.assertedInterfaceTypes = collectAssertedInterfaceTypesOfFunctions(&ctx, pkg)
 	ctx.emitPackage(pkg)
 }
@@ -4630,51 +4942,6 @@ func handleMakefile(program *ssa.Program, outputPath string, buildDirname string
 	}
 	defer makefile.Close()
 	generateMakefile(makefile, program, buildDirname, cacheDirname, cachedPackages)
-}
-
-var candidateInstancePattern = regexp.MustCompile(`f_[0-9A-Za-z_]*_5B_[0-9A-Za-z_]*_5D_[0-9A-Za-z_]*`)
-
-func isGenericInstanceToken(tok string) bool {
-	i := strings.Index(tok, "_5B_")
-	j := strings.LastIndex(tok, "_5D_")
-	if i < 0 || j < 0 || j < i {
-		return false
-	}
-	inner := tok[i+4 : j]
-	return strings.Contains(inner, "_2C_") || strings.Contains(inner, "_5B_")
-}
-
-// isCachePackageSafe reports whether a cached package file is safe to reuse:
-// it must not reference a generic-instance function that it does not itself
-// define (such instances live in the uncached shared_definition.c, whose
-// contents vary between programs, so referencing them from a cached file
-// would produce nondeterministic link errors).
-func isCachePackageSafe(path string) bool {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return false
-	}
-	content := string(data)
-	tokens := candidateInstancePattern.FindAllString(content, -1)
-	seen := map[string]bool{}
-	for _, tok := range tokens {
-		if seen[tok] {
-			continue
-		}
-		seen[tok] = true
-		if !isGenericInstanceToken(tok) {
-			continue
-		}
-		defRe := regexp.MustCompile(regexp.QuoteMeta(tok) + `\s*\([^;{]*\)\s*\{`)
-		if defRe.MatchString(content) {
-			continue
-		}
-		refRe := regexp.MustCompile(regexp.QuoteMeta(tok) + `\s*\(`)
-		if refRe.MatchString(content) {
-			return false
-		}
-	}
-	return true
 }
 
 func loadCachedPackages(cacheDirname string) map[string]bool {
@@ -4692,9 +4959,6 @@ func loadCachedPackages(cacheDirname string) map[string]bool {
 			continue
 		}
 		pkgName := strings.TrimSuffix(strings.TrimPrefix(name, "package_"), ".c")
-		if !isCachePackageSafe(filepath.Join(cacheDirname, name)) {
-			continue
-		}
 		result[pkgName] = true
 	}
 	return result
@@ -4704,13 +4968,13 @@ func emitProgram(program *ssa.Program, buildDirname string, cacheDirname string)
 	waitGroup := sync.WaitGroup{}
 
 	cachedPackages := loadCachedPackages(cacheDirname)
-	instanceOwners := computeInstanceOwners(program)
-	assertedInterfaceTypes := collectAssertedInterfaceTypes(program, instanceOwners)
+	assertedInterfaceTypes := collectAssertedInterfaceTypes(program)
+	instantiatedNamedTypes := collectInstantiatedNamedTypes(program)
 
 	waitGroup.Add(1)
 	go func() {
 		definitionName := "shared_definition.c"
-		handleSharedDefinition(program, instanceOwners, assertedInterfaceTypes, fmt.Sprintf("%s/%s", buildDirname, definitionName))
+		handleSharedDefinition(program, assertedInterfaceTypes, instantiatedNamedTypes, fmt.Sprintf("%s/%s", buildDirname, definitionName))
 		waitGroup.Done()
 	}()
 
@@ -4724,7 +4988,7 @@ func emitProgram(program *ssa.Program, buildDirname string, cacheDirname string)
 		waitGroup.Add(1)
 		go func(pkg *ssa.Package) {
 			outputName := fmt.Sprintf("package_%s.c", createPackageName(pkg.Pkg))
-			handlePackage(program, pkg, instanceOwners, fmt.Sprintf("%s/%s", buildDirname, outputName))
+			handlePackage(program, pkg, fmt.Sprintf("%s/%s", buildDirname, outputName))
 			waitGroup.Done()
 		}(pkg)
 	}
