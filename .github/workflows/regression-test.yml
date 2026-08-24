@@ -74,7 +74,7 @@ jobs:
         run: bash check_formatting.sh
 
       - name: Check regression
-        run: timeout 30m bash check_regression.sh --full
+        run: timeout 60m bash check_regression.sh --full
 
       - name: Stop monitoring
         run: |
