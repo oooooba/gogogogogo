@@ -74,7 +74,19 @@ jobs:
         run: bash check_formatting.sh
 
       - name: Check regression
-        run: timeout 60m bash check_regression.sh --full
+        run: timeout 30m bash check_regression.sh
+
+      - name: Check reproducibility
+        run: timeout 30m bash check_reproducibility.sh
+
+      - name: Run xtests with debug runtime
+        run: timeout 30m bash run_xtests.sh --debug-runtime
+
+      - name: Run xtests with debug user program
+        run: timeout 30m bash run_xtests.sh --debug-user
+
+      - name: Check equivalence with Go standard compiler tests
+        run: timeout 30m bash check_go_compiler_tests.sh
 
       - name: Stop monitoring
         run: |
