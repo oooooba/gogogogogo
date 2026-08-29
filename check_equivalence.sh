@@ -43,6 +43,8 @@ fi
 tmp_dir="tmp/$path.$(IFS=; echo "${build_args[*]}").d"
 mkdir -p "$tmp_dir"
 
+target="${path##*/}"
+
 expect_result="$tmp_dir/raw_expect.txt"
 actual_result="$tmp_dir/raw_actual.txt"
 compare_result="$tmp_dir/compare.txt"
@@ -58,30 +60,30 @@ if [ "$panic" = "true" ]; then
     if ! go run "$path" >$expect_result 2>&1; then
         if ! bash ./run.sh "${build_args[@]}" "$path" >$actual_result 2>&1; then
             if head -n 1 $expect_result | diff -y - $actual_result >$compare_result; then
-                echo PASS
+                echo "[$target] PASS"
             else
-                echo FAIL
+                echo "[$target] FAIL"
                 cat $compare_result
                 exit_status=1
             fi
         else
-            echo "FAIL (exit normally)"
+            echo "[$target] FAIL (exit normally)"
             exit_status=1
         fi
     else
-        echo "FAIL (go run exit normally)"
+        echo "[$target] FAIL (go run exit normally)"
         exit_status=1
     fi
 else
     if ! go run "$path" >$expect_result 2>&1; then
-        echo "FAIL (go run crashed)"
+        echo "[$target] FAIL (go run crashed)"
         exit_status=1
     else
         bash ./run.sh "${build_args[@]}" "$path" >$actual_result 2>&1 || true
         if diff -y $expect_result $actual_result >$compare_result; then
-            echo PASS
+            echo "[$target] PASS"
         else
-            echo FAIL
+            echo "[$target] FAIL"
             cat $compare_result
             exit_status=1
         fi
