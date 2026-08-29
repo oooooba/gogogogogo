@@ -7,6 +7,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 #define DECLARE_RUNTIME_API(name, param_type)                                  \
     FunctionObject(gox5_##name)(LightWeightThreadContext * ctx)

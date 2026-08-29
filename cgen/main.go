@@ -759,13 +759,15 @@ func isFunctionBodySkipped(fn *ssa.Function) bool {
 					// their callers (Goexit/Gosched for sync.Pool via pinSlow,
 					// GOMAXPROCS for sync.Pool, FuncForPC/Name for the function
 					// identity tests in xtests/reflect.go).
-					if f.Name() == "Goexit" || f.Name() == "Gosched" || f.Name() == "GOMAXPROCS" || f.Name() == "FuncForPC" || f.Name() == "Name" || f.Name() == "SetFinalizer" || f.Name() == "fcntl" || f.Name() == "beforeExit" {
+					if f.Name() == "Goexit" || f.Name() == "Gosched" || f.Name() == "GOMAXPROCS" || f.Name() == "FuncForPC" || f.Name() == "Name" || f.Name() == "SetFinalizer" || f.Name() == "fcntl" || f.Name() == "beforeExit" || f.Name() == "KeepAlive" {
 						continue
 					}
 				case "syscall":
 					// Exit is handled by emitSpecialRuntimeCall (terminates the
 					// process directly), so don't skip its callers (os.Exit).
-					if f.Name() == "Exit" {
+					// write is handled by emitSpecialRuntimeCall (maps to the C
+					// write(2) call), so don't skip its callers (os.File.Write).
+					if f.Name() == "Exit" || f.Name() == "write" {
 						continue
 					}
 				case "internal/testlog":
@@ -784,7 +786,9 @@ func isFunctionBodySkipped(fn *ssa.Function) bool {
 					}
 				}
 				if strings.HasPrefix(f.Pkg.Pkg.Path(), "internal/race") ||
-					strings.HasPrefix(f.Pkg.Pkg.Path(), "internal/synctest") {
+					strings.HasPrefix(f.Pkg.Pkg.Path(), "internal/synctest") ||
+					strings.HasPrefix(f.Pkg.Pkg.Path(), "internal/msan") ||
+					strings.HasPrefix(f.Pkg.Pkg.Path(), "internal/asan") {
 					continue
 				}
 				if f.Pkg.Pkg.Path() == "internal/godebug" {
@@ -832,6 +836,10 @@ func (ctx *Context) emitSpecialRuntimeCall(callee *ssa.Function, instr *ssa.Call
 			// C runtime (no race detector / coverage). Treat as a no-op.
 			fmt.Fprintf(ctx.stream, "\treturn %s;\n", wrapInFunctionObject(createInstructionName(instr)))
 			return true
+		case "KeepAlive":
+			// runtime.KeepAlive is a compiler hint with no runtime effect.
+			fmt.Fprintf(ctx.stream, "\treturn %s;\n", wrapInFunctionObject(createInstructionName(instr)))
+			return true
 		}
 	}
 	if pkgPath == "internal/syscall/unix" {
@@ -871,6 +879,18 @@ func (ctx *Context) emitSpecialRuntimeCall(callee *ssa.Function, instr *ssa.Call
 			// whole process directly; os.Exit is expected to terminate.
 			arg := createValueRelName(callCommon.Args[0])
 			fmt.Fprintf(ctx.stream, "exit(%s.raw);\n", arg)
+			return true
+		case "write":
+			// syscall.write(fd int, p []byte) (n int, err error) is the low-level
+			// wrapper around the write(2) syscall. Map it directly to the C
+			// write(2) call so that os.File.Write on real file descriptors works.
+			fd := createValueRelName(callCommon.Args[0])
+			p := createValueRelName(callCommon.Args[1])
+			result := createValueRelName(instr)
+			fmt.Fprintf(ctx.stream, "ssize_t written = write(%s.raw, %s.raw.addr, %s.raw.size);\n", fd, p, p)
+			fmt.Fprintf(ctx.stream, "%s.raw.e0 = (IntObject){.raw = written < 0 ? -1 : (long)written};\n", result)
+			fmt.Fprintf(ctx.stream, "%s.raw.e1 = (Interface){0};\n", result)
+			fmt.Fprintf(ctx.stream, "\treturn %s;\n", wrapInFunctionObject(createInstructionName(instr)))
 			return true
 		}
 	}
@@ -1228,7 +1248,9 @@ func (ctx *Context) emitSpecialRuntimeCall(callee *ssa.Function, instr *ssa.Call
 			return true
 		}
 
-		if strings.HasPrefix(pkgPath, "internal/race") {
+		if strings.HasPrefix(pkgPath, "internal/race") ||
+			strings.HasPrefix(pkgPath, "internal/msan") ||
+			strings.HasPrefix(pkgPath, "internal/asan") {
 			fmt.Fprintf(ctx.stream, "\treturn %s;\n", wrapInFunctionObject(createInstructionName(instr)))
 			return true
 		}
@@ -4161,6 +4183,8 @@ func (ctx *Context) emitInterfaceDataDeclaration(pkg *ssa.Package) {
 bool equal_MapObject(const MapObject* lhs, const MapObject* rhs);
 bool equal_Interface(const Interface* lhs, const Interface* rhs);
 uintptr_t hash_Interface(const Interface* obj);
+extern struct InterfaceTable_Interface interfaceTable_Interface;
+extern const TypeInfo runtime_info_type_Interface;
 `)
 
 	ctx.traverseBasicType(func(typ types.Type) {

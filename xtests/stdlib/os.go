@@ -45,6 +45,22 @@ func main() {
 	chki("newfile-fd", int(f.Fd()), 3)
 	chk("newfile-name", f.Name(), "myfile")
 
+	// Write writes len(p) bytes to the underlying file descriptor and returns
+	// the number of bytes written. os.Stdout/Stderr map to real descriptors.
+	n, err := os.Stderr.Write([]byte("write-test\n"))
+	chki("stderr-write-n", n, 11)
+	chkb("stderr-write-err", err != nil, false)
+
+	// An empty slice writes nothing and returns 0 with a nil error.
+	n, err = os.Stdout.Write(nil)
+	chki("stdout-write-nil-n", n, 0)
+	chkb("stdout-write-nil-err", err != nil, false)
+
+	// Write again returns the length of the second slice.
+	n, err = os.Stdout.Write([]byte("xyz"))
+	chki("stdout-write-n", n, 3)
+	chkb("stdout-write-err", err != nil, false)
+
 	// Exit must terminate the process before any subsequent code runs.
 	os.Exit(0)
 	println("FAIL reached-after-exit")
