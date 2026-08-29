@@ -1,6 +1,7 @@
 package main
 
 import (
+	"io"
 	"os"
 )
 
@@ -60,6 +61,37 @@ func main() {
 	n, err = os.Stdout.Write([]byte("xyz"))
 	chki("stdout-write-n", n, 3)
 	chkb("stdout-write-err", err != nil, false)
+
+	// Read transfers bytes from the underlying file descriptor. The test
+	// harness does not feed stdin, so drain whatever is available until EOF,
+	// then verify that a read past EOF returns 0 bytes with io.EOF. This works
+	// whether the input stream is empty or contains data.
+	rbuf := make([]byte, 16)
+	total := 0
+	nothang := 0
+	for {
+		rn, rerr := os.Stdin.Read(rbuf)
+		total += rn
+		if rerr == io.EOF {
+			chkb("stdin-read-eof-zero-byte", rn == 0, true)
+			break
+		}
+		if rerr != nil {
+			chkb("stdin-read-error", rerr == io.EOF, true)
+			break
+		}
+		nothang++
+		if nothang > 1024 {
+			chkb("stdin-read-too-many", false, true)
+			break
+		}
+	}
+	chkb("stdin-read-nonnegative", total >= 0, true)
+
+	// A read past EOF yields 0 bytes and io.EOF.
+	n2, e2 := os.Stdin.Read(rbuf)
+	chki("stdin-eof-read-n", n2, 0)
+	chkb("stdin-eof-err-is-eof", e2 == io.EOF, true)
 
 	// Exit must terminate the process before any subsequent code runs.
 	os.Exit(0)

@@ -765,9 +765,10 @@ func isFunctionBodySkipped(fn *ssa.Function) bool {
 				case "syscall":
 					// Exit is handled by emitSpecialRuntimeCall (terminates the
 					// process directly), so don't skip its callers (os.Exit).
-					// write is handled by emitSpecialRuntimeCall (maps to the C
-					// write(2) call), so don't skip its callers (os.File.Write).
-					if f.Name() == "Exit" || f.Name() == "write" {
+					// write/read are handled by emitSpecialRuntimeCall (map to
+					// the C write(2)/read(2) calls), so don't skip their
+					// callers (os.File.Write/os.File.Read).
+					if f.Name() == "Exit" || f.Name() == "write" || f.Name() == "read" {
 						continue
 					}
 				case "internal/testlog":
@@ -889,6 +890,20 @@ func (ctx *Context) emitSpecialRuntimeCall(callee *ssa.Function, instr *ssa.Call
 			result := createValueRelName(instr)
 			fmt.Fprintf(ctx.stream, "ssize_t written = write(%s.raw, %s.raw.addr, %s.raw.size);\n", fd, p, p)
 			fmt.Fprintf(ctx.stream, "%s.raw.e0 = (IntObject){.raw = written < 0 ? -1 : (long)written};\n", result)
+			fmt.Fprintf(ctx.stream, "%s.raw.e1 = (Interface){0};\n", result)
+			fmt.Fprintf(ctx.stream, "\treturn %s;\n", wrapInFunctionObject(createInstructionName(instr)))
+			return true
+		case "read":
+			// syscall.read(fd int, p []byte) (n int, err error) is the low-level
+			// wrapper around the read(2) syscall. Map it directly to the C
+			// read(2) call so that os.File.Read on real file descriptors works.
+			// A zero-length buffer reads nothing (and avoids feeding a NULL
+			// pointer with length 0, which some platforms treat as an error).
+			fd := createValueRelName(callCommon.Args[0])
+			p := createValueRelName(callCommon.Args[1])
+			result := createValueRelName(instr)
+			fmt.Fprintf(ctx.stream, "ssize_t got = %s.raw.size == 0 ? 0 : read(%s.raw, %s.raw.addr, %s.raw.size);\n", p, fd, p, p)
+			fmt.Fprintf(ctx.stream, "%s.raw.e0 = (IntObject){.raw = got < 0 ? -1 : (long)got};\n", result)
 			fmt.Fprintf(ctx.stream, "%s.raw.e1 = (Interface){0};\n", result)
 			fmt.Fprintf(ctx.stream, "\treturn %s;\n", wrapInFunctionObject(createInstructionName(instr)))
 			return true
