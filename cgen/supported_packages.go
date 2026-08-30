@@ -10,6 +10,7 @@ import (
 	_ "context"
 	_ "encoding"
 	_ "errors"
+	_ "fmt"
 	_ "image/color"
 	_ "image/color/palette"
 	_ "io"

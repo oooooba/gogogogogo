@@ -159,6 +159,20 @@ DECLARE_RUNTIME_API(slice_compare, StackFrameSliceCompare);
 
 typedef struct {
     StackFrameCommon common;
+    uintptr_t *result_ptr;
+    uintptr_t type_id;
+} StackFrameReflectTypeKind;
+DECLARE_RUNTIME_API(reflect_type_kind, StackFrameReflectTypeKind);
+
+typedef struct {
+    StackFrameCommon common;
+    StringObject *result_ptr;
+    uintptr_t type_id;
+} StackFrameReflectTypeString;
+DECLARE_RUNTIME_API(reflect_type_string, StackFrameReflectTypeString);
+
+typedef struct {
+    StackFrameCommon common;
     IntObject *result_ptr;
     TypeId type_id;
     SliceObject src;

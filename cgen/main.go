@@ -782,11 +782,12 @@ func isFunctionBodySkipped(fn *ssa.Function) bool {
 						continue
 					}
 				case "reflect":
-					// ValueOf/Pointer/rtypeOf are handled by
-					// emitSpecialRuntimeCall (function identity tests), so don't
-					// skip callers of them.
+					// ValueOf/Pointer/rtypeOf/TypeOf are handled by
+					// emitSpecialRuntimeCall (function identity tests and the
+					// reflect.Type fabrication used by fmt), so don't skip
+					// callers of them.
 					switch f.Name() {
-					case "ValueOf", "Pointer", "rtypeOf":
+					case "ValueOf", "Pointer", "rtypeOf", "TypeOf":
 						continue
 					}
 				}
@@ -1223,6 +1224,19 @@ func (ctx *Context) emitSpecialRuntimeCall(callee *ssa.Function, instr *ssa.Call
 
 	if pkgPath == "reflect" || pkgPath == "runtime" {
 		switch {
+		case pkgPath == "reflect" && funcName == "TypeOf":
+			// fmt's pp.doPrint calls reflect.TypeOf(arg).Kind() on every
+			// argument to decide whether to insert a space, and %T calls
+			// reflect.TypeOf(arg).String(). reflect.Type is not supported in the
+			// runtime, so fabricate a reflect.Type interface whose receiver field
+			// carries the argument's type_id. The Kind()/String() interface
+			// methods are intercepted during *ssa.Call emission below.
+			result := createValueRelName(instr)
+			arg := createValueRelName(callCommon.Args[0])
+			fmt.Fprintf(ctx.stream, "memset(&%s, 0, sizeof(%s));\n", result, result)
+			fmt.Fprintf(ctx.stream, "%s.receiver = (void*)(uintptr_t)%s.type_id.id;\n", result, arg)
+			fmt.Fprintf(ctx.stream, "\treturn %s;\n", wrapInFunctionObject(createInstructionName(instr)))
+			return true
 		case pkgPath == "reflect" && funcName == "ValueOf":
 			// reflect.ValueOf inspects the interface's type word and data pointer
 			// through the unsafe abi.EmptyInterface layout. The runtime stores a
@@ -1629,6 +1643,39 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 				fmt.Fprintf(ctx.stream, "\treturn %s;\n", wrapInFunctionObject(createInstructionName(instr)))
 				fmt.Fprintf(ctx.stream, "\t}\n")
 				return
+			}
+			if callCommon.Method.Pkg() != nil && callCommon.Method.Pkg().Path() == "reflect" {
+				if recvType, ok := signature.Recv().Type().(*types.Named); ok && recvType.Obj().Name() == "Type" &&
+					recvType.Obj().Pkg() != nil && recvType.Obj().Pkg().Path() == "reflect" {
+					// Method call on the reflect.Type interface. Such an interface value
+					// is only ever fabricated by the reflect.TypeOf intercept (in
+					// emitSpecialRuntimeCall), which stores the underlying type_id in the
+					// receiver field. Route Kind() and String() to the runtime so fmt's
+					// spacing logic and the %T verb work; any other reflect.Type method
+					// falls back to zero.
+					result := createValueRelName(instr)
+					typeId := fmt.Sprintf("(uintptr_t)%s.receiver", createValueRelName(callCommon.Value))
+					switch callCommon.Method.Name() {
+					case "Kind":
+						// reflect.Kind is a named unsigned int; the runtime writes the kind as
+						// an i32.
+						resultPtr := fmt.Sprintf("%s.raw", result)
+						ctx.switchFunctionToCallRuntimeApi("gox5_reflect_type_kind", "StackFrameReflectTypeKind", createInstructionName(instr), &resultPtr,
+							nil,
+							paramArgPair{param: "type_id", arg: typeId})
+					case "String":
+						ctx.switchFunctionToCallRuntimeApi("gox5_reflect_type_string", "StackFrameReflectTypeString", createInstructionName(instr), &result,
+							nil,
+							paramArgPair{param: "type_id", arg: typeId})
+					default:
+						fmt.Fprintf(ctx.stream, "memset(&%s, 0, sizeof(%s));\n", result, result)
+						fmt.Fprintf(ctx.stream, "\treturn %s;\n", wrapInFunctionObject(createInstructionName(instr)))
+						fmt.Fprintf(ctx.stream, "\t}\n")
+						return
+					}
+					fmt.Fprintf(ctx.stream, "\t}\n")
+					return
+				}
 			}
 			ctx.switchFunctionToCallRuntimeApi("gox5_interface_invoke", "StackFrameInterfaceInvoke", createInstructionName(instr), nil,
 				func() {
