@@ -1372,6 +1372,15 @@ func (ctx *Context) emitSpecialRuntimeCall(callee *ssa.Function, instr *ssa.Call
 		}
 	}
 
+	if pkgPath == "math/rand" && funcName == "runtime_rand" {
+		// math/rand.runtime_rand is a //go:linkname to runtime.rand with no Go
+		// body, used to seed the global rand source. Route it into the Rust
+		// runtime which returns a deterministic pseudo-random uint64.
+		result := createValueRelName(instr)
+		ctx.switchFunctionToCallRuntimeApi("gox5_runtime_rand", "StackFrameRuntimeRand", createInstructionName(instr), &result, nil)
+		return true
+	}
+
 	if pkgPath == "time" && funcName == "runtimeNano" {
 		// time.runtimeNano is a //go:linkname to runtime.nanotime with no Go
 		// body; return 0 (single-threaded runtime has no real clock source).

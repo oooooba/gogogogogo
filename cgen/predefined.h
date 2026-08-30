@@ -630,6 +630,12 @@ DECLARE_RUNTIME_API(lwt_yield, StackFrameLwtYield);
 
 typedef struct {
     StackFrameCommon common;
+    Uint64Object *result_ptr;
+} StackFrameRuntimeRand;
+DECLARE_RUNTIME_API(runtime_rand, StackFrameRuntimeRand);
+
+typedef struct {
+    StackFrameCommon common;
     IntObject *result_ptr;
     StringObject string;
 } StackFrameStringLength;

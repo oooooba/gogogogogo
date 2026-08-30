@@ -7,6 +7,7 @@ pub(crate) mod lwt;
 pub(crate) mod map;
 pub(crate) mod new;
 pub(crate) mod panic;
+pub(crate) mod rand;
 pub(crate) mod reflect;
 pub(crate) mod semaphore;
 pub(crate) mod slice;
