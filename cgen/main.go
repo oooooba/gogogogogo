@@ -765,16 +765,20 @@ func isFunctionBodySkipped(fn *ssa.Function) bool {
 				case "syscall":
 					// Exit is handled by emitSpecialRuntimeCall (terminates the
 					// process directly), so don't skip its callers (os.Exit).
-					// write/read are handled by emitSpecialRuntimeCall (map to
-					// the C write(2)/read(2) calls), so don't skip their
-					// callers (os.File.Write/os.File.Read).
-					if f.Name() == "Exit" || f.Name() == "write" || f.Name() == "read" {
+					// write/read/openat are handled by emitSpecialRuntimeCall
+					// (map to the C write(2)/read(2)/openat(2) calls), so don't
+					// skip their callers (os.File.Write/os.File.Read/os.Open).
+					// Open and close forward to openat/close via generated
+					// bodies, so they must not be skipped either.
+					if f.Name() == "Exit" || f.Name() == "write" || f.Name() == "read" || f.Name() == "openat" || f.Name() == "Open" || f.Name() == "close" || f.Name() == "Close" || f.Name() == "fcntl" || f.Name() == "runtime_entersyscall" || f.Name() == "runtime_exitsyscall" {
 						continue
 					}
 				case "internal/testlog":
 					// PanicOnExit0 is intercepted by emitSpecialRuntimeCall (returns
 					// false for a non-test binary); don't skip its callers (os.Exit).
-					if f.Name() == "PanicOnExit0" {
+					// Open records file opens for the test log; in a non-test
+					// binary it is a no-op, so don't skip os.Open's callers.
+					if f.Name() == "PanicOnExit0" || f.Name() == "Open" {
 						continue
 					}
 				case "reflect":
@@ -907,6 +911,111 @@ func (ctx *Context) emitSpecialRuntimeCall(callee *ssa.Function, instr *ssa.Call
 			fmt.Fprintf(ctx.stream, "%s.raw.e1 = (Interface){0};\n", result)
 			fmt.Fprintf(ctx.stream, "\treturn %s;\n", wrapInFunctionObject(createInstructionName(instr)))
 			return true
+		case "openat":
+			// syscall.openat(dirfd int, path string, flags int, mode uint32)
+			// (fd int, err error) is the low-level wrapper around the openat(2)
+			// syscall. Map it directly to the C openat(2) call so that os.Open on
+			// real file descriptors works. Strings used as paths come from
+			// literals, whose .raw is NUL-terminated.
+			fd := createValueRelName(callCommon.Args[0])
+			path := createValueRelName(callCommon.Args[1])
+			flags := createValueRelName(callCommon.Args[2])
+			mode := createValueRelName(callCommon.Args[3])
+			result := createValueRelName(instr)
+			fmt.Fprintf(ctx.stream, "int opened_fd = openat((int)%s.raw, %s.raw, (int)%s.raw, (unsigned int)%s.raw);\n", fd, path, flags, mode)
+			fmt.Fprintf(ctx.stream, "%s.raw.e0 = (IntObject){.raw = opened_fd};\n", result)
+			fmt.Fprintf(ctx.stream, "%s.raw.e1 = (Interface){0};\n", result)
+			fmt.Fprintf(ctx.stream, "\treturn %s;\n", wrapInFunctionObject(createInstructionName(instr)))
+			return true
+		case "close", "Close":
+			// syscall.close(fd int) (err error) / syscall.Close(fd int) error map to
+			// the C close(2) call; the error is not propagated (nil) for simplicity.
+			fd := createValueRelName(callCommon.Args[0])
+			result := createValueRelName(instr)
+			fmt.Fprintf(ctx.stream, "close((int)%s.raw);\n", fd)
+			fmt.Fprintf(ctx.stream, "%s = (Interface){0};\n", result)
+			fmt.Fprintf(ctx.stream, "\treturn %s;\n", wrapInFunctionObject(createInstructionName(instr)))
+			return true
+		case "runtime_entersyscall", "runtime_exitsyscall":
+			// syscall.runtime_entersyscall/runtime_exitsyscall are linknames to
+			// runtime.entersyscall/exitsyscall, the M/P state bookkeeping around
+			// a system call. The C runtime is effectively single-threaded with no
+			// such state, so treat both as no-ops so raw-syscall wrappers can run.
+			fmt.Fprintf(ctx.stream, "\treturn %s;\n", wrapInFunctionObject(createInstructionName(instr)))
+			return true
+		case "Syscall":
+			// syscall.Syscall(trap, a1, a2, a3) (r1, r2 uintptr, err syscall.Errno)
+			// is the 4-argument raw syscall wrapper. os.Open/Read/Close passes
+			// through here only for syscalls not already intercepted by name
+			// (openat/read/fcntl above). Handle the syscalls the standard
+			// library needs here; abort on anything else so we notice it.
+			if cst, ok := callCommon.Args[0].(*ssa.Const); ok {
+				trap, _ := constant.Int64Val(cst.Value)
+				switch trap {
+				case 3: // SYS_CLOSE
+					// close(fd) (r1=0, r2=0, err=nil)
+					a1 := createValueRelName(callCommon.Args[1])
+					result := createValueRelName(instr)
+					fmt.Fprintf(ctx.stream, "close((int)%s.raw);\n", a1)
+					fmt.Fprintf(ctx.stream, "%s.raw.e0 = (UintptrObject){.raw=0};\n", result)
+					fmt.Fprintf(ctx.stream, "%s.raw.e1 = (UintptrObject){.raw=0};\n", result)
+					fmt.Fprintf(ctx.stream, "%s.raw.e2 = (UintptrObject){.raw=0};\n", result)
+					fmt.Fprintf(ctx.stream, "\treturn %s;\n", wrapInFunctionObject(createInstructionName(instr)))
+					return true
+				case 263: // SYS_UNLINKAT (used by os.Remove)
+					// unlinkat(dirfd, path, flags) (r1=0, r2=0, err=nil)
+					a1 := createValueRelName(callCommon.Args[1])
+					a2 := createValueRelName(callCommon.Args[2])
+					a3 := createValueRelName(callCommon.Args[3])
+					result := createValueRelName(instr)
+					fmt.Fprintf(ctx.stream, "unlinkat((int)%s.raw, (const char*)%s.raw, (int)%s.raw);\n", a1, a2, a3)
+					fmt.Fprintf(ctx.stream, "%s.raw.e0 = (UintptrObject){.raw=0};\n", result)
+					fmt.Fprintf(ctx.stream, "%s.raw.e1 = (UintptrObject){.raw=0};\n", result)
+					fmt.Fprintf(ctx.stream, "%s.raw.e2 = (UintptrObject){.raw=0};\n", result)
+					fmt.Fprintf(ctx.stream, "\treturn %s;\n", wrapInFunctionObject(createInstructionName(instr)))
+					return true
+				}
+			}
+			// Unknown/unsupported raw syscall: abort so it is detected.
+			fmt.Fprintf(ctx.stream, "assert(false && \"unsupported syscall.Syscall trap\");\n")
+			return true
+		case "fcntl":
+			// syscall.fcntl(fd int, cmd int, arg int) (val int, err error) is the
+			// low-level wrapper around fcntl(2). It is used by the poll runtime to
+			// query/clear the non-blocking flag when a file is opened. Map it to
+			// the C fcntl(2) call; the error is not propagated (nil) for simplicity.
+			fd := createValueRelName(callCommon.Args[0])
+			cmd := createValueRelName(callCommon.Args[1])
+			arg := createValueRelName(callCommon.Args[2])
+			result := createValueRelName(instr)
+			fmt.Fprintf(ctx.stream, "int fcntl_val = fcntl((int)%s.raw, %s.raw, (long)%s.raw);\n", fd, cmd, arg)
+			fmt.Fprintf(ctx.stream, "%s.raw.e0 = (IntObject){.raw = fcntl_val};\n", result)
+			fmt.Fprintf(ctx.stream, "%s.raw.e1 = (Interface){0};\n", result)
+			fmt.Fprintf(ctx.stream, "\treturn %s;\n", wrapInFunctionObject(createInstructionName(instr)))
+			return true
+		}
+	}
+
+	if pkgPath == "internal/poll" {
+		// (*poll.FD).Init sets up the netpoller binding for freshly-opened file
+		// descriptors. The C runtime has no netpoller. Rather than emulate its
+		// runtime_poll* entry points, skip the binding entirely: leave
+		// fd.pd.runtimeCtx at 0 so pollDesc.prepare()/pollable() treat the fd as
+		// a plain blocking descriptor. A read on a regular file then proceeds
+		// directly through the intercepted syscall.read.
+		switch funcName {
+		case "Init":
+			result := createValueRelName(instr)
+			fmt.Fprintf(ctx.stream, "%s = (Interface){0};\n", result)
+			fmt.Fprintf(ctx.stream, "\treturn %s;\n", wrapInFunctionObject(createInstructionName(instr)))
+			return true
+		case "runtime_Semacquire", "runtime_Semrelease":
+			// These are linknames to runtime.semacquire/semrelease, used by the
+			// fdMutex to coordinate fd operations (e.g. during FD.Close). The C
+			// runtime is single-threaded and there are no concurrent fd ops, so
+			// both are no-ops.
+			fmt.Fprintf(ctx.stream, "\treturn %s;\n", wrapInFunctionObject(createInstructionName(instr)))
+			return true
 		}
 	}
 
@@ -917,6 +1026,12 @@ func (ctx *Context) emitSpecialRuntimeCall(callee *ssa.Function, instr *ssa.Call
 			// returns false (never panic on os.Exit(0)).
 			result := createValueRelName(instr)
 			fmt.Fprintf(ctx.stream, "%s.raw = false;\n", result)
+			fmt.Fprintf(ctx.stream, "\treturn %s;\n", wrapInFunctionObject(createInstructionName(instr)))
+			return true
+		case "Open":
+			// testlog.Open records the file being opened for the test log.
+			// In a non-test binary there is no log; it has no return value, so
+			// treat it as a no-op to keep os.Open generated.
 			fmt.Fprintf(ctx.stream, "\treturn %s;\n", wrapInFunctionObject(createInstructionName(instr)))
 			return true
 		}

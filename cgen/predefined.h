@@ -1,5 +1,7 @@
+#define _GNU_SOURCE
 #include <assert.h>
 #include <complex.h>
+#include <fcntl.h>
 #include <math.h>
 #include <stdatomic.h>
 #include <stdbool.h>

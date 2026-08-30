@@ -93,6 +93,39 @@ func main() {
 	chki("stdin-eof-read-n", n2, 0)
 	chkb("stdin-eof-err-is-eof", e2 == io.EOF, true)
 
+	// os.Open opens a file for reading. Create a temporary file with known
+	// content, reopen it via os.Open, and verify the bytes read back match.
+	// The relative path resolves the same in both the C-generated binary and
+	// the Go compiler when run from the repository root.
+	ofileName := "tmp/os_open_test.txt"
+	of, oerr := os.Create(ofileName)
+	chkb("open-create-err", oerr != nil, false)
+	ofdata := "os.Open round-trip\n"
+	own, owerr := of.Write([]byte(ofdata))
+	chki("open-create-write-n", own, len(ofdata))
+	chkb("open-create-write-err", owerr != nil, false)
+	of.Close()
+
+	rf, err := os.Open(ofileName)
+	chkb("open-nonnil-file", rf != nil, true)
+	chkb("open-err-nil", err != nil, false)
+	opbuf := make([]byte, 128)
+	opgot := ""
+	for {
+		opn, ope := rf.Read(opbuf)
+		opgot += string(opbuf[:opn])
+		if ope == io.EOF {
+			break
+		}
+		if ope != nil {
+			chkb("open-read-error-is-eof", ope == io.EOF, true)
+			break
+		}
+	}
+	chk("open-read-content", opgot, ofdata)
+	rf.Close()
+	os.Remove(ofileName)
+
 	// Exit must terminate the process before any subsequent code runs.
 	os.Exit(0)
 	println("FAIL reached-after-exit")
