@@ -46,7 +46,7 @@ base_name=`basename $1`
 src=$dir_name/$base_name
 cgen_args="-b `realpath $build_directory` -i $src"
 cd cgen
-go run main.go $cgen_args
+go run . $cgen_args
 cd ..
 
 cd $build_directory

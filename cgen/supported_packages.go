@@ -1,3 +1,5 @@
+//go:build supported_packages
+
 package main
 
 import (

@@ -9,7 +9,9 @@ The project validates the generated C against the Go standard compiler with equi
 
 # Repository Structure
 
-* `cgen/` — the compiler front end (Go). `main.go` turns a `.go` file into CPS C code; `predefined.h` is the C preamble; `supported_packages.go` lists the standard-library packages translated for `xtests`; `cache/` holds the generated per-package `package_*.c` files.
+* `cgen/` — the compiler front end (Go). `main.go` turns a `.go` file into CPS C code.
+The front end is split across several `package main` files (e.g. `emit.go` for instructions, `call.go`/`builtin.go` for calls and builtins, `type.go`/`function.go`/`traverse.go`/`package.go`/`driver.go` for the rest); `predefined.h` is the C preamble; `supported_packages.go` (build-tagged `supported_packages`) lists the standard-library packages translated for `xtests`; `cache/` holds the generated per-package `package_*.c` files.
+Since the compiler is compiled with `go run .`, all `.go` files in `cgen/` must be part of one `package main`; `supported_packages.go` is excluded from the default build via its build tag.
 * `src/` — the runtime (Rust, static lib). `api/` implements the object-model operations (channels, maps, slices, strings, goroutines, etc.) exported to C; `object/` defines the corresponding boxed value representations; `light_weight_thread.rs`/`world_chunk.rs` (`word_chunk.rs`) support the goroutine scheduler.
 * `xtests/` — Go test programs executed by the generated binary and the Go compiler to check equivalence. `xtests/stdlib/` contains per-package standard library tests (e.g. `os.go`).
 * `build.sh` / `run.sh` — build a single `.go` file into a C binary and run it (see "Building and Running a Single Program").
