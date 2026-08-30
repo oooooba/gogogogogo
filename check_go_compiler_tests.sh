@@ -9,6 +9,8 @@ set +ex
 
 targets=(
     "array"
+    "chan"
+    "chan1"
     "complit"
     "convert"
     "cplx0"

@@ -113,6 +113,11 @@ pub extern "C" fn gox5_channel_select(ctx: &mut LightWeightThreadContext) -> Fun
         unsafe { std::slice::from_raw_parts(frame.entry_buffer.as_ptr(), frame.entry_count) };
 
     for (i, entry) in entry_buffer.iter().enumerate() {
+        // A nil channel select case is never ready (Go semantics); skip it so
+        // we don't dereference the null channel pointer below.
+        if entry.channel.is_null() {
+            continue;
+        }
         let mut channel = entry.channel.clone();
         let channel = channel.as_mut::<ChannelObject>();
         let id = ctx.id();
@@ -139,6 +144,9 @@ pub extern "C" fn gox5_channel_select(ctx: &mut LightWeightThreadContext) -> Fun
     }
 
     for (i, entry) in entry_buffer.iter().enumerate() {
+        if entry.channel.is_null() {
+            continue;
+        }
         let mut channel = entry.channel.clone();
         let channel = channel.as_mut::<ChannelObject>();
         let id = ctx.id();
