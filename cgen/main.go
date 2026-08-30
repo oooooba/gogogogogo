@@ -936,6 +936,18 @@ func (ctx *Context) emitSpecialRuntimeCall(callee *ssa.Function, instr *ssa.Call
 			fmt.Fprintf(ctx.stream, "%s = (Interface){0};\n", result)
 			fmt.Fprintf(ctx.stream, "\treturn %s;\n", wrapInFunctionObject(createInstructionName(instr)))
 			return true
+		case "pipe2":
+			// syscall.pipe2(p *[2]_C_int, flags int) (err error) maps to the C
+			// pipe2(2) call, which writes the read and write ends of a new pipe
+			// into p[0] and p[1]. The error is not propagated (nil) for
+			// simplicity.
+			p0 := createValueRelName(callCommon.Args[0])
+			flags := createValueRelName(callCommon.Args[1])
+			result := createValueRelName(instr)
+			fmt.Fprintf(ctx.stream, "int pipe_rc = pipe2((int*)%s.raw, (int)%s.raw); (void)pipe_rc;\n", p0, flags)
+			fmt.Fprintf(ctx.stream, "%s = (Interface){0};\n", result)
+			fmt.Fprintf(ctx.stream, "\treturn %s;\n", wrapInFunctionObject(createInstructionName(instr)))
+			return true
 		case "runtime_entersyscall", "runtime_exitsyscall":
 			// syscall.runtime_entersyscall/runtime_exitsyscall are linknames to
 			// runtime.entersyscall/exitsyscall, the M/P state bookkeeping around

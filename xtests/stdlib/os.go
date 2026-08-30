@@ -126,6 +126,61 @@ func main() {
 	rf.Close()
 	os.Remove(ofileName)
 
+	// os.Pipe creates a connected pair of Files; reads from r return the bytes
+	// written to w. Closing the write end makes the reader see EOF.
+	pr, pw, perr := os.Pipe()
+	chkb("pipe-nonnil-r", pr != nil, true)
+	chkb("pipe-nonnil-w", pw != nil, true)
+	chkb("pipe-err", perr != nil, false)
+	pn, pwerr := pw.Write([]byte("abcde"))
+	chki("pipe-write-n", pn, 5)
+	chkb("pipe-write-err", pwerr != nil, false)
+	pbuf := make([]byte, 8)
+	prn, prerr := pr.Read(pbuf)
+	chkb("pipe-read-err", prerr != nil, false)
+	chk("pipe-read-content", string(pbuf[:prn]), "abcde")
+	pw.Close()
+	prn2, prerr2 := pr.Read(pbuf)
+	chki("pipe-eof-n", prn2, 0)
+	chkb("pipe-eof-err", prerr2 == io.EOF, true)
+
+	// os.File.Read follows the (n, err) contract: a read that fills the buffer
+	// returns n == len(buf) with a nil error; the final partial read is
+	// followed by a read of (0, io.EOF). The content length is chosen not to be
+	// a multiple of the chunk so the partial-final-read path is exercised.
+	const rdata = "0123456789abc" // 13 bytes, not a multiple of 5
+	rfile, rcerr := os.Create("tmp/os_read_test.txt")
+	chkb("read-create-err", rcerr != nil, false)
+	_, rwerr := rfile.WriteString(rdata)
+	chkb("read-write-err", rwerr != nil, false)
+	rfile.Close()
+
+	rrf, roerr := os.Open("tmp/os_read_test.txt")
+	chkb("read-open-err", roerr != nil, false)
+	rchunk := make([]byte, 5)
+	rgot := ""
+	rloop := 0
+	for {
+		rn, re := rrf.Read(rchunk)
+		rgot += string(rchunk[:rn])
+		if re == io.EOF {
+			chkb("read-eof-n-zero", rn == 0, true)
+			break
+		}
+		if re != nil {
+			chkb("read-loop-error", re == io.EOF, true)
+			break
+		}
+		rloop++
+		if rloop > 16 {
+			chkb("read-too-many", false, true)
+			break
+		}
+	}
+	chk("read-file-content", rgot, rdata)
+	rrf.Close()
+	os.Remove("tmp/os_read_test.txt")
+
 	// Exit must terminate the process before any subsequent code runs.
 	os.Exit(0)
 	println("FAIL reached-after-exit")
