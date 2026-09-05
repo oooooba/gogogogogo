@@ -145,6 +145,11 @@ uintptr_t hash_Interface(const Interface* obj) {
 }
 `)
 
+	emptyInterface := types.NewInterfaceType(nil, nil)
+	ctx.emitInterfaceTableDeclaration(emptyInterface, allowSet)
+	ctx.emitInterfaceTableDefinition(emptyInterface, allowSet)
+	ctx.emitTypeInfoDefinition(emptyInterface)
+
 	ctx.traverseBasicType(func(typ types.Type) {
 		ctx.emitEqualFunctionDefinition(typ)
 		ctx.emitHashFunctionDefinition(typ)

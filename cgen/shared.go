@@ -203,6 +203,7 @@ func handleSharedDefinition(program *ssa.Program, assertedInterfaceTypes map[str
 	ctx.emitCommon()
 
 	visitedInterfaceNames := map[string]bool{}
+	visitedInterfaceNames[createInterfaceTypeSymbolName(types.NewInterfaceType(nil, nil))] = true
 	ctx.traverseType(nil, func(typ types.Type) {
 		if _, ok := typ.(*types.Interface); ok {
 			visitedInterfaceNames[createInterfaceTypeSymbolName(typ)] = true
