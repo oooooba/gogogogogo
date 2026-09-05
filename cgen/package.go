@@ -227,7 +227,7 @@ func (ctx *Context) emitPackage(pkg *ssa.Package) {
 					return
 				}
 			}
-			if functionPkg(f) == pkg.Pkg {
+			if functionPkg(f) == pkg.Pkg && !isInterfaceMethodWrapper(f) {
 				return
 			}
 			ctx.emitFunctionDeclarationHeader(f, ";")

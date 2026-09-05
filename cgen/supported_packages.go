@@ -57,6 +57,7 @@ import (
 	_ "structs"
 	_ "sync"
 	_ "sync/atomic"
+	_ "testing"
 	_ "unicode"
 	_ "unicode/utf16"
 	_ "unicode/utf8"

@@ -120,6 +120,9 @@ func (ctx *Context) traverseValue(function *ssa.Function, procedure func(value s
 				f(val.Max)
 			}
 
+		case *ssa.SliceToArrayPointer:
+			f(val.X)
+
 		case *ssa.TypeAssert:
 			f(val.X)
 
@@ -226,9 +229,10 @@ func getCallCallee(common *ssa.CallCommon) *ssa.Function {
 // bodies. With monomorphization every file that uses an instance emits its
 // own private copy, so instances are attributed by usage instead of origin.
 type instanceCollector struct {
-	seen                map[*ssa.Function]struct{}
-	result              []*ssa.Function
-	recordPlainWrappers bool
+	seen                          map[*ssa.Function]struct{}
+	result                        []*ssa.Function
+	recordPlainWrappers           bool
+	recordInterfaceMethodWrappers bool
 }
 
 // walk records generic instances reachable from fn. Recursion only descends
@@ -268,6 +272,11 @@ func (collector *instanceCollector) walk(fn *ssa.Function, force bool) {
 		if target != nil && isFunctionBodySkipped(target) {
 			collector.result = append(collector.result, fn)
 		}
+	}
+	// Interface method bounds ship in shared_definition.c so that every file
+	// that captures one through a closure resolves the same external symbol.
+	if collector.recordInterfaceMethodWrappers && isInterfaceMethodWrapper(fn) {
+		collector.result = append(collector.result, fn)
 	}
 
 	if fn.Blocks == nil {
@@ -333,7 +342,7 @@ func (ctx *Context) appendReachableInstances(pkg *ssa.Package, collector *instan
 // defined only there, so their concrete methods seed the set; the rest comes
 // from transitive usage inside the seeded instances.
 func (ctx *Context) collectSharedInstances() {
-	collector := &instanceCollector{seen: map[*ssa.Function]struct{}{}, recordPlainWrappers: true}
+	collector := &instanceCollector{seen: map[*ssa.Function]struct{}{}, recordPlainWrappers: true, recordInterfaceMethodWrappers: true}
 	allowSet := ctx.buildAllowSet(nil)
 
 	seed := func(typ types.Type) {

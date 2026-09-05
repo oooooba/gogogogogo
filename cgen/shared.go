@@ -219,6 +219,8 @@ func handleSharedDefinition(program *ssa.Program, assertedInterfaceTypes map[str
 
 	ctx.emitInterfaceDataDefinition()
 
+	ctx.emitSkippedPackageGlobalDefinitions()
+
 	ctx.traverseFunction(nil, func(function *ssa.Function) {
 		if function.Blocks != nil {
 			return
@@ -320,4 +322,35 @@ StringObject gox5_runtime_func_name(const UserFunctionInfo* func) {
 	return func->name;	
 }
 `)
+}
+
+// emitSkippedPackageGlobalDefinitions zero-initializes the globals of
+// body-skipped packages (e.g. internal/sysinfo) that are referenced from
+// emitted code. Those packages never get a package_.c file, so without this
+// pass the references would fail to link. Because the package bodies are never
+// run, the zero values are never observable.
+func (ctx *Context) emitSkippedPackageGlobalDefinitions() {
+	referenced := map[string]struct{}{}
+	ctx.traverseFunction(nil, func(function *ssa.Function) {
+		if function.Pkg != nil && isFunctionBodySkippedPackagePath(function.Pkg.Pkg.Path()) {
+			return
+		}
+		ctx.traverseValue(function, func(value ssa.Value) {
+			if gv, ok := value.(*ssa.Global); ok {
+				referenced[createValueName(gv)] = struct{}{}
+			}
+		})
+	})
+	for _, pkg := range allPackagesSorted(ctx.program) {
+		if !isFunctionBodySkippedPackage(pkg) {
+			continue
+		}
+		for _, member := range sortedPackageMembers(pkg) {
+			if global, ok := member.(*ssa.Global); ok {
+				if _, ok := referenced[createValueName(global)]; ok {
+					ctx.emitGlobalVariableDefinition(global)
+				}
+			}
+		}
+	}
 }

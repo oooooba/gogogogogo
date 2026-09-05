@@ -97,6 +97,29 @@ func isPlainSyntheticWrapper(fn *ssa.Function) bool {
 	return strings.HasSuffix(name, "$bound") || strings.HasSuffix(name, "$thunk")
 }
 
+// isInterfaceMethodWrapper reports whether fn is a synthetic $bound/$thunk
+// wrapper around an interface method. Such wrappers have no concrete method
+// definition to ride along with (the interface method table lives only in
+// shared_definition.c), so they must be defined there instead of as glue next
+// to a method body.
+func isInterfaceMethodWrapper(fn *ssa.Function) bool {
+	if !isPlainSyntheticWrapper(fn) {
+		return false
+	}
+	if fn.Blocks == nil || fn.TypeParams().Len() > 0 || len(fn.TypeArgs()) > 0 || hasTypeParamInSignature(fn.Signature) {
+		return false
+	}
+	obj, ok := fn.Object().(*types.Func)
+	if !ok {
+		return false
+	}
+	sig, ok := obj.Type().Underlying().(*types.Signature)
+	if !ok || sig.Recv() == nil {
+		return false
+	}
+	return types.IsInterface(sig.Recv().Type())
+}
+
 func hasTypeParamInSignature(sig *types.Signature) bool {
 	if sig.Recv() != nil && hasTypeParameter(sig.Recv().Type()) {
 		return true

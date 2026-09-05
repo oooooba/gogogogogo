@@ -897,6 +897,17 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 			fmt.Fprintf(ctx.stream, "%s.typed.capacity = %s - %s;\n", createValueRelName(instr), capacity, startIndex)
 		}
 
+	case *ssa.SliceToArrayPointer:
+		// (*[N]T)(x): yields a pointer to the underlying array of slice x.
+		// A run-time panic occurs if len(x) is less than the array length.
+		arrPtrType := instr.Type().Underlying().(*types.Pointer)
+		arrType := arrPtrType.Elem().Underlying().(*types.Array)
+		n := arrType.Len()
+		if n != 0 {
+			fmt.Fprintf(ctx.stream, "if (%s.typed.size < %d) { assert(false && \"slice length too short to convert to array pointer\"); }\n", createValueRelName(instr.X), n)
+		}
+		fmt.Fprintf(ctx.stream, "%s = %s;\n", createValueRelName(instr), wrapInObject(fmt.Sprintf("(%s*)%s.typed.ptr", createTypeName(arrPtrType.Elem()), createValueRelName(instr.X)), instr.Type()))
+
 	case *ssa.Store:
 		fmt.Fprintf(ctx.stream, "*(%s.raw) = %s;\n", createValueRelName(instr.Addr), createValueRelName(instr.Val))
 

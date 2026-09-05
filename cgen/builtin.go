@@ -410,6 +410,24 @@ func (ctx *Context) emitSpecialRuntimeCall(callee *ssa.Function, instr *ssa.Call
 		return true
 	}
 
+	if callee.Pkg == nil && callee.Origin() != nil && len(callee.TypeArgs()) > 0 {
+		origin := callee.Origin()
+		if origin.Pkg != nil && origin.Pkg.Pkg.Path() == "reflect" && origin.Name() == "TypeFor" {
+			// reflect.TypeFor[T]() forwards to internal/abi.TypeFor[T]() whose
+			// body is a skipped stub. Fabricate the same reflect.Type interface
+			// as the TypeOf intercept, except that the recorded type is T
+			// itself: TypeFor[T] is TypeOf((*T)(nil)).Elem(), and the
+			// Kind()/String() interface methods are intercepted during *ssa.Call
+			// emission below.
+			result := createValueRelName(instr)
+			targ := callee.TypeArgs()[0]
+			fmt.Fprintf(ctx.stream, "memset(&%s, 0, sizeof(%s));\n", result, result)
+			fmt.Fprintf(ctx.stream, "%s.receiver = (void*)(uintptr_t)%s.id;\n", result, wrapInTypeId(targ))
+			fmt.Fprintf(ctx.stream, "\treturn %s;\n", wrapInFunctionObject(createInstructionName(instr)))
+			return true
+		}
+	}
+
 	if pkgPath == "reflect" || pkgPath == "runtime" {
 		switch {
 		case pkgPath == "reflect" && funcName == "TypeOf":
