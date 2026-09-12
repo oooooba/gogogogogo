@@ -3,16 +3,17 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 use crate::LightWeightThreadContext;
 use crate::ObjectAllocator;
+use crate::ObjectAllocatorPtr;
 
 pub struct GlobalContext {
     created_light_weight_thread_count: usize,
-    allocator: Box<dyn ObjectAllocator>,
+    allocator: ObjectAllocator,
     run_queue: VecDeque<LightWeightThreadContext>,
     coros: Vec<Option<LightWeightThreadContext>>,
 }
 
 impl GlobalContext {
-    fn new(allocator: Box<dyn ObjectAllocator>) -> Self {
+    fn new(allocator: ObjectAllocator) -> Self {
         GlobalContext {
             created_light_weight_thread_count: 0,
             allocator,
@@ -27,8 +28,8 @@ impl GlobalContext {
         id
     }
 
-    pub fn allocator(&mut self) -> &mut dyn ObjectAllocator {
-        &mut *self.allocator
+    pub fn allocator(&mut self) -> ObjectAllocatorPtr {
+        self.allocator.ptr()
     }
 
     pub fn push_light_weight_thread(&mut self, ctx: LightWeightThreadContext) {
@@ -105,7 +106,7 @@ impl Drop for GlobalContextPtr {
 
 // ToDo: fix
 #[allow(clippy::arc_with_non_send_sync)]
-pub fn create_global_context(allocator: Box<dyn ObjectAllocator>) -> GlobalContextPtr {
+pub fn create_global_context(allocator: ObjectAllocator) -> GlobalContextPtr {
     let global_context = Arc::new(Mutex::new(GlobalContext::new(allocator)));
     GlobalContextPtr::from(global_context)
 }
@@ -115,45 +116,8 @@ mod tests {
     use super::*;
     use crate::ObjectAllocator;
 
-    struct MockObjectAllocator {
-        allocated: Vec<(*mut (), usize)>,
-    }
-
-    impl MockObjectAllocator {
-        fn new() -> Self {
-            MockObjectAllocator {
-                allocated: Vec::new(),
-            }
-        }
-    }
-
-    impl ObjectAllocator for MockObjectAllocator {
-        fn allocate(&mut self, size: usize, _destructor: fn(*mut ())) -> *mut () {
-            let alignment = std::mem::align_of::<isize>();
-            let size = size.div_ceil(alignment) * alignment;
-            let buf: Vec<isize> = vec![0; size];
-            let ptr = buf.leak().as_mut_ptr() as *mut ();
-            self.allocated.push((ptr, size));
-            ptr
-        }
-
-        fn allocate_guarded_pages(&mut self, num_pages: usize) -> *mut () {
-            self.allocate(num_pages * 4096, |_| {})
-        }
-    }
-
-    impl Drop for MockObjectAllocator {
-        fn drop(&mut self) {
-            for (ptr, size) in &self.allocated {
-                unsafe {
-                    let _ = Vec::from_raw_parts(*ptr as *mut isize, 0, *size);
-                }
-            }
-        }
-    }
-
     fn make_gc() -> GlobalContextPtr {
-        create_global_context(Box::new(MockObjectAllocator::new()))
+        create_global_context(ObjectAllocator::new())
     }
 
     #[test]

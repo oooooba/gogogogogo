@@ -239,7 +239,7 @@ pub extern "C" fn gox5_map_set(ctx: &mut LightWeightThreadContext) -> FunctionOb
     ctx.global_context().process(|mut global_context| {
         let map = map.as_mut::<MapObject>();
         let allocator = global_context.allocator();
-        map.set(key, value, allocator);
+        map.set(key, value, &allocator);
     });
 
     ctx.pop_frame()
@@ -249,6 +249,7 @@ pub extern "C" fn gox5_map_set(ctx: &mut LightWeightThreadContext) -> FunctionOb
 mod tests {
     use super::*;
     use crate::ObjectAllocator;
+    use crate::ObjectAllocatorPtr;
     use crate::global_context;
     use crate::light_weight_thread::LightWeightThreadContext;
     use crate::object::string::StringObject;
@@ -298,66 +299,17 @@ mod tests {
         TypeId::from_raw(test_type_info() as *const TestTypeInfo as usize)
     }
 
-    struct AllocatedObject {
-        ptr: *mut (),
-        size: usize,
-        destructor: fn(*mut ()),
-    }
-
-    struct MockObjectAllocator {
-        allocated_objects: Vec<AllocatedObject>,
-    }
-
-    impl MockObjectAllocator {
-        fn new() -> Self {
-            MockObjectAllocator {
-                allocated_objects: Vec::new(),
-            }
-        }
-    }
-
-    impl ObjectAllocator for MockObjectAllocator {
-        fn allocate(&mut self, size: usize, destructor: fn(*mut ())) -> *mut () {
-            let alignment = mem::align_of::<isize>();
-            let size = size.div_ceil(alignment) * alignment;
-            let buf: Vec<isize> = vec![0; size];
-            let ptr = buf.leak().as_mut_ptr() as *mut ();
-            self.allocated_objects.push(AllocatedObject {
-                ptr,
-                size,
-                destructor,
-            });
-            ptr
-        }
-
-        fn allocate_guarded_pages(&mut self, num_pages: usize) -> *mut () {
-            self.allocate(num_pages * 4096, |_| {})
-        }
-    }
-
-    impl Drop for MockObjectAllocator {
-        fn drop(&mut self) {
-            for obj in &self.allocated_objects {
-                (obj.destructor)(obj.ptr);
-                unsafe {
-                    Vec::from_raw_parts(obj.ptr as *mut isize, 0, obj.size);
-                }
-            }
-        }
-    }
-
     fn create_ctx() -> (
         LightWeightThreadContext,
         crate::global_context::GlobalContextPtr,
     ) {
-        let allocator = Box::new(MockObjectAllocator::new());
-        let gc = global_context::create_global_context(allocator);
+        let gc = global_context::create_global_context(ObjectAllocator::new());
         let func = FunctionObject::new_null();
         let ctx = crate::create_light_weight_thread_context(gc.dupulicate(), func);
         (ctx, gc)
     }
 
-    fn make_map_ptr(allocator: &mut MockObjectAllocator, map: MapObject) -> ObjectPtr {
+    fn make_map_ptr(allocator: &ObjectAllocatorPtr, map: MapObject) -> ObjectPtr {
         let size = mem::size_of::<MapObject>();
         let ptr = allocator.allocate(size, |ptr| unsafe {
             ptr::drop_in_place(ptr as *mut MapObject);
@@ -368,7 +320,7 @@ mod tests {
         ObjectPtr(ptr as *mut ())
     }
 
-    fn make_isize_ptr(allocator: &mut MockObjectAllocator, value: isize) -> ObjectPtr {
+    fn make_isize_ptr(allocator: &ObjectAllocatorPtr, value: isize) -> ObjectPtr {
         let ptr = allocator.allocate(mem::size_of::<isize>(), |_| {}) as *mut isize;
         unsafe { *ptr = value };
         ObjectPtr(ptr as *mut ())
@@ -403,12 +355,12 @@ mod tests {
 
     #[test]
     fn test_gox5_map_set_and_len() {
-        let mut allocator = MockObjectAllocator::new();
+        let mut allocator = ObjectAllocator::new();
         let map = MapObject::new(test_type_id(), test_type_id());
-        let map_ptr = make_map_ptr(&mut allocator, map);
+        let map_ptr = make_map_ptr(&allocator.ptr(), map);
 
-        let key = make_isize_ptr(&mut allocator, 42);
-        let value = make_isize_ptr(&mut allocator, 100);
+        let key = make_isize_ptr(&allocator.ptr(), 42);
+        let value = make_isize_ptr(&allocator.ptr(), 100);
 
         let (mut ctx, _gc) = create_ctx();
         let prev_sp = ctx.stack_pointer();
@@ -426,9 +378,9 @@ mod tests {
 
     #[test]
     fn test_gox5_map_len_empty() {
-        let mut allocator = MockObjectAllocator::new();
+        let mut allocator = ObjectAllocator::new();
         let map = MapObject::new(test_type_id(), test_type_id());
-        let map_ptr = make_map_ptr(&mut allocator, map);
+        let map_ptr = make_map_ptr(&allocator.ptr(), map);
 
         let (mut ctx, _gc) = create_ctx();
         let prev_sp = ctx.stack_pointer();
@@ -493,15 +445,15 @@ mod tests {
 
     #[test]
     fn test_gox5_map_clear() {
-        let mut allocator = MockObjectAllocator::new();
+        let mut allocator = ObjectAllocator::new();
         let map = MapObject::new(test_type_id(), test_type_id());
-        let map_ptr = make_map_ptr(&mut allocator, map);
+        let map_ptr = make_map_ptr(&allocator.ptr(), map);
 
         let (mut ctx, _gc) = create_ctx();
 
         for (key, value) in [(1isize, 10isize), (2, 20), (3, 30)] {
-            let key = make_isize_ptr(&mut allocator, key);
-            let value = make_isize_ptr(&mut allocator, value);
+            let key = make_isize_ptr(&allocator.ptr(), key);
+            let value = make_isize_ptr(&allocator.ptr(), value);
 
             let prev_sp = ctx.stack_pointer();
             ctx.grow_stack(mem::size_of::<StackFrameMapSet>());

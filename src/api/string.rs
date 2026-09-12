@@ -22,7 +22,7 @@ pub extern "C" fn gox5_string_new_from_byte_slice(
 
     let mut builder = ctx
         .global_context()
-        .process(|mut global_context| StringObject::builder(len, global_context.allocator()));
+        .process(|mut global_context| StringObject::builder(len, &global_context.allocator()));
 
     let src_bytes = frame.byte_slice.as_bytes(mem::size_of::<u8>());
     builder.append_bytes(&src_bytes[..len]);
@@ -51,7 +51,7 @@ pub extern "C" fn gox5_string_new_from_rune(ctx: &mut LightWeightThreadContext) 
 
     let mut builder = ctx
         .global_context()
-        .process(|mut global_context| StringObject::builder(len, global_context.allocator()));
+        .process(|mut global_context| StringObject::builder(len, &global_context.allocator()));
 
     builder.append_char(ch);
 
@@ -89,7 +89,7 @@ pub extern "C" fn gox5_string_new_from_rune_slice(
 
     let mut builder = ctx
         .global_context()
-        .process(|mut global_context| StringObject::builder(len, global_context.allocator()));
+        .process(|mut global_context| StringObject::builder(len, &global_context.allocator()));
 
     let elem_size = mem::size_of::<u32>();
     let src_bytes = rune_slice.as_bytes(elem_size);
@@ -122,7 +122,7 @@ pub extern "C" fn gox5_string_append(ctx: &mut LightWeightThreadContext) -> Func
 
     let mut builder = ctx
         .global_context()
-        .process(|mut global_context| StringObject::builder(len, global_context.allocator()));
+        .process(|mut global_context| StringObject::builder(len, &global_context.allocator()));
 
     builder.append_bytes(frame.lhs.as_bytes());
     builder.append_bytes(frame.rhs.as_bytes());
@@ -299,7 +299,7 @@ pub extern "C" fn gox5_string_substr(ctx: &mut LightWeightThreadContext) -> Func
 
     let mut builder = ctx
         .global_context()
-        .process(|mut global_context| StringObject::builder(len, global_context.allocator()));
+        .process(|mut global_context| StringObject::builder(len, &global_context.allocator()));
 
     builder.append_bytes(&frame.base.as_bytes()[low..high]);
 
@@ -372,60 +372,11 @@ mod tests {
     use crate::light_weight_thread::LightWeightThreadContext;
     use std::mem;
 
-    struct AllocatedObject {
-        ptr: *mut (),
-        size: usize,
-        destructor: fn(*mut ()),
-    }
-
-    struct MockObjectAllocator {
-        allocated_objects: Vec<AllocatedObject>,
-    }
-
-    impl MockObjectAllocator {
-        fn new() -> Self {
-            MockObjectAllocator {
-                allocated_objects: Vec::new(),
-            }
-        }
-    }
-
-    impl ObjectAllocator for MockObjectAllocator {
-        fn allocate(&mut self, size: usize, destructor: fn(*mut ())) -> *mut () {
-            let alignment = mem::align_of::<isize>();
-            let size = size.div_ceil(alignment) * alignment;
-            let buf: Vec<isize> = vec![0; size];
-            let ptr = buf.leak().as_mut_ptr() as *mut ();
-            self.allocated_objects.push(AllocatedObject {
-                ptr,
-                size,
-                destructor,
-            });
-            ptr
-        }
-
-        fn allocate_guarded_pages(&mut self, num_pages: usize) -> *mut () {
-            self.allocate(num_pages * 4096, |_| {})
-        }
-    }
-
-    impl Drop for MockObjectAllocator {
-        fn drop(&mut self) {
-            for obj in &self.allocated_objects {
-                (obj.destructor)(obj.ptr);
-                unsafe {
-                    Vec::from_raw_parts(obj.ptr as *mut isize, 0, obj.size);
-                }
-            }
-        }
-    }
-
     fn create_ctx() -> (
         LightWeightThreadContext,
         crate::global_context::GlobalContextPtr,
     ) {
-        let allocator = Box::new(MockObjectAllocator::new());
-        let gc = global_context::create_global_context(allocator);
+        let gc = global_context::create_global_context(ObjectAllocator::new());
         let func = FunctionObject::new_null();
         let ctx = crate::create_light_weight_thread_context(gc.dupulicate(), func);
         (ctx, gc)
@@ -445,8 +396,8 @@ mod tests {
             FunctionObject::new_null(),
         );
 
-        let mut allocator = MockObjectAllocator::new();
-        let mut builder = StringObject::builder(5, &mut allocator);
+        let mut allocator = ObjectAllocator::new();
+        let mut builder = StringObject::builder(5, &allocator.ptr());
         builder.append_bytes(b"hello");
         let s = builder.build();
 
@@ -474,8 +425,8 @@ mod tests {
             FunctionObject::new_null(),
         );
 
-        let mut allocator = MockObjectAllocator::new();
-        let builder = StringObject::builder(0, &mut allocator);
+        let mut allocator = ObjectAllocator::new();
+        let builder = StringObject::builder(0, &allocator.ptr());
         let s = builder.build();
 
         let frame = ctx.stack_frame_mut::<StackFrameStringLength>();
@@ -550,8 +501,8 @@ mod tests {
             FunctionObject::new_null(),
         );
 
-        let mut allocator = MockObjectAllocator::new();
-        let mut builder = StringObject::builder(5, &mut allocator);
+        let mut allocator = ObjectAllocator::new();
+        let mut builder = StringObject::builder(5, &allocator.ptr());
         builder.append_bytes(b"hello");
         let base = builder.build();
 
@@ -581,8 +532,8 @@ mod tests {
             FunctionObject::new_null(),
         );
 
-        let mut allocator = MockObjectAllocator::new();
-        let mut builder = StringObject::builder(5, &mut allocator);
+        let mut allocator = ObjectAllocator::new();
+        let mut builder = StringObject::builder(5, &allocator.ptr());
         builder.append_bytes(b"hello");
         let base = builder.build();
 
@@ -612,11 +563,11 @@ mod tests {
             FunctionObject::new_null(),
         );
 
-        let mut allocator = MockObjectAllocator::new();
-        let mut builder1 = StringObject::builder(5, &mut allocator);
+        let mut allocator = ObjectAllocator::new();
+        let mut builder1 = StringObject::builder(5, &allocator.ptr());
         builder1.append_bytes(b"hello");
         let lhs = builder1.build();
-        let mut builder2 = StringObject::builder(5, &mut allocator);
+        let mut builder2 = StringObject::builder(5, &allocator.ptr());
         builder2.append_bytes(b"world");
         let rhs = builder2.build();
 
@@ -633,7 +584,7 @@ mod tests {
 
     fn make_string(ctx: &mut LightWeightThreadContext, bytes: &[u8]) -> StringObject {
         let mut builder = ctx.global_context().process(|mut global_context| {
-            StringObject::builder(bytes.len(), global_context.allocator())
+            StringObject::builder(bytes.len(), &global_context.allocator())
         });
         builder.append_bytes(bytes);
         builder.build()

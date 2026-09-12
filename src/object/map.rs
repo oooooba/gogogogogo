@@ -3,7 +3,7 @@ use std::hash::{Hash, Hasher};
 use std::slice;
 
 use crate::type_id::TypeId;
-use crate::{ObjectAllocator, ObjectPtr};
+use crate::{ObjectAllocatorPtr, ObjectPtr};
 
 #[derive(Clone)]
 struct Key {
@@ -74,7 +74,7 @@ impl MapObject {
         }
     }
 
-    pub fn set(&mut self, key: ObjectPtr, value: ObjectPtr, allocator: &mut dyn ObjectAllocator) {
+    pub fn set(&mut self, key: ObjectPtr, value: ObjectPtr, allocator: &ObjectAllocatorPtr) {
         let key_object_size = self.key_type.size();
         let key_ptr = allocator.allocate(key_object_size, |_| {}) as *mut u8;
         let src = unsafe { slice::from_raw_parts(key.0 as *const u8, key_object_size) };
@@ -140,6 +140,7 @@ impl MapObject {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ObjectAllocator;
     use std::mem;
     use std::ptr;
     use std::sync::OnceLock;
@@ -186,65 +187,13 @@ mod tests {
         TypeId::from_raw(test_type_info() as *const TestTypeInfo as usize)
     }
 
-    struct AllocatedObject {
-        ptr: *mut (),
-        size: usize,
-        destructor: fn(*mut ()),
-    }
-
-    struct MockObjectAllocator {
-        allocated_objects: Vec<AllocatedObject>,
-    }
-
-    impl MockObjectAllocator {
-        fn new() -> Self {
-            MockObjectAllocator {
-                allocated_objects: Vec::new(),
-            }
-        }
-    }
-
-    impl ObjectAllocator for MockObjectAllocator {
-        fn allocate(&mut self, size: usize, destructor: fn(*mut ())) -> *mut () {
-            let alignment = mem::align_of::<isize>();
-            let size = size.div_ceil(alignment) * alignment;
-            let buf: Vec<isize> = vec![0; size];
-            let ptr = buf.leak().as_mut_ptr() as *mut ();
-            self.allocated_objects.push(AllocatedObject {
-                ptr,
-                size,
-                destructor,
-            });
-            ptr
-        }
-
-        fn allocate_guarded_pages(&mut self, _num_pages: usize) -> *mut () {
-            unimplemented!()
-        }
-    }
-
-    impl Drop for MockObjectAllocator {
-        fn drop(&mut self) {
-            for allocated_object in &self.allocated_objects {
-                (allocated_object.destructor)(allocated_object.ptr);
-                unsafe {
-                    Vec::from_raw_parts(
-                        allocated_object.ptr as *mut isize,
-                        0,
-                        allocated_object.size,
-                    );
-                }
-            }
-        }
-    }
-
-    fn make_isize_ptr(allocator: &mut MockObjectAllocator, value: isize) -> ObjectPtr {
+    fn make_isize_ptr(allocator: &ObjectAllocatorPtr, value: isize) -> ObjectPtr {
         let ptr = allocator.allocate(mem::size_of::<isize>(), |_| {}) as *mut isize;
         unsafe { *ptr = value };
         ObjectPtr(ptr as *mut ())
     }
 
-    fn make_result_ptr(allocator: &mut MockObjectAllocator) -> ObjectPtr {
+    fn make_result_ptr(allocator: &ObjectAllocatorPtr) -> ObjectPtr {
         let ptr = allocator.allocate(mem::size_of::<isize>(), |_| {}) as *mut isize;
         ObjectPtr(ptr as *mut ())
     }
@@ -257,76 +206,76 @@ mod tests {
 
     #[test]
     fn test_map_set_get() {
-        let mut allocator = MockObjectAllocator::new();
+        let mut allocator = ObjectAllocator::new();
         let mut map = MapObject::new(test_type_id(), test_type_id());
-        let key = make_isize_ptr(&mut allocator, 1);
-        let value = make_isize_ptr(&mut allocator, 100);
-        map.set(key.clone(), value, &mut allocator);
+        let key = make_isize_ptr(&allocator.ptr(), 1);
+        let value = make_isize_ptr(&allocator.ptr(), 100);
+        map.set(key.clone(), value, &allocator.ptr());
         assert_eq!(map.len(), 1);
-        let result = make_result_ptr(&mut allocator);
+        let result = make_result_ptr(&allocator.ptr());
         assert!(map.get(key.clone(), result.clone()));
         assert_eq!(*result.as_ref::<isize>(), 100);
     }
 
     #[test]
     fn test_map_get_nonexistent() {
-        let mut allocator = MockObjectAllocator::new();
+        let mut allocator = ObjectAllocator::new();
         let map = MapObject::new(test_type_id(), test_type_id());
-        let key = make_isize_ptr(&mut allocator, 1);
-        let result = make_result_ptr(&mut allocator);
+        let key = make_isize_ptr(&allocator.ptr(), 1);
+        let result = make_result_ptr(&allocator.ptr());
         assert!(!map.get(key, result));
     }
 
     #[test]
     fn test_map_set_overwrite() {
-        let mut allocator = MockObjectAllocator::new();
+        let mut allocator = ObjectAllocator::new();
         let mut map = MapObject::new(test_type_id(), test_type_id());
-        let key = make_isize_ptr(&mut allocator, 1);
-        let value1 = make_isize_ptr(&mut allocator, 100);
-        map.set(key.clone(), value1, &mut allocator);
-        let value2 = make_isize_ptr(&mut allocator, 200);
-        map.set(key.clone(), value2, &mut allocator);
+        let key = make_isize_ptr(&allocator.ptr(), 1);
+        let value1 = make_isize_ptr(&allocator.ptr(), 100);
+        map.set(key.clone(), value1, &allocator.ptr());
+        let value2 = make_isize_ptr(&allocator.ptr(), 200);
+        map.set(key.clone(), value2, &allocator.ptr());
         assert_eq!(map.len(), 1);
-        let result = make_result_ptr(&mut allocator);
+        let result = make_result_ptr(&allocator.ptr());
         assert!(map.get(key, result.clone()));
         assert_eq!(*result.as_ref::<isize>(), 200);
     }
 
     #[test]
     fn test_map_delete() {
-        let mut allocator = MockObjectAllocator::new();
+        let mut allocator = ObjectAllocator::new();
         let mut map = MapObject::new(test_type_id(), test_type_id());
-        let key = make_isize_ptr(&mut allocator, 1);
-        let value = make_isize_ptr(&mut allocator, 100);
-        map.set(key.clone(), value, &mut allocator);
+        let key = make_isize_ptr(&allocator.ptr(), 1);
+        let value = make_isize_ptr(&allocator.ptr(), 100);
+        map.set(key.clone(), value, &allocator.ptr());
         assert_eq!(map.len(), 1);
         map.delete(key.clone());
         assert_eq!(map.len(), 0);
-        let result = make_result_ptr(&mut allocator);
+        let result = make_result_ptr(&allocator.ptr());
         assert!(!map.get(key, result));
     }
 
     #[test]
     fn test_map_delete_nonexistent() {
-        let mut allocator = MockObjectAllocator::new();
+        let mut allocator = ObjectAllocator::new();
         let mut map = MapObject::new(test_type_id(), test_type_id());
-        let key = make_isize_ptr(&mut allocator, 999);
+        let key = make_isize_ptr(&allocator.ptr(), 999);
         map.delete(key);
         assert_eq!(map.len(), 0);
     }
 
     #[test]
     fn test_map_nth() {
-        let mut allocator = MockObjectAllocator::new();
+        let mut allocator = ObjectAllocator::new();
         let mut map = MapObject::new(test_type_id(), test_type_id());
-        let key1 = make_isize_ptr(&mut allocator, 1);
-        let value1 = make_isize_ptr(&mut allocator, 10);
-        map.set(key1, value1, &mut allocator);
-        let key2 = make_isize_ptr(&mut allocator, 2);
-        let value2 = make_isize_ptr(&mut allocator, 20);
-        map.set(key2, value2, &mut allocator);
-        let out_key = make_result_ptr(&mut allocator);
-        let out_value = make_result_ptr(&mut allocator);
+        let key1 = make_isize_ptr(&allocator.ptr(), 1);
+        let value1 = make_isize_ptr(&allocator.ptr(), 10);
+        map.set(key1, value1, &allocator.ptr());
+        let key2 = make_isize_ptr(&allocator.ptr(), 2);
+        let value2 = make_isize_ptr(&allocator.ptr(), 20);
+        map.set(key2, value2, &allocator.ptr());
+        let out_key = make_result_ptr(&allocator.ptr());
+        let out_value = make_result_ptr(&allocator.ptr());
         assert!(map.nth(out_key.clone(), out_value.clone(), 0));
         assert!(map.nth(out_key.clone(), out_value.clone(), 1));
         assert!(!map.nth(out_key, out_value, 2));
@@ -334,58 +283,58 @@ mod tests {
 
     #[test]
     fn test_map_nth_null_key() {
-        let mut allocator = MockObjectAllocator::new();
+        let mut allocator = ObjectAllocator::new();
         let mut map = MapObject::new(test_type_id(), test_type_id());
-        let key = make_isize_ptr(&mut allocator, 1);
-        let value = make_isize_ptr(&mut allocator, 10);
-        map.set(key, value, &mut allocator);
-        let out_value = make_result_ptr(&mut allocator);
+        let key = make_isize_ptr(&allocator.ptr(), 1);
+        let value = make_isize_ptr(&allocator.ptr(), 10);
+        map.set(key, value, &allocator.ptr());
+        let out_value = make_result_ptr(&allocator.ptr());
         assert!(map.nth(ObjectPtr(ptr::null_mut()), out_value, 0));
     }
 
     #[test]
     fn test_map_nth_null_value() {
-        let mut allocator = MockObjectAllocator::new();
+        let mut allocator = ObjectAllocator::new();
         let mut map = MapObject::new(test_type_id(), test_type_id());
-        let key = make_isize_ptr(&mut allocator, 1);
-        let value = make_isize_ptr(&mut allocator, 10);
-        map.set(key, value, &mut allocator);
-        let out_key = make_result_ptr(&mut allocator);
+        let key = make_isize_ptr(&allocator.ptr(), 1);
+        let value = make_isize_ptr(&allocator.ptr(), 10);
+        map.set(key, value, &allocator.ptr());
+        let out_key = make_result_ptr(&allocator.ptr());
         assert!(map.nth(out_key, ObjectPtr(ptr::null_mut()), 0));
     }
 
     #[test]
     fn test_map_clear() {
-        let mut allocator = MockObjectAllocator::new();
+        let mut allocator = ObjectAllocator::new();
         let mut map = MapObject::new(test_type_id(), test_type_id());
         for (k, v) in [(1isize, 10isize), (2, 20), (3, 30)] {
-            let key = make_isize_ptr(&mut allocator, k);
-            let value = make_isize_ptr(&mut allocator, v);
-            map.set(key, value, &mut allocator);
+            let key = make_isize_ptr(&allocator.ptr(), k);
+            let value = make_isize_ptr(&allocator.ptr(), v);
+            map.set(key, value, &allocator.ptr());
         }
         assert_eq!(map.len(), 3);
 
         map.clear();
         assert_eq!(map.len(), 0);
 
-        let key = make_isize_ptr(&mut allocator, 1);
-        let result = make_result_ptr(&mut allocator);
+        let key = make_isize_ptr(&allocator.ptr(), 1);
+        let result = make_result_ptr(&allocator.ptr());
         assert!(!map.get(key, result));
     }
 
     #[test]
     fn test_map_clear_resets_iteration() {
-        let mut allocator = MockObjectAllocator::new();
+        let mut allocator = ObjectAllocator::new();
         let mut map = MapObject::new(test_type_id(), test_type_id());
-        let key1 = make_isize_ptr(&mut allocator, 1);
-        let value1 = make_isize_ptr(&mut allocator, 10);
-        map.set(key1, value1, &mut allocator);
-        let key2 = make_isize_ptr(&mut allocator, 2);
-        let value2 = make_isize_ptr(&mut allocator, 20);
-        map.set(key2, value2, &mut allocator);
+        let key1 = make_isize_ptr(&allocator.ptr(), 1);
+        let value1 = make_isize_ptr(&allocator.ptr(), 10);
+        map.set(key1, value1, &allocator.ptr());
+        let key2 = make_isize_ptr(&allocator.ptr(), 2);
+        let value2 = make_isize_ptr(&allocator.ptr(), 20);
+        map.set(key2, value2, &allocator.ptr());
 
-        let out_key = make_result_ptr(&mut allocator);
-        let out_value = make_result_ptr(&mut allocator);
+        let out_key = make_result_ptr(&allocator.ptr());
+        let out_value = make_result_ptr(&allocator.ptr());
         assert!(map.nth(out_key.clone(), out_value.clone(), 0));
 
         map.clear();

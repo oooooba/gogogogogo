@@ -31,7 +31,7 @@ fn allocate_channel(ctx: &mut LightWeightThreadContext, capacity: usize) -> *mut
 
     let channel = ctx
         .global_context()
-        .process(|mut global_context| ChannelObject::new(capacity, global_context.allocator()));
+        .process(|mut global_context| ChannelObject::new(capacity, &global_context.allocator()));
 
     unsafe {
         *ptr = channel;

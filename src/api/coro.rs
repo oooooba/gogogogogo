@@ -86,54 +86,11 @@ mod tests {
     use crate::global_context;
     use crate::light_weight_thread::LightWeightThreadContext;
 
-    struct AllocatedObject {
-        ptr: *mut (),
-        size: usize,
-    }
-
-    struct MockObjectAllocator {
-        allocated_objects: Vec<AllocatedObject>,
-    }
-
-    impl MockObjectAllocator {
-        fn new() -> Self {
-            MockObjectAllocator {
-                allocated_objects: Vec::new(),
-            }
-        }
-    }
-
-    impl ObjectAllocator for MockObjectAllocator {
-        fn allocate(&mut self, size: usize, _destructor: fn(*mut ())) -> *mut () {
-            let alignment = mem::align_of::<isize>();
-            let size = size.div_ceil(alignment) * alignment;
-            let buf: Vec<isize> = vec![0; size];
-            let ptr = buf.leak().as_mut_ptr() as *mut ();
-            self.allocated_objects.push(AllocatedObject { ptr, size });
-            ptr
-        }
-
-        fn allocate_guarded_pages(&mut self, num_pages: usize) -> *mut () {
-            self.allocate(num_pages * 4096, |_| {})
-        }
-    }
-
-    impl Drop for MockObjectAllocator {
-        fn drop(&mut self) {
-            for obj in &self.allocated_objects {
-                unsafe {
-                    Vec::from_raw_parts(obj.ptr as *mut isize, 0, obj.size);
-                }
-            }
-        }
-    }
-
     fn create_ctx() -> (
         LightWeightThreadContext,
         crate::global_context::GlobalContextPtr,
     ) {
-        let allocator = Box::new(MockObjectAllocator::new());
-        let gc = global_context::create_global_context(allocator);
+        let gc = global_context::create_global_context(ObjectAllocator::new());
         let func = FunctionObject::new_null();
         let ctx = create_light_weight_thread_context(gc.dupulicate(), func);
         (ctx, gc)

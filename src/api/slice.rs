@@ -5,7 +5,7 @@ use std::ptr;
 
 use crate::FunctionObject;
 use crate::LightWeightThreadContext;
-use crate::ObjectAllocator;
+use crate::ObjectAllocatorPtr;
 use crate::StackFrameCommon;
 use crate::object::slice::SliceObject;
 use crate::object::string::StringObject;
@@ -63,7 +63,7 @@ fn reallocate_slice(
     base: &SliceObject,
     elem_size: usize,
     extend_bytes: &[u8],
-    allocator: &mut dyn ObjectAllocator,
+    allocator: &ObjectAllocatorPtr,
 ) -> SliceObject {
     assert!(elem_size > 0);
     assert!(extend_bytes.len().is_multiple_of(elem_size));
@@ -118,7 +118,7 @@ pub extern "C" fn gox5_slice_append(ctx: &mut LightWeightThreadContext) -> Funct
     let elem_size = frame.type_id.size();
     let rhs_bytes = slice_extend_bytes(rhs, elem_size);
     let result = ctx.global_context().process(|mut global_context| {
-        reallocate_slice(lhs, elem_size, rhs_bytes, global_context.allocator())
+        reallocate_slice(lhs, elem_size, rhs_bytes, &global_context.allocator())
     });
 
     let frame = ctx.stack_frame_mut::<StackFrameSliceAppend>();
@@ -147,7 +147,7 @@ pub extern "C" fn gox5_slice_append_string(ctx: &mut LightWeightThreadContext) -
             slice,
             elem_size,
             string.as_bytes(),
-            global_context.allocator(),
+            &global_context.allocator(),
         )
     });
 
@@ -388,55 +388,8 @@ pub extern "C" fn gox5_slice_new_uninitialized(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ObjectAllocator;
     use std::mem;
-
-    struct AllocatedObject {
-        ptr: *mut (),
-        size: usize,
-        destructor: fn(*mut ()),
-    }
-
-    struct MockObjectAllocator {
-        allocated_objects: Vec<AllocatedObject>,
-    }
-
-    impl MockObjectAllocator {
-        fn new() -> Self {
-            MockObjectAllocator {
-                allocated_objects: Vec::new(),
-            }
-        }
-    }
-
-    impl ObjectAllocator for MockObjectAllocator {
-        fn allocate(&mut self, size: usize, destructor: fn(*mut ())) -> *mut () {
-            let alignment = mem::align_of::<isize>();
-            let size = size.div_ceil(alignment) * alignment;
-            let buf: Vec<isize> = vec![0; size];
-            let ptr = buf.leak().as_mut_ptr() as *mut ();
-            self.allocated_objects.push(AllocatedObject {
-                ptr,
-                size,
-                destructor,
-            });
-            ptr
-        }
-
-        fn allocate_guarded_pages(&mut self, num_pages: usize) -> *mut () {
-            self.allocate(num_pages * 4096, |_| {})
-        }
-    }
-
-    impl Drop for MockObjectAllocator {
-        fn drop(&mut self) {
-            for obj in &self.allocated_objects {
-                (obj.destructor)(obj.ptr);
-                unsafe {
-                    Vec::from_raw_parts(obj.ptr as *mut isize, 0, obj.size);
-                }
-            }
-        }
-    }
 
     #[test]
     fn test_slice_extend_bytes_clamps_to_size() {
@@ -454,7 +407,7 @@ mod tests {
 
     #[test]
     fn test_reallocate_slice_within_capacity() {
-        let mut allocator = MockObjectAllocator::new();
+        let mut allocator = ObjectAllocator::new();
         let mut buf = [0u8; 64];
         buf[0] = 10;
         buf[1] = 20;
@@ -462,7 +415,7 @@ mod tests {
         let ptr = buf.as_mut_ptr() as *mut ();
         let base = SliceObject::new(ptr, 3, 10);
         let extend = [40u8, 50];
-        let result = reallocate_slice(&base, 1, &extend, &mut allocator);
+        let result = reallocate_slice(&base, 1, &extend, &allocator.ptr());
         assert_eq!(result.size(), 5);
         assert_eq!(result.capacity(), 10);
         let bytes = result.as_bytes(1);
@@ -475,14 +428,14 @@ mod tests {
 
     #[test]
     fn test_reallocate_slice_overflow_triggers_realloc() {
-        let mut allocator = MockObjectAllocator::new();
+        let mut allocator = ObjectAllocator::new();
         let mut buf = [0u8; 4];
         buf[0] = 1;
         buf[1] = 2;
         let ptr = buf.as_mut_ptr() as *mut ();
         let base = SliceObject::new(ptr, 2, 2);
         let extend = [3u8, 4, 5, 6];
-        let result = reallocate_slice(&base, 1, &extend, &mut allocator);
+        let result = reallocate_slice(&base, 1, &extend, &allocator.ptr());
         assert_eq!(result.size(), 6);
         assert_eq!(result.capacity(), 12);
         let bytes = result.as_bytes(1);
@@ -496,7 +449,7 @@ mod tests {
 
     #[test]
     fn test_reallocate_slice_u32_elements() {
-        let mut allocator = MockObjectAllocator::new();
+        let mut allocator = ObjectAllocator::new();
         let mut buf = [0u32; 4];
         buf[0] = 100;
         buf[1] = 200;
@@ -507,7 +460,7 @@ mod tests {
         let mut extend_bytes = Vec::new();
         extend_bytes.extend_from_slice(&extend);
         extend_bytes.extend_from_slice(&extend2);
-        let result = reallocate_slice(&base, 4, &extend_bytes, &mut allocator);
+        let result = reallocate_slice(&base, 4, &extend_bytes, &allocator.ptr());
         assert_eq!(result.size(), 4);
         assert_eq!(result.capacity(), 4);
     }
@@ -575,8 +528,7 @@ mod tests {
         LightWeightThreadContext,
         crate::global_context::GlobalContextPtr,
     ) {
-        let allocator = Box::new(MockObjectAllocator::new());
-        let gc = global_context::create_global_context(allocator);
+        let gc = global_context::create_global_context(ObjectAllocator::new());
         let func = FunctionObject::new_null();
         let ctx = crate::create_light_weight_thread_context(gc.dupulicate(), func);
         (ctx, gc)

@@ -1,3 +1,4 @@
+mod allocator;
 mod api;
 mod defer_stack;
 mod global_context;
@@ -6,11 +7,11 @@ mod object;
 mod type_id;
 mod word_chunk;
 
-use std::ffi;
 use std::mem;
 use std::process;
 use std::ptr;
 
+use allocator::{ObjectAllocator, ObjectAllocatorPtr};
 use defer_stack::DeferStack;
 use global_context::GlobalContextPtr;
 use light_weight_thread::LightWeightThreadContext;
@@ -137,59 +138,6 @@ extern "C" fn terminate(ctx: &mut LightWeightThreadContext) -> FunctionObject {
     FunctionObject::from_user_function(UserFunction::new(terminate))
 }
 
-pub trait ObjectAllocator {
-    fn allocate(&mut self, size: usize, destructor: fn(*mut ())) -> *mut ();
-    fn allocate_guarded_pages(&mut self, num_pages: usize) -> *mut ();
-}
-
-struct RuntimeObjectAllocator;
-
-impl RuntimeObjectAllocator {
-    fn new() -> Self {
-        RuntimeObjectAllocator
-    }
-}
-
-impl ObjectAllocator for RuntimeObjectAllocator {
-    fn allocate(&mut self, size: usize, _destructor: fn(*mut ())) -> *mut () {
-        let alignment = mem::size_of::<isize>();
-        let size = size.div_ceil(alignment) * alignment;
-        let buf: Vec<isize> = vec![0; size];
-        let ptr = buf.leak().as_mut_ptr();
-        ptr as *mut ()
-    }
-
-    fn allocate_guarded_pages(&mut self, num_pages: usize) -> *mut () {
-        unsafe {
-            let stack_area_addr = libc::mmap(
-                ptr::null_mut(),
-                4096 * (num_pages + 1),
-                libc::PROT_NONE,
-                libc::MAP_ANONYMOUS | libc::MAP_PRIVATE,
-                -1,
-                0,
-            );
-            if stack_area_addr == libc::MAP_FAILED {
-                let message = ffi::CString::new("allocate stack area").unwrap();
-                libc::perror(message.as_ptr());
-                panic!();
-            }
-            let stack_start_addr = ((stack_area_addr as usize) + 4096) as *mut libc::c_void;
-            let ret = libc::mprotect(
-                stack_start_addr,
-                4096 * num_pages,
-                libc::PROT_READ | libc::PROT_WRITE,
-            );
-            if ret != 0 {
-                let message = ffi::CString::new("stack protection mode").unwrap();
-                libc::perror(message.as_ptr());
-                panic!();
-            }
-            stack_start_addr as *mut ()
-        }
-    }
-}
-
 fn create_light_weight_thread_context(
     global_context: GlobalContextPtr,
     entry_func: FunctionObject,
@@ -232,7 +180,7 @@ fn execute(ctx: &mut LightWeightThreadContext) {
 
 #[cfg_attr(not(test), unsafe(no_mangle))]
 fn main() {
-    let allocator = Box::new(RuntimeObjectAllocator::new());
+    let allocator = ObjectAllocator::new();
     let global_context = global_context::create_global_context(allocator);
 
     let init_func = unsafe { runtime_info_get_init_point() };
@@ -273,63 +221,9 @@ fn main() {
 mod tests {
     use super::*;
 
-    struct AllocatedObject {
-        ptr: *mut (),
-        size: usize,
-        destructor: fn(*mut ()),
-    }
-
-    struct MockObjectAllocator {
-        allocated_objects: Vec<AllocatedObject>,
-    }
-
-    impl MockObjectAllocator {
-        fn new() -> Self {
-            MockObjectAllocator {
-                allocated_objects: Vec::new(),
-            }
-        }
-    }
-
-    impl ObjectAllocator for MockObjectAllocator {
-        fn allocate(&mut self, size: usize, destructor: fn(*mut ())) -> *mut () {
-            let alignment = mem::align_of::<isize>();
-            let size = size.div_ceil(alignment) * alignment;
-            let buf: Vec<isize> = vec![0; size];
-            let ptr = buf.leak().as_mut_ptr() as *mut ();
-            self.allocated_objects.push(AllocatedObject {
-                ptr,
-                size,
-                destructor,
-            });
-            ptr
-        }
-
-        fn allocate_guarded_pages(&mut self, num_pages: usize) -> *mut () {
-            let size = num_pages * 4096;
-            self.allocate(size, |_| {})
-        }
-    }
-
-    impl Drop for MockObjectAllocator {
-        fn drop(&mut self) {
-            for allocated_object in &self.allocated_objects {
-                (allocated_object.destructor)(allocated_object.ptr);
-                unsafe {
-                    Vec::from_raw_parts(
-                        allocated_object.ptr as *mut isize,
-                        0,
-                        allocated_object.size,
-                    );
-                }
-            }
-        }
-    }
-
     #[test]
     fn test_create_light_weight_thread_context() {
-        let allocator = Box::new(MockObjectAllocator::new());
-        let global_context = global_context::create_global_context(allocator);
+        let global_context = global_context::create_global_context(ObjectAllocator::new());
         let func = FunctionObject::from_user_function(UserFunction::new(user_function));
         let ctx = create_light_weight_thread_context(global_context.dupulicate(), func);
         assert_eq!(ctx.id(), 0);
@@ -348,8 +242,7 @@ mod tests {
 
     #[test]
     fn test_invoke_user_function() {
-        let allocator = Box::new(MockObjectAllocator::new());
-        let global_context = global_context::create_global_context(allocator);
+        let global_context = global_context::create_global_context(ObjectAllocator::new());
         let mut ctx = create_light_weight_thread_context(
             global_context.dupulicate(),
             FunctionObject::new_null(),

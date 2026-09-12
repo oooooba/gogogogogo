@@ -1,7 +1,7 @@
 use std::mem;
 use std::slice;
 
-use crate::ObjectAllocator;
+use crate::ObjectAllocatorPtr;
 use crate::ObjectPtr;
 
 #[derive(Debug)]
@@ -19,7 +19,7 @@ struct BufferedChannel {
 }
 
 impl BufferedChannel {
-    pub fn new(capacity: usize, allocator: &mut dyn ObjectAllocator) -> Self {
+    pub fn new(capacity: usize, allocator: &ObjectAllocatorPtr) -> Self {
         assert!(capacity > 0);
         let size = mem::size_of::<ObjectPtr>() * capacity;
         let buffer = allocator.allocate(size, |_| {}) as *mut ObjectPtr;
@@ -179,7 +179,7 @@ pub(crate) struct ChannelObject {
 }
 
 impl ChannelObject {
-    pub fn new(capacity: usize, allocator: &mut dyn ObjectAllocator) -> Self {
+    pub fn new(capacity: usize, allocator: &ObjectAllocatorPtr) -> Self {
         let channel_type = if capacity > 0 {
             ChannelType::Buffered(BufferedChannel::new(capacity, allocator))
         } else {
@@ -235,6 +235,7 @@ impl ChannelObject {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ObjectAllocator;
 
     use std::cell::RefCell;
     use std::ptr;
@@ -249,64 +250,12 @@ mod tests {
 
     impl<T> Eq for ReceiveStatus<T> {}
 
-    struct AllocatedObject {
-        ptr: *mut (),
-        size: usize,
-        destructor: fn(*mut ()),
-    }
-
-    struct MockObjectAllocator {
-        allocated_objects: Vec<AllocatedObject>,
-    }
-
-    impl MockObjectAllocator {
-        fn new() -> Self {
-            MockObjectAllocator {
-                allocated_objects: Vec::new(),
-            }
-        }
-    }
-
-    impl ObjectAllocator for MockObjectAllocator {
-        fn allocate(&mut self, size: usize, destructor: fn(*mut ())) -> *mut () {
-            let alignment = mem::align_of::<isize>();
-            let size = size.div_ceil(alignment) * alignment;
-            let buf: Vec<isize> = vec![0; size];
-            let ptr = buf.leak().as_mut_ptr() as *mut ();
-            self.allocated_objects.push(AllocatedObject {
-                ptr,
-                size,
-                destructor,
-            });
-            ptr
-        }
-
-        fn allocate_guarded_pages(&mut self, _num_pages: usize) -> *mut () {
-            unimplemented!()
-        }
-    }
-
-    impl Drop for MockObjectAllocator {
-        fn drop(&mut self) {
-            for allocated_object in &self.allocated_objects {
-                (allocated_object.destructor)(allocated_object.ptr);
-                unsafe {
-                    Vec::from_raw_parts(
-                        allocated_object.ptr as *mut isize,
-                        0,
-                        allocated_object.size,
-                    );
-                }
-            }
-        }
-    }
-
     #[test]
     fn test_buffered_channel_send_receive() {
-        let mut allocator = MockObjectAllocator::new();
-        let channel = Rc::new(RefCell::new(ChannelObject::new(1, &mut allocator)));
+        let mut allocator = ObjectAllocator::new();
+        let channel = Rc::new(RefCell::new(ChannelObject::new(1, &allocator.ptr())));
         {
-            let data = allocator.allocate(mem::size_of::<isize>(), |_| {}) as *mut isize;
+            let data = allocator.ptr().allocate(mem::size_of::<isize>(), |_| {}) as *mut isize;
             unsafe { *data = 42 };
             let data = ObjectPtr(data as *mut ());
             let result = channel.borrow_mut().send(1, data);
@@ -324,10 +273,10 @@ mod tests {
     #[test]
     fn test_buffered_channel_order() {
         let capacity = 10;
-        let mut allocator = MockObjectAllocator::new();
-        let channel = Rc::new(RefCell::new(ChannelObject::new(capacity, &mut allocator)));
+        let mut allocator = ObjectAllocator::new();
+        let channel = Rc::new(RefCell::new(ChannelObject::new(capacity, &allocator.ptr())));
         for i in 0..capacity {
-            let data = allocator.allocate(mem::size_of::<isize>(), |_| {}) as *mut isize;
+            let data = allocator.ptr().allocate(mem::size_of::<isize>(), |_| {}) as *mut isize;
             unsafe { *data = i as isize };
             let data = ObjectPtr(data as *mut ());
             let result = channel.borrow_mut().send(1, data);
@@ -344,12 +293,12 @@ mod tests {
 
     #[test]
     fn test_buffered_channel_first_send_second_receive() {
-        let mut allocator = MockObjectAllocator::new();
-        let channel = Rc::new(RefCell::new(ChannelObject::new(1, &mut allocator)));
+        let mut allocator = ObjectAllocator::new();
+        let channel = Rc::new(RefCell::new(ChannelObject::new(1, &allocator.ptr())));
         let first = channel.clone();
         let second = channel;
         {
-            let data = allocator.allocate(mem::size_of::<isize>(), |_| {}) as *mut isize;
+            let data = allocator.ptr().allocate(mem::size_of::<isize>(), |_| {}) as *mut isize;
             unsafe { *data = 42 };
             let data = ObjectPtr(data as *mut ());
             let result = first.borrow_mut().send(1, data);
@@ -366,8 +315,8 @@ mod tests {
 
     #[test]
     fn test_buffered_channel_first_receive_second_send() {
-        let mut allocator = MockObjectAllocator::new();
-        let channel = Rc::new(RefCell::new(ChannelObject::new(1, &mut allocator)));
+        let mut allocator = ObjectAllocator::new();
+        let channel = Rc::new(RefCell::new(ChannelObject::new(1, &allocator.ptr())));
         let first = channel.clone();
         let second = channel;
         {
@@ -375,7 +324,7 @@ mod tests {
             assert_eq!(result, ReceiveStatus::Blocked);
         }
         {
-            let data = allocator.allocate(mem::size_of::<isize>(), |_| {}) as *mut isize;
+            let data = allocator.ptr().allocate(mem::size_of::<isize>(), |_| {}) as *mut isize;
             unsafe { *data = 42 };
             let data = ObjectPtr(data as *mut ());
             let result = second.borrow_mut().send(2, data);
@@ -385,10 +334,10 @@ mod tests {
 
     #[test]
     fn test_buffered_channel_send_close_receive() {
-        let mut allocator = MockObjectAllocator::new();
-        let channel = Rc::new(RefCell::new(ChannelObject::new(1, &mut allocator)));
+        let mut allocator = ObjectAllocator::new();
+        let channel = Rc::new(RefCell::new(ChannelObject::new(1, &allocator.ptr())));
         {
-            let data = allocator.allocate(mem::size_of::<isize>(), |_| {}) as *mut isize;
+            let data = allocator.ptr().allocate(mem::size_of::<isize>(), |_| {}) as *mut isize;
             unsafe { *data = 42 };
             let data = ObjectPtr(data as *mut ());
             let result = channel.borrow_mut().send(1, data);
@@ -412,12 +361,12 @@ mod tests {
 
     #[test]
     fn test_rendezvous_channel_first_send_second_receive() {
-        let mut allocator = MockObjectAllocator::new();
-        let channel = Rc::new(RefCell::new(ChannelObject::new(0, &mut allocator)));
+        let mut allocator = ObjectAllocator::new();
+        let channel = Rc::new(RefCell::new(ChannelObject::new(0, &allocator.ptr())));
         let first = channel.clone();
         let second = channel;
         {
-            let data = allocator.allocate(mem::size_of::<isize>(), |_| {}) as *mut isize;
+            let data = allocator.ptr().allocate(mem::size_of::<isize>(), |_| {}) as *mut isize;
             unsafe { *data = 42 };
             let data = ObjectPtr(data as *mut ());
             let result = first.borrow_mut().send(1, data);
@@ -439,8 +388,8 @@ mod tests {
 
     #[test]
     fn test_rendezvous_channel_first_receive_second_send() {
-        let mut allocator = MockObjectAllocator::new();
-        let channel = Rc::new(RefCell::new(ChannelObject::new(0, &mut allocator)));
+        let mut allocator = ObjectAllocator::new();
+        let channel = Rc::new(RefCell::new(ChannelObject::new(0, &allocator.ptr())));
         let first = channel.clone();
         let second = channel;
         {
@@ -448,7 +397,7 @@ mod tests {
             assert_eq!(result, ReceiveStatus::Blocked);
         }
         {
-            let data = allocator.allocate(mem::size_of::<isize>(), |_| {}) as *mut isize;
+            let data = allocator.ptr().allocate(mem::size_of::<isize>(), |_| {}) as *mut isize;
             unsafe { *data = 42 };
             let data = ObjectPtr(data as *mut ());
             let result = second.borrow_mut().send(2, data);
@@ -465,12 +414,12 @@ mod tests {
 
     #[test]
     fn test_rendezvous_channel_first_send_and_close_second_receive() {
-        let mut allocator = MockObjectAllocator::new();
-        let channel = Rc::new(RefCell::new(ChannelObject::new(0, &mut allocator)));
+        let mut allocator = ObjectAllocator::new();
+        let channel = Rc::new(RefCell::new(ChannelObject::new(0, &allocator.ptr())));
         let first = channel.clone();
         let second = channel;
         {
-            let data = allocator.allocate(mem::size_of::<isize>(), |_| {}) as *mut isize;
+            let data = allocator.ptr().allocate(mem::size_of::<isize>(), |_| {}) as *mut isize;
             unsafe { *data = 42 };
             let data = ObjectPtr(data as *mut ());
             let result = first.borrow_mut().send(1, data);
