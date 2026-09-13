@@ -28,12 +28,9 @@ pub extern "C" fn gox5_closure_new(ctx: &mut LightWeightThreadContext) -> Functi
     let wc_data_size = wc_count * mem::size_of::<*const ()>();
 
     let ptr = ctx.global_context().process(|mut global_context| {
-        global_context.allocator().allocate(
-            mem::size_of::<ClosureLayout>() + wc_data_size,
-            |ptr| unsafe {
-                ptr::drop_in_place(ptr as *mut ClosureLayout);
-            },
-        ) as *mut ClosureLayout
+        global_context
+            .allocator()
+            .allocate(mem::size_of::<ClosureLayout>() + wc_data_size) as *mut ClosureLayout
     });
 
     unsafe {

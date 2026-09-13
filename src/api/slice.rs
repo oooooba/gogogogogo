@@ -30,7 +30,7 @@ pub extern "C" fn gox5_slice_from_string(ctx: &mut LightWeightThreadContext) -> 
     let buffer_size = len * elem_size;
     let ptr = ctx
         .global_context()
-        .process(|mut global_context| global_context.allocator().allocate(buffer_size, |_ptr| {}));
+        .process(|mut global_context| global_context.allocator().allocate(buffer_size));
 
     let mut result = SliceObject::new(ptr, len, len);
     if frame.type_id.size() == mem::size_of::<u8>() {
@@ -72,7 +72,7 @@ fn reallocate_slice(
     let mut result = if new_size > base.capacity() {
         let new_capacity = new_size * 2;
         let buffer_size = new_capacity * elem_size;
-        let ptr = allocator.allocate(buffer_size, |_ptr| {});
+        let ptr = allocator.allocate(buffer_size);
 
         let mut result = SliceObject::new(ptr, new_size, new_capacity);
         result.as_bytes_mut(elem_size).fill(0);
@@ -375,7 +375,7 @@ pub extern "C" fn gox5_slice_new_uninitialized(
     } else {
         let ptr = ctx
             .global_context()
-            .process(|mut global_context| global_context.allocator().allocate(n, |_ptr| {}));
+            .process(|mut global_context| global_context.allocator().allocate(n));
         SliceObject::new(ptr, n, n)
     };
 

@@ -22,7 +22,7 @@ impl BufferedChannel {
     pub fn new(capacity: usize, allocator: &ObjectAllocatorPtr) -> Self {
         assert!(capacity > 0);
         let size = mem::size_of::<ObjectPtr>() * capacity;
-        let buffer = allocator.allocate(size, |_| {}) as *mut ObjectPtr;
+        let buffer = allocator.allocate(size) as *mut ObjectPtr;
         Self {
             buffer,
             capacity,
@@ -255,7 +255,7 @@ mod tests {
         let mut allocator = ObjectAllocator::new();
         let channel = Rc::new(RefCell::new(ChannelObject::new(1, &allocator.ptr())));
         {
-            let data = allocator.ptr().allocate(mem::size_of::<isize>(), |_| {}) as *mut isize;
+            let data = allocator.ptr().allocate(mem::size_of::<isize>()) as *mut isize;
             unsafe { *data = 42 };
             let data = ObjectPtr(data as *mut ());
             let result = channel.borrow_mut().send(1, data);
@@ -276,7 +276,7 @@ mod tests {
         let mut allocator = ObjectAllocator::new();
         let channel = Rc::new(RefCell::new(ChannelObject::new(capacity, &allocator.ptr())));
         for i in 0..capacity {
-            let data = allocator.ptr().allocate(mem::size_of::<isize>(), |_| {}) as *mut isize;
+            let data = allocator.ptr().allocate(mem::size_of::<isize>()) as *mut isize;
             unsafe { *data = i as isize };
             let data = ObjectPtr(data as *mut ());
             let result = channel.borrow_mut().send(1, data);
@@ -298,7 +298,7 @@ mod tests {
         let first = channel.clone();
         let second = channel;
         {
-            let data = allocator.ptr().allocate(mem::size_of::<isize>(), |_| {}) as *mut isize;
+            let data = allocator.ptr().allocate(mem::size_of::<isize>()) as *mut isize;
             unsafe { *data = 42 };
             let data = ObjectPtr(data as *mut ());
             let result = first.borrow_mut().send(1, data);
@@ -324,7 +324,7 @@ mod tests {
             assert_eq!(result, ReceiveStatus::Blocked);
         }
         {
-            let data = allocator.ptr().allocate(mem::size_of::<isize>(), |_| {}) as *mut isize;
+            let data = allocator.ptr().allocate(mem::size_of::<isize>()) as *mut isize;
             unsafe { *data = 42 };
             let data = ObjectPtr(data as *mut ());
             let result = second.borrow_mut().send(2, data);
@@ -337,7 +337,7 @@ mod tests {
         let mut allocator = ObjectAllocator::new();
         let channel = Rc::new(RefCell::new(ChannelObject::new(1, &allocator.ptr())));
         {
-            let data = allocator.ptr().allocate(mem::size_of::<isize>(), |_| {}) as *mut isize;
+            let data = allocator.ptr().allocate(mem::size_of::<isize>()) as *mut isize;
             unsafe { *data = 42 };
             let data = ObjectPtr(data as *mut ());
             let result = channel.borrow_mut().send(1, data);
@@ -366,7 +366,7 @@ mod tests {
         let first = channel.clone();
         let second = channel;
         {
-            let data = allocator.ptr().allocate(mem::size_of::<isize>(), |_| {}) as *mut isize;
+            let data = allocator.ptr().allocate(mem::size_of::<isize>()) as *mut isize;
             unsafe { *data = 42 };
             let data = ObjectPtr(data as *mut ());
             let result = first.borrow_mut().send(1, data);
@@ -397,7 +397,7 @@ mod tests {
             assert_eq!(result, ReceiveStatus::Blocked);
         }
         {
-            let data = allocator.ptr().allocate(mem::size_of::<isize>(), |_| {}) as *mut isize;
+            let data = allocator.ptr().allocate(mem::size_of::<isize>()) as *mut isize;
             unsafe { *data = 42 };
             let data = ObjectPtr(data as *mut ());
             let result = second.borrow_mut().send(2, data);
@@ -419,7 +419,7 @@ mod tests {
         let first = channel.clone();
         let second = channel;
         {
-            let data = allocator.ptr().allocate(mem::size_of::<isize>(), |_| {}) as *mut isize;
+            let data = allocator.ptr().allocate(mem::size_of::<isize>()) as *mut isize;
             unsafe { *data = 42 };
             let data = ObjectPtr(data as *mut ());
             let result = first.borrow_mut().send(1, data);

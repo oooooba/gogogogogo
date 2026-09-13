@@ -19,7 +19,7 @@ where
         let allocator = global_context.allocator();
         let args = unsafe { WordChunk::duplicate_raw(args, &allocator) };
         let entry_ptr =
-            allocator.allocate(mem::size_of::<DeferStackEntry>(), |_| {}) as *mut DeferStackEntry;
+            allocator.allocate(mem::size_of::<DeferStackEntry>()) as *mut DeferStackEntry;
         (args, entry_ptr)
     });
 

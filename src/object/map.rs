@@ -78,14 +78,14 @@ impl MapObject {
     pub fn set(&mut self, key: ObjectPtr, value: ObjectPtr) {
         let allocator = self.map.allocator().clone();
         let key_object_size = self.key_type.size();
-        let key_ptr = allocator.allocate(key_object_size, |_| {}) as *mut u8;
+        let key_ptr = allocator.allocate(key_object_size) as *mut u8;
         let src = unsafe { slice::from_raw_parts(key.0 as *const u8, key_object_size) };
         let dst = unsafe { slice::from_raw_parts_mut(key_ptr, key_object_size) };
         dst.copy_from_slice(src);
         let key = ObjectPtr(key_ptr as *mut ());
 
         let value_object_size = self.value_type.size();
-        let value_ptr = allocator.allocate(value_object_size, |_| {}) as *mut u8;
+        let value_ptr = allocator.allocate(value_object_size) as *mut u8;
         let src = unsafe { slice::from_raw_parts(value.0 as *const u8, value_object_size) };
         let dst = unsafe { slice::from_raw_parts_mut(value_ptr, value_object_size) };
         dst.copy_from_slice(src);
@@ -190,13 +190,13 @@ mod tests {
     }
 
     fn make_isize_ptr(allocator: &ObjectAllocatorPtr, value: isize) -> ObjectPtr {
-        let ptr = allocator.allocate(mem::size_of::<isize>(), |_| {}) as *mut isize;
+        let ptr = allocator.allocate(mem::size_of::<isize>()) as *mut isize;
         unsafe { *ptr = value };
         ObjectPtr(ptr as *mut ())
     }
 
     fn make_result_ptr(allocator: &ObjectAllocatorPtr) -> ObjectPtr {
-        let ptr = allocator.allocate(mem::size_of::<isize>(), |_| {}) as *mut isize;
+        let ptr = allocator.allocate(mem::size_of::<isize>()) as *mut isize;
         ObjectPtr(ptr as *mut ())
     }
 

@@ -29,10 +29,9 @@ pub extern "C" fn gox5_coro_new(ctx: &mut LightWeightThreadContext) -> FunctionO
     let slot = ctx
         .global_context()
         .process(|mut gc| gc.reserve_coro_slot());
-    let coro = ctx.global_context().process(|mut gc| {
-        gc.allocator()
-            .allocate(mem::size_of::<CoroObject>(), |_| {})
-    });
+    let coro = ctx
+        .global_context()
+        .process(|mut gc| gc.allocator().allocate(mem::size_of::<CoroObject>()));
     unsafe {
         ptr::write(coro as *mut CoroObject, CoroObject { slot });
     }

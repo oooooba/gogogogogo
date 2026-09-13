@@ -19,7 +19,7 @@ pub extern "C" fn gox5_new(ctx: &mut LightWeightThreadContext) -> FunctionObject
 
     let ptr = ctx
         .global_context()
-        .process(|mut global_context| global_context.allocator().allocate(size, |_ptr| {}));
+        .process(|mut global_context| global_context.allocator().allocate(size));
     let bytes = unsafe { slice::from_raw_parts_mut(ptr as *mut u8, size) };
     bytes.fill(0);
 

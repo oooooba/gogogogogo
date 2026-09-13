@@ -49,7 +49,7 @@ pub(crate) struct StringObjectBuilder {
 
 impl StringObjectBuilder {
     fn new(len_in_bytes: usize, allocator: &ObjectAllocatorPtr) -> Self {
-        let ptr = allocator.allocate(len_in_bytes + 1, |_| {}) as *mut u8;
+        let ptr = allocator.allocate(len_in_bytes + 1) as *mut u8;
         Self {
             ptr,
             len_in_bytes,

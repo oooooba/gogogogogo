@@ -20,11 +20,7 @@ struct StackFrameMapNew<'a> {
 fn allocate_map(ctx: &mut LightWeightThreadContext, map: MapObject) -> *mut MapObject {
     let object_size = mem::size_of::<MapObject>();
     let ptr = ctx.global_context().process(|mut global_context| {
-        global_context
-            .allocator()
-            .allocate(object_size, |ptr| unsafe {
-                ptr::drop_in_place(ptr as *mut MapObject)
-            }) as *mut MapObject
+        global_context.allocator().allocate(object_size) as *mut MapObject
     });
 
     unsafe {
@@ -98,7 +94,7 @@ pub extern "C" fn gox5_map_clone(ctx: &mut LightWeightThreadContext) -> Function
     let slot_size = mem::size_of::<*mut ()>();
     let slot = ctx
         .global_context()
-        .process(|mut global_context| global_context.allocator().allocate(slot_size, |_ptr| {}));
+        .process(|mut global_context| global_context.allocator().allocate(slot_size));
     unsafe {
         *(slot as *mut *mut ()) = ptr as *mut ();
     }
@@ -314,9 +310,7 @@ mod tests {
 
     fn make_map_ptr(allocator: &ObjectAllocatorPtr, map: MapObject) -> ObjectPtr {
         let size = mem::size_of::<MapObject>();
-        let ptr = allocator.allocate(size, |ptr| unsafe {
-            ptr::drop_in_place(ptr as *mut MapObject);
-        }) as *mut MapObject;
+        let ptr = allocator.allocate(size) as *mut MapObject;
         unsafe {
             ptr::write(ptr, map);
         }
@@ -324,7 +318,7 @@ mod tests {
     }
 
     fn make_isize_ptr(allocator: &ObjectAllocatorPtr, value: isize) -> ObjectPtr {
-        let ptr = allocator.allocate(mem::size_of::<isize>(), |_| {}) as *mut isize;
+        let ptr = allocator.allocate(mem::size_of::<isize>()) as *mut isize;
         unsafe { *ptr = value };
         ObjectPtr(ptr as *mut ())
     }

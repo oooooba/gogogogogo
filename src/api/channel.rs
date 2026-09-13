@@ -1,6 +1,5 @@
 use core::slice;
 use std::mem;
-use std::ptr;
 
 use crate::FunctionObject;
 use crate::LightWeightThreadContext;
@@ -22,11 +21,7 @@ struct StackFrameChannelNew<'a> {
 fn allocate_channel(ctx: &mut LightWeightThreadContext, capacity: usize) -> *mut ChannelObject {
     let object_size = mem::size_of::<ChannelObject>();
     let ptr = ctx.global_context().process(|mut global_context| {
-        global_context
-            .allocator()
-            .allocate(object_size, |ptr| unsafe {
-                ptr::drop_in_place(ptr as *mut ChannelObject)
-            }) as *mut ChannelObject
+        global_context.allocator().allocate(object_size) as *mut ChannelObject
     });
 
     let channel = ctx
@@ -57,7 +52,7 @@ pub extern "C" fn gox5_channel_new(ctx: &mut LightWeightThreadContext) -> Functi
 fn load_send_data(src: ObjectPtr, size: usize, ctx: &mut LightWeightThreadContext) -> ObjectPtr {
     let dst = ctx
         .global_context()
-        .process(|mut global_context| global_context.allocator().allocate(size, |_| {}));
+        .process(|mut global_context| global_context.allocator().allocate(size));
     let src_slice = unsafe { slice::from_raw_parts(src.as_ref::<u8>(), size) };
     let dst_slice = unsafe { slice::from_raw_parts_mut(dst as *mut u8, size) };
     dst_slice.copy_from_slice(src_slice);
@@ -254,6 +249,7 @@ pub extern "C" fn gox5_channel_send(ctx: &mut LightWeightThreadContext) -> Funct
 mod tests {
     use super::*;
     use crate::object::interface::Interface;
+    use std::ptr;
 
     #[test]
     fn test_store_receive_data_with_data() {

@@ -35,7 +35,6 @@ struct ObjectAllocatorInner {
 struct AllocatedObject {
     ptr: *mut (),
     size: usize,
-    destructor: fn(*mut ()),
     kind: AllocationKind,
 }
 
@@ -54,7 +53,7 @@ impl ObjectAllocatorInner {
         }
     }
 
-    fn allocate(&mut self, size: usize, destructor: fn(*mut ())) -> *mut () {
+    fn allocate(&mut self, size: usize) -> *mut () {
         let size = size.div_ceil(ALLOCATION_ALIGNMENT) * ALLOCATION_ALIGNMENT;
         let buf: Vec<u128> = vec![0; size / ALLOCATION_ALIGNMENT];
         let ptr = buf.leak().as_mut_ptr();
@@ -64,7 +63,6 @@ impl ObjectAllocatorInner {
             AllocatedObject {
                 ptr,
                 size,
-                destructor,
                 kind: AllocationKind::Heap,
             },
         );
@@ -111,7 +109,6 @@ impl ObjectAllocatorInner {
                 AllocatedObject {
                     ptr,
                     size: 4096 * num_pages,
-                    destructor: |_| {},
                     kind: AllocationKind::GuardedPages,
                 },
             );
@@ -121,7 +118,6 @@ impl ObjectAllocatorInner {
 
     fn free_all_allocated_objects(&mut self) {
         for object in self.allocated_objects.values() {
-            (object.destructor)(object.ptr);
             match object.kind {
                 AllocationKind::Heap => unsafe {
                     Vec::from_raw_parts(
@@ -145,8 +141,8 @@ impl ObjectAllocatorInner {
 pub(crate) struct ObjectAllocatorPtr(*mut ObjectAllocatorInner);
 
 impl ObjectAllocatorPtr {
-    pub(crate) fn allocate(&self, size: usize, destructor: fn(*mut ())) -> *mut () {
-        unsafe { &mut *self.0 }.allocate(size, destructor)
+    pub(crate) fn allocate(&self, size: usize) -> *mut () {
+        unsafe { &mut *self.0 }.allocate(size)
     }
 
     pub(crate) fn allocate_guarded_pages(&self, num_pages: usize) -> *mut () {
@@ -157,10 +153,10 @@ impl ObjectAllocatorPtr {
 unsafe impl Allocator for ObjectAllocatorPtr {
     fn allocate(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
         let ptr = if layout.align() <= ALLOCATION_ALIGNMENT {
-            self.allocate(layout.size(), |_| {})
+            self.allocate(layout.size())
         } else {
             let total = layout.size() + layout.align();
-            let base = self.allocate(total, |_| {}) as usize;
+            let base = self.allocate(total) as usize;
             let offset = (base as *const u8).align_offset(layout.align());
             assert!(offset < layout.align());
             (base + offset) as *mut ()
