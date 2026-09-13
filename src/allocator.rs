@@ -30,11 +30,16 @@ impl Drop for ObjectAllocator {
 
 struct ObjectAllocatorInner {
     allocated_objects: BTreeMap<usize, AllocatedObject>,
+    global_spans: Vec<Span>,
+}
+
+struct Span {
+    ptr: *mut (),
+    size: usize,
 }
 
 struct AllocatedObject {
-    ptr: *mut (),
-    size: usize,
+    span: Span,
     kind: AllocationKind,
     marked: bool,
 }
@@ -51,6 +56,7 @@ impl ObjectAllocatorInner {
     fn new() -> Self {
         ObjectAllocatorInner {
             allocated_objects: BTreeMap::new(),
+            global_spans: Vec::new(),
         }
     }
 
@@ -65,8 +71,7 @@ impl ObjectAllocatorInner {
         self.allocated_objects.insert(
             ptr as usize,
             AllocatedObject {
-                ptr,
-                size,
+                span: Span { ptr, size },
                 kind: AllocationKind::Heap,
                 marked: false,
             },
@@ -112,8 +117,10 @@ impl ObjectAllocatorInner {
             self.allocated_objects.insert(
                 ptr as usize,
                 AllocatedObject {
-                    ptr,
-                    size: 4096 * num_pages,
+                    span: Span {
+                        ptr,
+                        size: 4096 * num_pages,
+                    },
                     kind: AllocationKind::GuardedPages,
                     marked: false,
                 },
@@ -126,15 +133,15 @@ impl ObjectAllocatorInner {
         match object.kind {
             AllocationKind::Heap => unsafe {
                 Vec::from_raw_parts(
-                    object.ptr as *mut u128,
+                    object.span.ptr as *mut u128,
                     0,
-                    object.size / ALLOCATION_ALIGNMENT,
+                    object.span.size / ALLOCATION_ALIGNMENT,
                 );
             },
             AllocationKind::GuardedPages => {
-                let base_addr = (object.ptr as usize - 4096) as *mut libc::c_void;
+                let base_addr = (object.span.ptr as usize - 4096) as *mut libc::c_void;
                 unsafe {
-                    libc::munmap(base_addr, object.size + 4096);
+                    libc::munmap(base_addr, object.span.size + 4096);
                 }
             }
         }
@@ -149,6 +156,10 @@ impl ObjectAllocatorInner {
                 false
             }
         });
+    }
+
+    fn register_global_object(&mut self, address: *mut (), size: usize) {
+        self.global_spans.push(Span { ptr: address, size });
     }
 
     fn free_all_allocated_objects(&mut self) {
@@ -169,6 +180,15 @@ impl ObjectAllocatorPtr {
 
     pub(crate) fn allocate_guarded_pages(&self, num_pages: usize) -> *mut () {
         unsafe { &mut *self.0 }.allocate_guarded_pages(num_pages)
+    }
+
+    pub(crate) fn register_global_object(&self, address: *mut (), size: usize) {
+        unsafe { &mut *self.0 }.register_global_object(address, size);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn global_spans_len(&self) -> usize {
+        unsafe { &*self.0 }.global_spans.len()
     }
 }
 
@@ -250,6 +270,19 @@ mod tests {
         unsafe {
             Allocator::deallocate(&allocator, data_ptr(ptr), layout);
         }
+    }
+
+    #[test]
+    fn test_register_global_object() {
+        let mut inner = ObjectAllocatorInner::new();
+        let mut data = [0u8; 24];
+        let address = data.as_mut_ptr() as *mut ();
+        inner.register_global_object(address, data.len());
+        assert_eq!(inner.global_spans.len(), 1);
+        let registered = &inner.global_spans[0];
+        assert_eq!(registered.ptr, address);
+        assert_eq!(registered.size, data.len());
+        assert!(inner.allocated_objects.is_empty());
     }
 
     #[test]

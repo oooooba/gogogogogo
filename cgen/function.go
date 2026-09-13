@@ -236,6 +236,7 @@ func (ctx *Context) emitFunctionDefinition(function *ssa.Function) {
 	storage := functionStorageClass(function)
 	fmt.Fprintf(ctx.stream, "%sFunctionObject %s (LightWeightThreadContext* ctx){\n", storage, createFunctionName(function))
 	fmt.Fprintf(ctx.stream, "\tassert(ctx->marker == 0xdeadbeef);\n")
+	ctx.emitGlobalVariableRegistration(function)
 	fmt.Fprintf(ctx.stream, "\treturn %s;\n", wrapInFunctionObject(createBasicBlockName(function.Blocks[0])))
 	fmt.Fprintf(ctx.stream, "}\n")
 

@@ -18,6 +18,20 @@ func (ctx *Context) emitGlobalVariableDefinition(gv *ssa.Global) {
 	fmt.Fprintf(ctx.stream, "%s %s;\n", createTypeName(gv.Type().(*types.Pointer).Elem()), name)
 }
 
+func (ctx *Context) emitGlobalVariableRegistration(function *ssa.Function) {
+	if function.Name() != "init" || function.Pkg == nil {
+		return
+	}
+	ctx.traversePackageMember(function.Pkg, func(member ssa.Member) {
+		global, ok := member.(*ssa.Global)
+		if !ok {
+			return
+		}
+		name := createValueName(global)
+		fmt.Fprintf(ctx.stream, "\tgox5_gc_register_global_object(ctx, &%s, sizeof(%s));\n", name, name)
+	})
+}
+
 func (ctx *Context) emitRuntimeInfo() {
 	mainPkg := findMainPackage(ctx.program)
 	if mainPkg == nil {

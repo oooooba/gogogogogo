@@ -2,6 +2,7 @@ pub(crate) mod channel;
 pub(crate) mod closure;
 pub(crate) mod coro;
 pub(crate) mod defer;
+pub(crate) mod gc;
 pub(crate) mod interface;
 pub(crate) mod lwt;
 pub(crate) mod map;

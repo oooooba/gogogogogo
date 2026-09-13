@@ -125,6 +125,9 @@ typedef struct {
 const UserFunctionInfo *gox5_runtime_func_for_pc(uintptr_t pc);
 StringObject gox5_runtime_func_name(const UserFunctionInfo *func);
 
+void gox5_gc_register_global_object(LightWeightThreadContext *ctx,
+                                    void *address, size_t size);
+
 typedef struct {
     StackFrameCommon common;
     SliceObject *result_ptr;
