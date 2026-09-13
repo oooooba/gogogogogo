@@ -78,20 +78,31 @@ impl MapObject {
     pub fn set(&mut self, key: ObjectPtr, value: ObjectPtr) {
         let allocator = self.map.allocator().clone();
         let key_object_size = self.key_type.size();
-        let key_ptr = allocator.allocate(key_object_size) as *mut u8;
+        let key_ptr = allocator.allocate(key_object_size);
+        if key_ptr.is_null() {
+            unimplemented!();
+        }
+        let key_ptr = key_ptr as *mut u8;
         let src = unsafe { slice::from_raw_parts(key.0 as *const u8, key_object_size) };
         let dst = unsafe { slice::from_raw_parts_mut(key_ptr, key_object_size) };
         dst.copy_from_slice(src);
         let key = ObjectPtr(key_ptr as *mut ());
 
         let value_object_size = self.value_type.size();
-        let value_ptr = allocator.allocate(value_object_size) as *mut u8;
+        let value_ptr = allocator.allocate(value_object_size);
+        if value_ptr.is_null() {
+            unimplemented!();
+        }
+        let value_ptr = value_ptr as *mut u8;
         let src = unsafe { slice::from_raw_parts(value.0 as *const u8, value_object_size) };
         let dst = unsafe { slice::from_raw_parts_mut(value_ptr, value_object_size) };
         dst.copy_from_slice(src);
         let value = ObjectPtr(value_ptr as *mut ());
 
         let key = Key::new(key, self.key_type);
+        if self.map.try_reserve(1).is_err() {
+            unimplemented!();
+        }
         self.map.insert(key, value);
     }
 

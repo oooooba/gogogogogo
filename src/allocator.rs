@@ -55,9 +55,12 @@ impl ObjectAllocatorInner {
 
     fn allocate(&mut self, size: usize) -> *mut () {
         let size = size.div_ceil(ALLOCATION_ALIGNMENT) * ALLOCATION_ALIGNMENT;
-        let buf: Vec<u128> = vec![0; size / ALLOCATION_ALIGNMENT];
-        let ptr = buf.leak().as_mut_ptr();
-        let ptr = ptr as *mut ();
+        let mut buf: Vec<u128> = Vec::new();
+        if buf.try_reserve_exact(size / ALLOCATION_ALIGNMENT).is_err() {
+            return ptr::null_mut();
+        }
+        buf.resize(size / ALLOCATION_ALIGNMENT, 0);
+        let ptr = buf.leak().as_mut_ptr() as *mut ();
         self.allocated_objects.insert(
             ptr as usize,
             AllocatedObject {
@@ -153,10 +156,18 @@ impl ObjectAllocatorPtr {
 unsafe impl Allocator for ObjectAllocatorPtr {
     fn allocate(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
         let ptr = if layout.align() <= ALLOCATION_ALIGNMENT {
-            self.allocate(layout.size())
+            let ptr = self.allocate(layout.size());
+            if ptr.is_null() {
+                return Err(AllocError);
+            }
+            ptr
         } else {
             let total = layout.size() + layout.align();
-            let base = self.allocate(total) as usize;
+            let base = self.allocate(total);
+            if base.is_null() {
+                return Err(AllocError);
+            }
+            let base = base as usize;
             let offset = (base as *const u8).align_offset(layout.align());
             assert!(offset < layout.align());
             (base + offset) as *mut ()
