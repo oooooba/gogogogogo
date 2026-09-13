@@ -37,7 +37,13 @@ fn allocate_map(ctx: &mut LightWeightThreadContext, map: MapObject) -> *mut MapO
 pub extern "C" fn gox5_map_new(ctx: &mut LightWeightThreadContext) -> FunctionObject {
     let frame = ctx.stack_frame::<StackFrameMapNew>();
 
-    let ptr = allocate_map(ctx, MapObject::new(frame.key_type, frame.value_type));
+    let allocator = ctx
+        .global_context()
+        .process(|mut global_context| global_context.allocator());
+    let ptr = allocate_map(
+        ctx,
+        MapObject::new(frame.key_type, frame.value_type, allocator),
+    );
     let ptr = ObjectPtr(ptr as *mut ());
 
     let frame = ctx.stack_frame_mut::<StackFrameMapNew>();
@@ -236,11 +242,8 @@ pub extern "C" fn gox5_map_set(ctx: &mut LightWeightThreadContext) -> FunctionOb
     let key = frame.key.clone();
     let value = frame.value.clone();
 
-    ctx.global_context().process(|mut global_context| {
-        let map = map.as_mut::<MapObject>();
-        let allocator = global_context.allocator();
-        map.set(key, value, &allocator);
-    });
+    let map = map.as_mut::<MapObject>();
+    map.set(key, value);
 
     ctx.pop_frame()
 }
@@ -356,7 +359,7 @@ mod tests {
     #[test]
     fn test_gox5_map_set_and_len() {
         let mut allocator = ObjectAllocator::new();
-        let map = MapObject::new(test_type_id(), test_type_id());
+        let map = MapObject::new(test_type_id(), test_type_id(), allocator.ptr());
         let map_ptr = make_map_ptr(&allocator.ptr(), map);
 
         let key = make_isize_ptr(&allocator.ptr(), 42);
@@ -379,7 +382,7 @@ mod tests {
     #[test]
     fn test_gox5_map_len_empty() {
         let mut allocator = ObjectAllocator::new();
-        let map = MapObject::new(test_type_id(), test_type_id());
+        let map = MapObject::new(test_type_id(), test_type_id(), allocator.ptr());
         let map_ptr = make_map_ptr(&allocator.ptr(), map);
 
         let (mut ctx, _gc) = create_ctx();
@@ -446,7 +449,7 @@ mod tests {
     #[test]
     fn test_gox5_map_clear() {
         let mut allocator = ObjectAllocator::new();
-        let map = MapObject::new(test_type_id(), test_type_id());
+        let map = MapObject::new(test_type_id(), test_type_id(), allocator.ptr());
         let map_ptr = make_map_ptr(&allocator.ptr(), map);
 
         let (mut ctx, _gc) = create_ctx();

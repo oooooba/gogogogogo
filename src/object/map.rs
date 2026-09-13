@@ -1,6 +1,7 @@
-use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::slice;
+
+use hashbrown::HashMap;
 
 use crate::type_id::TypeId;
 use crate::{ObjectAllocatorPtr, ObjectPtr};
@@ -36,16 +37,16 @@ impl Hash for Key {
 
 #[derive(Clone)]
 pub(crate) struct MapObject {
-    map: HashMap<Key, ObjectPtr>,
+    map: HashMap<Key, ObjectPtr, hashbrown::DefaultHashBuilder, ObjectAllocatorPtr>,
     key_type: TypeId,
     value_type: TypeId,
     iteration_snapshot: Option<Vec<(ObjectPtr, ObjectPtr)>>,
 }
 
 impl MapObject {
-    pub fn new(key_type: TypeId, value_type: TypeId) -> Self {
+    pub fn new(key_type: TypeId, value_type: TypeId, allocator: ObjectAllocatorPtr) -> Self {
         MapObject {
-            map: HashMap::new(),
+            map: HashMap::new_in(allocator),
             key_type,
             value_type,
             iteration_snapshot: None,
@@ -74,7 +75,8 @@ impl MapObject {
         }
     }
 
-    pub fn set(&mut self, key: ObjectPtr, value: ObjectPtr, allocator: &ObjectAllocatorPtr) {
+    pub fn set(&mut self, key: ObjectPtr, value: ObjectPtr) {
+        let allocator = self.map.allocator().clone();
         let key_object_size = self.key_type.size();
         let key_ptr = allocator.allocate(key_object_size, |_| {}) as *mut u8;
         let src = unsafe { slice::from_raw_parts(key.0 as *const u8, key_object_size) };
@@ -200,17 +202,18 @@ mod tests {
 
     #[test]
     fn test_map_new() {
-        let map = MapObject::new(test_type_id(), test_type_id());
+        let mut allocator = ObjectAllocator::new();
+        let map = MapObject::new(test_type_id(), test_type_id(), allocator.ptr());
         assert_eq!(map.len(), 0);
     }
 
     #[test]
     fn test_map_set_get() {
         let mut allocator = ObjectAllocator::new();
-        let mut map = MapObject::new(test_type_id(), test_type_id());
+        let mut map = MapObject::new(test_type_id(), test_type_id(), allocator.ptr());
         let key = make_isize_ptr(&allocator.ptr(), 1);
         let value = make_isize_ptr(&allocator.ptr(), 100);
-        map.set(key.clone(), value, &allocator.ptr());
+        map.set(key.clone(), value);
         assert_eq!(map.len(), 1);
         let result = make_result_ptr(&allocator.ptr());
         assert!(map.get(key.clone(), result.clone()));
@@ -220,7 +223,7 @@ mod tests {
     #[test]
     fn test_map_get_nonexistent() {
         let mut allocator = ObjectAllocator::new();
-        let map = MapObject::new(test_type_id(), test_type_id());
+        let map = MapObject::new(test_type_id(), test_type_id(), allocator.ptr());
         let key = make_isize_ptr(&allocator.ptr(), 1);
         let result = make_result_ptr(&allocator.ptr());
         assert!(!map.get(key, result));
@@ -229,12 +232,12 @@ mod tests {
     #[test]
     fn test_map_set_overwrite() {
         let mut allocator = ObjectAllocator::new();
-        let mut map = MapObject::new(test_type_id(), test_type_id());
+        let mut map = MapObject::new(test_type_id(), test_type_id(), allocator.ptr());
         let key = make_isize_ptr(&allocator.ptr(), 1);
         let value1 = make_isize_ptr(&allocator.ptr(), 100);
-        map.set(key.clone(), value1, &allocator.ptr());
+        map.set(key.clone(), value1);
         let value2 = make_isize_ptr(&allocator.ptr(), 200);
-        map.set(key.clone(), value2, &allocator.ptr());
+        map.set(key.clone(), value2);
         assert_eq!(map.len(), 1);
         let result = make_result_ptr(&allocator.ptr());
         assert!(map.get(key, result.clone()));
@@ -244,10 +247,10 @@ mod tests {
     #[test]
     fn test_map_delete() {
         let mut allocator = ObjectAllocator::new();
-        let mut map = MapObject::new(test_type_id(), test_type_id());
+        let mut map = MapObject::new(test_type_id(), test_type_id(), allocator.ptr());
         let key = make_isize_ptr(&allocator.ptr(), 1);
         let value = make_isize_ptr(&allocator.ptr(), 100);
-        map.set(key.clone(), value, &allocator.ptr());
+        map.set(key.clone(), value);
         assert_eq!(map.len(), 1);
         map.delete(key.clone());
         assert_eq!(map.len(), 0);
@@ -258,7 +261,7 @@ mod tests {
     #[test]
     fn test_map_delete_nonexistent() {
         let mut allocator = ObjectAllocator::new();
-        let mut map = MapObject::new(test_type_id(), test_type_id());
+        let mut map = MapObject::new(test_type_id(), test_type_id(), allocator.ptr());
         let key = make_isize_ptr(&allocator.ptr(), 999);
         map.delete(key);
         assert_eq!(map.len(), 0);
@@ -267,13 +270,13 @@ mod tests {
     #[test]
     fn test_map_nth() {
         let mut allocator = ObjectAllocator::new();
-        let mut map = MapObject::new(test_type_id(), test_type_id());
+        let mut map = MapObject::new(test_type_id(), test_type_id(), allocator.ptr());
         let key1 = make_isize_ptr(&allocator.ptr(), 1);
         let value1 = make_isize_ptr(&allocator.ptr(), 10);
-        map.set(key1, value1, &allocator.ptr());
+        map.set(key1, value1);
         let key2 = make_isize_ptr(&allocator.ptr(), 2);
         let value2 = make_isize_ptr(&allocator.ptr(), 20);
-        map.set(key2, value2, &allocator.ptr());
+        map.set(key2, value2);
         let out_key = make_result_ptr(&allocator.ptr());
         let out_value = make_result_ptr(&allocator.ptr());
         assert!(map.nth(out_key.clone(), out_value.clone(), 0));
@@ -284,10 +287,10 @@ mod tests {
     #[test]
     fn test_map_nth_null_key() {
         let mut allocator = ObjectAllocator::new();
-        let mut map = MapObject::new(test_type_id(), test_type_id());
+        let mut map = MapObject::new(test_type_id(), test_type_id(), allocator.ptr());
         let key = make_isize_ptr(&allocator.ptr(), 1);
         let value = make_isize_ptr(&allocator.ptr(), 10);
-        map.set(key, value, &allocator.ptr());
+        map.set(key, value);
         let out_value = make_result_ptr(&allocator.ptr());
         assert!(map.nth(ObjectPtr(ptr::null_mut()), out_value, 0));
     }
@@ -295,10 +298,10 @@ mod tests {
     #[test]
     fn test_map_nth_null_value() {
         let mut allocator = ObjectAllocator::new();
-        let mut map = MapObject::new(test_type_id(), test_type_id());
+        let mut map = MapObject::new(test_type_id(), test_type_id(), allocator.ptr());
         let key = make_isize_ptr(&allocator.ptr(), 1);
         let value = make_isize_ptr(&allocator.ptr(), 10);
-        map.set(key, value, &allocator.ptr());
+        map.set(key, value);
         let out_key = make_result_ptr(&allocator.ptr());
         assert!(map.nth(out_key, ObjectPtr(ptr::null_mut()), 0));
     }
@@ -306,11 +309,11 @@ mod tests {
     #[test]
     fn test_map_clear() {
         let mut allocator = ObjectAllocator::new();
-        let mut map = MapObject::new(test_type_id(), test_type_id());
+        let mut map = MapObject::new(test_type_id(), test_type_id(), allocator.ptr());
         for (k, v) in [(1isize, 10isize), (2, 20), (3, 30)] {
             let key = make_isize_ptr(&allocator.ptr(), k);
             let value = make_isize_ptr(&allocator.ptr(), v);
-            map.set(key, value, &allocator.ptr());
+            map.set(key, value);
         }
         assert_eq!(map.len(), 3);
 
@@ -325,13 +328,13 @@ mod tests {
     #[test]
     fn test_map_clear_resets_iteration() {
         let mut allocator = ObjectAllocator::new();
-        let mut map = MapObject::new(test_type_id(), test_type_id());
+        let mut map = MapObject::new(test_type_id(), test_type_id(), allocator.ptr());
         let key1 = make_isize_ptr(&allocator.ptr(), 1);
         let value1 = make_isize_ptr(&allocator.ptr(), 10);
-        map.set(key1, value1, &allocator.ptr());
+        map.set(key1, value1);
         let key2 = make_isize_ptr(&allocator.ptr(), 2);
         let value2 = make_isize_ptr(&allocator.ptr(), 20);
-        map.set(key2, value2, &allocator.ptr());
+        map.set(key2, value2);
 
         let out_key = make_result_ptr(&allocator.ptr());
         let out_value = make_result_ptr(&allocator.ptr());
