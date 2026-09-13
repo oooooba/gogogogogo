@@ -36,6 +36,7 @@ struct AllocatedObject {
     ptr: *mut (),
     size: usize,
     kind: AllocationKind,
+    marked: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -67,6 +68,7 @@ impl ObjectAllocatorInner {
                 ptr,
                 size,
                 kind: AllocationKind::Heap,
+                marked: false,
             },
         );
         ptr
@@ -113,30 +115,47 @@ impl ObjectAllocatorInner {
                     ptr,
                     size: 4096 * num_pages,
                     kind: AllocationKind::GuardedPages,
+                    marked: false,
                 },
             );
             ptr
         }
     }
 
-    fn free_all_allocated_objects(&mut self) {
-        for object in self.allocated_objects.values() {
-            match object.kind {
-                AllocationKind::Heap => unsafe {
-                    Vec::from_raw_parts(
-                        object.ptr as *mut u128,
-                        0,
-                        object.size / ALLOCATION_ALIGNMENT,
-                    );
-                },
-                AllocationKind::GuardedPages => {
-                    let base_addr = (object.ptr as usize - 4096) as *mut libc::c_void;
-                    unsafe {
-                        libc::munmap(base_addr, object.size + 4096);
-                    }
+    fn free(object: &AllocatedObject) {
+        match object.kind {
+            AllocationKind::Heap => unsafe {
+                Vec::from_raw_parts(
+                    object.ptr as *mut u128,
+                    0,
+                    object.size / ALLOCATION_ALIGNMENT,
+                );
+            },
+            AllocationKind::GuardedPages => {
+                let base_addr = (object.ptr as usize - 4096) as *mut libc::c_void;
+                unsafe {
+                    libc::munmap(base_addr, object.size + 4096);
                 }
             }
         }
+    }
+
+    fn sweep(&mut self) {
+        self.allocated_objects.retain(|_, object| {
+            if object.marked {
+                true
+            } else {
+                Self::free(object);
+                false
+            }
+        });
+    }
+
+    fn free_all_allocated_objects(&mut self) {
+        for object in self.allocated_objects.values_mut() {
+            object.marked = false;
+        }
+        self.sweep();
     }
 }
 
@@ -231,6 +250,41 @@ mod tests {
         unsafe {
             Allocator::deallocate(&allocator, data_ptr(ptr), layout);
         }
+    }
+
+    #[test]
+    fn test_sweep_frees_unmarked_objects() {
+        let mut inner = ObjectAllocatorInner::new();
+        let marked_ptr = inner.allocate(16);
+        let unmarked_ptr = inner.allocate(16);
+        assert!(!marked_ptr.is_null());
+        assert!(!unmarked_ptr.is_null());
+        inner
+            .allocated_objects
+            .get_mut(&(marked_ptr as usize))
+            .unwrap()
+            .marked = true;
+        inner.sweep();
+        assert!(inner.allocated_objects.contains_key(&(marked_ptr as usize)));
+        assert!(
+            !inner
+                .allocated_objects
+                .contains_key(&(unmarked_ptr as usize))
+        );
+        inner.free_all_allocated_objects();
+    }
+
+    #[test]
+    fn test_free_all_allocated_objects_clears_marks() {
+        let mut inner = ObjectAllocatorInner::new();
+        let ptr = inner.allocate(16);
+        inner
+            .allocated_objects
+            .get_mut(&(ptr as usize))
+            .unwrap()
+            .marked = true;
+        inner.free_all_allocated_objects();
+        assert!(inner.allocated_objects.is_empty());
     }
 
     #[test]
