@@ -19,6 +19,7 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 			result := createValueRelName(instr)
 			ctx.switchFunctionToCallRuntimeApi("gox5_new", "StackFrameNew", createInstructionName(instr), &result, nil,
 				paramArgPair{param: "size", arg: fmt.Sprintf("sizeof(%s)", createTypeName(instr.Type().(*types.Pointer).Elem()))},
+				paramArgPair{param: "type_id", arg: wrapInTypeId(instr.Type().(*types.Pointer).Elem())},
 			)
 		} else {
 			v := createValueRelName(instr)
@@ -231,6 +232,7 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 							panic(instr.String())
 						}
 						ctx.switchFunctionToCallRuntimeApi("gox5_slice_append_string", "StackFrameSliceAppendString", createInstructionName(instr), &result, nil,
+							paramArgPair{param: "type_id", arg: wrapInTypeId(callCommon.Args[0].Type().Underlying().(*types.Slice).Elem())},
 							paramArgPair{param: "slice", arg: fmt.Sprintf("%s.raw", createValueRelName(callCommon.Args[0]))},
 							paramArgPair{param: "string", arg: createValueRelName(callCommon.Args[1])},
 						)
@@ -726,6 +728,7 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 		size := fmt.Sprintf("(%s.raw) * sizeof(%s)", createValueRelName(instr.Cap), createTypeName(instr.Type().Underlying().(*types.Slice).Elem()))
 		ctx.switchFunctionToCallRuntimeApi("gox5_new", "StackFrameNew", createInstructionName(instr), &ptr, nil,
 			paramArgPair{param: "size", arg: size},
+			paramArgPair{param: "type_id", arg: wrapInTypeId(instr.Type().Underlying().(*types.Slice).Elem())},
 		)
 
 	case *ssa.MapUpdate:

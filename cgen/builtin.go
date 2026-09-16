@@ -344,6 +344,7 @@ func (ctx *Context) emitSpecialRuntimeCall(callee *ssa.Function, instr *ssa.Call
 			result := fmt.Sprintf("%s.raw", createValueRelName(instr))
 			ctx.switchFunctionToCallRuntimeApi("gox5_slice_new_uninitialized", "StackFrameSliceNewUninitialized", createInstructionName(instr), &result, nil,
 				paramArgPair{param: "n", arg: createValueRelName(callCommon.Args[0])},
+				paramArgPair{param: "type_id", arg: wrapInTypeId(instr.Type().Underlying().(*types.Slice).Elem())},
 			)
 			return true
 		}
@@ -380,6 +381,7 @@ func (ctx *Context) emitSpecialRuntimeCall(callee *ssa.Function, instr *ssa.Call
 			result := createValueRelName(instr)
 			ctx.switchFunctionToCallRuntimeApi("gox5_new", "StackFrameNew", createInstructionName(instr), &result, nil,
 				paramArgPair{param: "size", arg: fmt.Sprintf("sizeof(%s)", createTypeName(instr.Type().Underlying().(*types.Pointer).Elem()))},
+				paramArgPair{param: "type_id", arg: wrapInTypeId(instr.Type().Underlying().(*types.Pointer).Elem())},
 			)
 			fmt.Fprintf(ctx.stream, "\treturn %s;\n", wrapInFunctionObject(createInstructionName(instr)))
 			return true

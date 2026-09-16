@@ -28,9 +28,11 @@ pub extern "C" fn gox5_slice_from_string(ctx: &mut LightWeightThreadContext) -> 
 
     let len = frame.src.len_in_bytes();
     let buffer_size = len * elem_size;
-    let ptr = ctx
-        .global_context()
-        .process(|mut global_context| global_context.allocator().allocate(buffer_size));
+    let ptr = ctx.global_context().process(|mut global_context| {
+        global_context
+            .allocator()
+            .allocate(buffer_size, frame.type_id)
+    });
 
     let mut result = SliceObject::new(ptr, len, len);
     if frame.type_id.size() == mem::size_of::<u8>() {
@@ -63,6 +65,7 @@ fn reallocate_slice(
     base: &SliceObject,
     elem_size: usize,
     extend_bytes: &[u8],
+    type_id: TypeId,
     allocator: &ObjectAllocatorPtr,
 ) -> SliceObject {
     assert!(elem_size > 0);
@@ -72,7 +75,7 @@ fn reallocate_slice(
     let mut result = if new_size > base.capacity() {
         let new_capacity = new_size * 2;
         let buffer_size = new_capacity * elem_size;
-        let ptr = allocator.allocate(buffer_size);
+        let ptr = allocator.allocate(buffer_size, type_id);
 
         let mut result = SliceObject::new(ptr, new_size, new_capacity);
         result.as_bytes_mut(elem_size).fill(0);
@@ -118,7 +121,13 @@ pub extern "C" fn gox5_slice_append(ctx: &mut LightWeightThreadContext) -> Funct
     let elem_size = frame.type_id.size();
     let rhs_bytes = slice_extend_bytes(rhs, elem_size);
     let result = ctx.global_context().process(|mut global_context| {
-        reallocate_slice(lhs, elem_size, rhs_bytes, &global_context.allocator())
+        reallocate_slice(
+            lhs,
+            elem_size,
+            rhs_bytes,
+            frame.type_id,
+            &global_context.allocator(),
+        )
     });
 
     let frame = ctx.stack_frame_mut::<StackFrameSliceAppend>();
@@ -131,6 +140,7 @@ pub extern "C" fn gox5_slice_append(ctx: &mut LightWeightThreadContext) -> Funct
 struct StackFrameSliceAppendString<'a> {
     common: StackFrameCommon,
     result_ptr: &'a mut SliceObject,
+    type_id: TypeId,
     slice: SliceObject,
     string: StringObject,
 }
@@ -147,6 +157,7 @@ pub extern "C" fn gox5_slice_append_string(ctx: &mut LightWeightThreadContext) -
             slice,
             elem_size,
             string.as_bytes(),
+            frame.type_id,
             &global_context.allocator(),
         )
     });
@@ -361,6 +372,7 @@ struct StackFrameSliceNewUninitialized<'a> {
     common: StackFrameCommon,
     result_ptr: &'a mut SliceObject,
     n: isize,
+    type_id: TypeId,
 }
 
 #[unsafe(no_mangle)]
@@ -375,7 +387,7 @@ pub extern "C" fn gox5_slice_new_uninitialized(
     } else {
         let ptr = ctx
             .global_context()
-            .process(|mut global_context| global_context.allocator().allocate(n));
+            .process(|mut global_context| global_context.allocator().allocate(n, frame.type_id));
         SliceObject::new(ptr, n, n)
     };
 
@@ -415,7 +427,7 @@ mod tests {
         let ptr = buf.as_mut_ptr() as *mut ();
         let base = SliceObject::new(ptr, 3, 10);
         let extend = [40u8, 50];
-        let result = reallocate_slice(&base, 1, &extend, &allocator.ptr());
+        let result = reallocate_slice(&base, 1, &extend, TypeId::new_invalid(), &allocator.ptr());
         assert_eq!(result.size(), 5);
         assert_eq!(result.capacity(), 10);
         let bytes = result.as_bytes(1);
@@ -435,7 +447,7 @@ mod tests {
         let ptr = buf.as_mut_ptr() as *mut ();
         let base = SliceObject::new(ptr, 2, 2);
         let extend = [3u8, 4, 5, 6];
-        let result = reallocate_slice(&base, 1, &extend, &allocator.ptr());
+        let result = reallocate_slice(&base, 1, &extend, TypeId::new_invalid(), &allocator.ptr());
         assert_eq!(result.size(), 6);
         assert_eq!(result.capacity(), 12);
         let bytes = result.as_bytes(1);
@@ -460,7 +472,13 @@ mod tests {
         let mut extend_bytes = Vec::new();
         extend_bytes.extend_from_slice(&extend);
         extend_bytes.extend_from_slice(&extend2);
-        let result = reallocate_slice(&base, 4, &extend_bytes, &allocator.ptr());
+        let result = reallocate_slice(
+            &base,
+            4,
+            &extend_bytes,
+            TypeId::new_invalid(),
+            &allocator.ptr(),
+        );
         assert_eq!(result.size(), 4);
         assert_eq!(result.capacity(), 4);
     }
@@ -701,6 +719,7 @@ mod tests {
 
         let frame = ctx.stack_frame_mut::<StackFrameSliceNewUninitialized>();
         frame.n = n;
+        frame.type_id = TypeId::new_invalid();
         frame.result_ptr = unsafe { &mut *result_raw };
 
         assert_eq!(

@@ -29,7 +29,7 @@ pub extern "C" fn gox5_interface_new(ctx: &mut LightWeightThreadContext) -> Func
         let size = frame.type_id.size();
         let ptr = ctx
             .global_context()
-            .process(|mut global_context| global_context.allocator().allocate(size));
+            .process(|mut global_context| global_context.allocator().allocate(size, frame.type_id));
         let src = unsafe { slice::from_raw_parts(frame.receiver.0 as *const u8, size) };
         let dst = unsafe { slice::from_raw_parts_mut(ptr as *mut u8, size) };
         dst.copy_from_slice(src);

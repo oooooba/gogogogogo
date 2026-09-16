@@ -8,6 +8,7 @@ use crate::UserFunction;
 use crate::defer_stack::DeferStackEntry;
 use crate::object::interface::Interface;
 use crate::object::string::StringObject;
+use crate::type_id::TypeId;
 use crate::word_chunk::WordChunk;
 
 fn register<F>(ctx: &mut LightWeightThreadContext, param: F) -> FunctionObject
@@ -18,8 +19,8 @@ where
     let (args, entry_ptr) = ctx.global_context().process(|mut global_context| {
         let allocator = global_context.allocator();
         let args = unsafe { WordChunk::duplicate_raw(args, &allocator) };
-        let entry_ptr =
-            allocator.allocate(mem::size_of::<DeferStackEntry>()) as *mut DeferStackEntry;
+        let entry_ptr = allocator.allocate(mem::size_of::<DeferStackEntry>(), TypeId::new_invalid())
+            as *mut DeferStackEntry;
         (args, entry_ptr)
     });
 

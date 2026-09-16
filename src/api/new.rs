@@ -4,12 +4,14 @@ use crate::FunctionObject;
 use crate::LightWeightThreadContext;
 use crate::ObjectPtr;
 use crate::StackFrameCommon;
+use crate::type_id::TypeId;
 
 #[repr(C)]
 struct StackFrameNew<'a> {
     common: StackFrameCommon,
     result_ptr: &'a mut ObjectPtr,
     size: usize,
+    type_id: TypeId,
 }
 
 #[unsafe(no_mangle)]
@@ -19,7 +21,7 @@ pub extern "C" fn gox5_new(ctx: &mut LightWeightThreadContext) -> FunctionObject
 
     let ptr = ctx
         .global_context()
-        .process(|mut global_context| global_context.allocator().allocate(size));
+        .process(|mut global_context| global_context.allocator().allocate(size, frame.type_id));
     let bytes = unsafe { slice::from_raw_parts_mut(ptr as *mut u8, size) };
     bytes.fill(0);
 
@@ -63,6 +65,7 @@ mod tests {
 
         let frame = ctx.stack_frame_mut::<StackFrameNew>();
         frame.size = 16;
+        frame.type_id = TypeId::new_invalid();
         frame.result_ptr = unsafe { &mut *result_raw };
 
         let result = gox5_new(&mut ctx);
@@ -89,6 +92,7 @@ mod tests {
 
         let frame = ctx.stack_frame_mut::<StackFrameNew>();
         frame.size = 0;
+        frame.type_id = TypeId::new_invalid();
         frame.result_ptr = unsafe { &mut *result_raw };
 
         let result = gox5_new(&mut ctx);

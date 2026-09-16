@@ -3,6 +3,7 @@ use std::ptr;
 use std::slice;
 
 use crate::ObjectAllocatorPtr;
+use crate::type_id::TypeId;
 
 #[repr(C)]
 pub struct WordChunk {
@@ -30,7 +31,7 @@ impl WordChunk {
     ) -> ptr::NonNull<Self> {
         let count = unsafe { ptr::read(self_ptr as *const usize) };
         let size = mem::size_of::<WordChunk>() + mem::size_of::<*const ()>() * count;
-        let p = allocator.allocate(size) as *mut Self;
+        let p = allocator.allocate(size, TypeId::new_invalid()) as *mut Self;
 
         unsafe { (*ptr::addr_of_mut!((*p).count)) = count };
         let src = unsafe {

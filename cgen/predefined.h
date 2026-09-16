@@ -140,6 +140,7 @@ DECLARE_RUNTIME_API(slice_append, StackFrameSliceAppend);
 typedef struct {
     StackFrameCommon common;
     SliceObject *result_ptr;
+    TypeId type_id;
     SliceObject slice;
     StringObject string;
 } StackFrameSliceAppendString;
@@ -211,6 +212,7 @@ typedef struct {
     StackFrameCommon common;
     SliceObject *result_ptr;
     IntObject n;
+    TypeId type_id;
 } StackFrameSliceNewUninitialized;
 DECLARE_RUNTIME_API(slice_new_uninitialized, StackFrameSliceNewUninitialized);
 typedef struct {
@@ -548,6 +550,7 @@ typedef struct {
     StackFrameCommon common;
     void *result_ptr;
     uintptr_t size;
+    TypeId type_id;
 } StackFrameNew;
 DECLARE_RUNTIME_API(new, StackFrameNew);
 

@@ -6,6 +6,8 @@ use std::ptr::NonNull;
 
 use allocator_api2::alloc::{AllocError, Allocator, Layout};
 
+use crate::type_id::TypeId;
+
 pub(crate) struct ObjectAllocator(ObjectAllocatorPtr);
 
 impl ObjectAllocator {
@@ -42,6 +44,8 @@ struct AllocatedObject {
     span: Span,
     kind: AllocationKind,
     marked: bool,
+    #[allow(dead_code)]
+    type_id: TypeId,
 }
 
 #[derive(Clone, Copy)]
@@ -60,7 +64,7 @@ impl ObjectAllocatorInner {
         }
     }
 
-    fn allocate(&mut self, size: usize) -> *mut () {
+    fn allocate(&mut self, size: usize, type_id: TypeId) -> *mut () {
         let size = size.div_ceil(ALLOCATION_ALIGNMENT) * ALLOCATION_ALIGNMENT;
         let mut buf: Vec<u128> = Vec::new();
         if buf.try_reserve_exact(size / ALLOCATION_ALIGNMENT).is_err() {
@@ -74,12 +78,13 @@ impl ObjectAllocatorInner {
                 span: Span { ptr, size },
                 kind: AllocationKind::Heap,
                 marked: false,
+                type_id,
             },
         );
         ptr
     }
 
-    fn allocate_guarded_pages(&mut self, num_pages: usize) -> *mut () {
+    fn allocate_guarded_pages(&mut self, num_pages: usize, type_id: TypeId) -> *mut () {
         unsafe {
             #[cfg(miri)]
             let protection = libc::PROT_READ | libc::PROT_WRITE;
@@ -123,6 +128,7 @@ impl ObjectAllocatorInner {
                     },
                     kind: AllocationKind::GuardedPages,
                     marked: false,
+                    type_id,
                 },
             );
             ptr
@@ -174,12 +180,12 @@ impl ObjectAllocatorInner {
 pub(crate) struct ObjectAllocatorPtr(*mut ObjectAllocatorInner);
 
 impl ObjectAllocatorPtr {
-    pub(crate) fn allocate(&self, size: usize) -> *mut () {
-        unsafe { &mut *self.0 }.allocate(size)
+    pub(crate) fn allocate(&self, size: usize, type_id: TypeId) -> *mut () {
+        unsafe { &mut *self.0 }.allocate(size, type_id)
     }
 
     pub(crate) fn allocate_guarded_pages(&self, num_pages: usize) -> *mut () {
-        unsafe { &mut *self.0 }.allocate_guarded_pages(num_pages)
+        unsafe { &mut *self.0 }.allocate_guarded_pages(num_pages, TypeId::new_invalid())
     }
 
     pub(crate) fn register_global_object(&self, address: *mut (), size: usize) {
@@ -195,14 +201,14 @@ impl ObjectAllocatorPtr {
 unsafe impl Allocator for ObjectAllocatorPtr {
     fn allocate(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
         let ptr = if layout.align() <= ALLOCATION_ALIGNMENT {
-            let ptr = self.allocate(layout.size());
+            let ptr = self.allocate(layout.size(), TypeId::new_invalid());
             if ptr.is_null() {
                 return Err(AllocError);
             }
             ptr
         } else {
             let total = layout.size() + layout.align();
-            let base = self.allocate(total);
+            let base = self.allocate(total, TypeId::new_invalid());
             if base.is_null() {
                 return Err(AllocError);
             }
@@ -288,8 +294,8 @@ mod tests {
     #[test]
     fn test_sweep_frees_unmarked_objects() {
         let mut inner = ObjectAllocatorInner::new();
-        let marked_ptr = inner.allocate(16);
-        let unmarked_ptr = inner.allocate(16);
+        let marked_ptr = inner.allocate(16, TypeId::new_invalid());
+        let unmarked_ptr = inner.allocate(16, TypeId::new_invalid());
         assert!(!marked_ptr.is_null());
         assert!(!unmarked_ptr.is_null());
         inner
@@ -310,7 +316,7 @@ mod tests {
     #[test]
     fn test_free_all_allocated_objects_clears_marks() {
         let mut inner = ObjectAllocatorInner::new();
-        let ptr = inner.allocate(16);
+        let ptr = inner.allocate(16, TypeId::new_invalid());
         inner
             .allocated_objects
             .get_mut(&(ptr as usize))

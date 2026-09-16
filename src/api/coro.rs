@@ -6,6 +6,7 @@ use crate::StackFrameCommon;
 use crate::UserFunction;
 use crate::create_light_weight_thread_context;
 use crate::light_weight_thread::LightWeightThreadContext;
+use crate::type_id::TypeId;
 
 #[repr(C)]
 pub(crate) struct CoroObject {
@@ -29,9 +30,10 @@ pub extern "C" fn gox5_coro_new(ctx: &mut LightWeightThreadContext) -> FunctionO
     let slot = ctx
         .global_context()
         .process(|mut gc| gc.reserve_coro_slot());
-    let coro = ctx
-        .global_context()
-        .process(|mut gc| gc.allocator().allocate(mem::size_of::<CoroObject>()));
+    let coro = ctx.global_context().process(|mut gc| {
+        gc.allocator()
+            .allocate(mem::size_of::<CoroObject>(), TypeId::new_invalid())
+    });
     unsafe {
         ptr::write(coro as *mut CoroObject, CoroObject { slot });
     }

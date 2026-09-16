@@ -21,7 +21,9 @@ struct StackFrameChannelNew<'a> {
 fn allocate_channel(ctx: &mut LightWeightThreadContext, capacity: usize) -> *mut ChannelObject {
     let object_size = mem::size_of::<ChannelObject>();
     let ptr = ctx.global_context().process(|mut global_context| {
-        global_context.allocator().allocate(object_size) as *mut ChannelObject
+        global_context
+            .allocator()
+            .allocate(object_size, TypeId::new_invalid()) as *mut ChannelObject
     });
 
     let channel = ctx
@@ -49,10 +51,15 @@ pub extern "C" fn gox5_channel_new(ctx: &mut LightWeightThreadContext) -> Functi
     ctx.pop_frame()
 }
 
-fn load_send_data(src: ObjectPtr, size: usize, ctx: &mut LightWeightThreadContext) -> ObjectPtr {
+fn load_send_data(
+    src: ObjectPtr,
+    size: usize,
+    type_id: TypeId,
+    ctx: &mut LightWeightThreadContext,
+) -> ObjectPtr {
     let dst = ctx
         .global_context()
-        .process(|mut global_context| global_context.allocator().allocate(size));
+        .process(|mut global_context| global_context.allocator().allocate(size, type_id));
     let src_slice = unsafe { slice::from_raw_parts(src.as_ref::<u8>(), size) };
     let dst_slice = unsafe { slice::from_raw_parts_mut(dst as *mut u8, size) };
     dst_slice.copy_from_slice(src_slice);
@@ -117,7 +124,12 @@ pub extern "C" fn gox5_channel_select(ctx: &mut LightWeightThreadContext) -> Fun
         let channel = channel.as_mut::<ChannelObject>();
         let id = ctx.id();
         if !entry.send_data.is_null() && channel.can_complete_send(id) {
-            let data = load_send_data(entry.send_data.clone(), entry.type_id.size(), ctx);
+            let data = load_send_data(
+                entry.send_data.clone(),
+                entry.type_id.size(),
+                entry.type_id,
+                ctx,
+            );
             channel.send(id, data).unwrap();
             set_result(ctx, Some(i), false);
             return ctx.pop_frame();
@@ -235,7 +247,7 @@ pub extern "C" fn gox5_channel_send(ctx: &mut LightWeightThreadContext) -> Funct
     let channel = channel.as_mut::<ChannelObject>();
 
     let id = ctx.id();
-    let data = load_send_data(frame.data.clone(), frame.type_id.size(), ctx);
+    let data = load_send_data(frame.data.clone(), frame.type_id.size(), frame.type_id, ctx);
 
     if channel.send(id, data).is_some() {
         ctx.pop_frame()

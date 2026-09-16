@@ -6,6 +6,7 @@ use crate::FunctionObject;
 use crate::LightWeightThreadContext;
 use crate::StackFrameCommon;
 use crate::UserFunction;
+use crate::type_id::TypeId;
 use crate::word_chunk::WordChunk;
 
 #[repr(C)]
@@ -28,9 +29,10 @@ pub extern "C" fn gox5_closure_new(ctx: &mut LightWeightThreadContext) -> Functi
     let wc_data_size = wc_count * mem::size_of::<*const ()>();
 
     let ptr = ctx.global_context().process(|mut global_context| {
-        global_context
-            .allocator()
-            .allocate(mem::size_of::<ClosureLayout>() + wc_data_size) as *mut ClosureLayout
+        global_context.allocator().allocate(
+            mem::size_of::<ClosureLayout>() + wc_data_size,
+            TypeId::new_invalid(),
+        ) as *mut ClosureLayout
     });
 
     unsafe {
