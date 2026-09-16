@@ -33,6 +33,7 @@ impl Drop for ObjectAllocator {
 struct ObjectAllocatorInner {
     allocated_objects: BTreeMap<usize, AllocatedObject>,
     global_spans: Vec<Span>,
+    total_size: usize,
 }
 
 struct Span {
@@ -55,12 +56,14 @@ enum AllocationKind {
 }
 
 const ALLOCATION_ALIGNMENT: usize = mem::size_of::<u128>();
+const MAX_TOTAL_ALLOCATED_SIZE: usize = 1 << 20;
 
 impl ObjectAllocatorInner {
     fn new() -> Self {
         ObjectAllocatorInner {
             allocated_objects: BTreeMap::new(),
             global_spans: Vec::new(),
+            total_size: 0,
         }
     }
 
@@ -81,6 +84,13 @@ impl ObjectAllocatorInner {
                 type_id,
             },
         );
+        self.total_size += size;
+        if self.total_size > MAX_TOTAL_ALLOCATED_SIZE {
+            panic!(
+                "total allocated size {} exceeds the limit of {} bytes",
+                self.total_size, MAX_TOTAL_ALLOCATED_SIZE
+            );
+        }
         ptr
     }
 
@@ -135,15 +145,21 @@ impl ObjectAllocatorInner {
         }
     }
 
-    fn free(object: &AllocatedObject) {
+    fn free(&mut self, object: &AllocatedObject) {
         match object.kind {
-            AllocationKind::Heap => unsafe {
-                Vec::from_raw_parts(
-                    object.span.ptr as *mut u128,
-                    0,
-                    object.span.size / ALLOCATION_ALIGNMENT,
-                );
-            },
+            AllocationKind::Heap => {
+                self.total_size = self
+                    .total_size
+                    .checked_sub(object.span.size)
+                    .expect("total allocated size underflow while freeing an object");
+                unsafe {
+                    Vec::from_raw_parts(
+                        object.span.ptr as *mut u128,
+                        0,
+                        object.span.size / ALLOCATION_ALIGNMENT,
+                    );
+                }
+            }
             AllocationKind::GuardedPages => {
                 let base_addr = (object.span.ptr as usize - 4096) as *mut libc::c_void;
                 unsafe {
@@ -154,14 +170,19 @@ impl ObjectAllocatorInner {
     }
 
     fn sweep(&mut self) {
-        self.allocated_objects.retain(|_, object| {
-            if object.marked {
-                true
-            } else {
-                Self::free(object);
-                false
-            }
-        });
+        let objects = mem::take(&mut self.allocated_objects);
+        let kept = objects
+            .into_iter()
+            .filter_map(|(address, object)| {
+                if object.marked {
+                    Some((address, object))
+                } else {
+                    self.free(&object);
+                    None
+                }
+            })
+            .collect();
+        self.allocated_objects = kept;
     }
 
     fn register_global_object(&mut self, address: *mut (), size: usize) {
@@ -173,6 +194,11 @@ impl ObjectAllocatorInner {
             object.marked = false;
         }
         self.sweep();
+        assert!(
+            self.total_size == 0,
+            "total allocated size {} did not reach zero after freeing all objects",
+            self.total_size
+        );
     }
 }
 
@@ -324,6 +350,41 @@ mod tests {
             .marked = true;
         inner.free_all_allocated_objects();
         assert!(inner.allocated_objects.is_empty());
+    }
+
+    #[test]
+    fn test_total_size_tracks_allocate_and_free() {
+        let mut inner = ObjectAllocatorInner::new();
+        let a = inner.allocate(16, TypeId::new_invalid());
+        let b = inner.allocate(32, TypeId::new_invalid());
+        assert!(!a.is_null());
+        assert!(!b.is_null());
+        assert_eq!(inner.total_size, 16 + 32);
+        inner
+            .allocated_objects
+            .get_mut(&(a as usize))
+            .unwrap()
+            .marked = true;
+        inner.sweep();
+        assert_eq!(inner.total_size, 16);
+        inner.free_all_allocated_objects();
+        assert_eq!(inner.total_size, 0);
+    }
+
+    #[test]
+    #[should_panic(expected = "exceeds the limit")]
+    fn test_allocate_panics_above_limit() {
+        use std::panic::{AssertUnwindSafe, catch_unwind};
+        let mut inner = ObjectAllocatorInner::new();
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            for _ in 0..MAX_TOTAL_ALLOCATED_SIZE / 65536 + 2 {
+                inner.allocate(65536, TypeId::new_invalid());
+            }
+        }));
+        assert!(result.is_err());
+        inner.free_all_allocated_objects();
+        assert_eq!(inner.total_size, 0);
+        panic!("total allocated size exceeds the limit of 1048576 bytes");
     }
 
     #[test]
