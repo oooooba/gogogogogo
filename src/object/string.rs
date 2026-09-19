@@ -1,10 +1,5 @@
 use std::slice;
 
-#[cfg(test)]
-use crate::ObjectAllocatorPtr;
-#[cfg(test)]
-use crate::type_id::TypeId;
-
 #[derive(Clone, Eq, Debug)]
 #[repr(C)]
 pub struct StringObject(*const u8, usize);
@@ -20,16 +15,8 @@ impl StringObject {
         Self(p, len_in_bytes)
     }
 
-    #[cfg(test)]
-    pub(crate) fn builder(
-        len_in_bytes: usize,
-        allocator: &ObjectAllocatorPtr,
-    ) -> StringObjectBuilder {
-        StringObjectBuilder::new(len_in_bytes, allocator)
-    }
-
-    pub(crate) fn builder_with_buffer(len_in_bytes: usize, ptr: *mut u8) -> StringObjectBuilder {
-        StringObjectBuilder::new_with_buffer(len_in_bytes, ptr)
+    pub(crate) fn builder(len_in_bytes: usize, ptr: *mut u8) -> StringObjectBuilder {
+        StringObjectBuilder::new(len_in_bytes, ptr)
     }
 
     pub(crate) fn len_in_bytes(&self) -> usize {
@@ -56,13 +43,7 @@ pub(crate) struct StringObjectBuilder {
 }
 
 impl StringObjectBuilder {
-    #[cfg(test)]
-    fn new(len_in_bytes: usize, allocator: &ObjectAllocatorPtr) -> Self {
-        let ptr = allocator.allocate(len_in_bytes + 1, TypeId::new_invalid()) as *mut u8;
-        Self::new_with_buffer(len_in_bytes, ptr)
-    }
-
-    fn new_with_buffer(len_in_bytes: usize, ptr: *mut u8) -> Self {
+    fn new(len_in_bytes: usize, ptr: *mut u8) -> Self {
         assert!(!ptr.is_null());
         Self {
             ptr,
@@ -112,11 +93,21 @@ impl StringObjectBuilder {
 mod tests {
     use super::*;
     use crate::ObjectAllocator;
+    use crate::type_id::TypeId;
+
+    fn test_builder(len_in_bytes: usize, allocator: &ObjectAllocator) -> StringObjectBuilder {
+        StringObjectBuilder::new(
+            len_in_bytes,
+            allocator
+                .ptr()
+                .allocate(len_in_bytes + 1, TypeId::new_invalid()) as *mut u8,
+        )
+    }
 
     #[test]
     fn test_string_object_builder_and_as_bytes() {
         let allocator = ObjectAllocator::new();
-        let mut builder = StringObject::builder(5, &allocator.ptr());
+        let mut builder = test_builder(5, &allocator);
         builder.append_bytes(b"hello");
         let s = builder.build();
         assert_eq!(s.as_bytes(), b"hello");
@@ -125,7 +116,7 @@ mod tests {
     #[test]
     fn test_string_object_len_in_bytes() {
         let allocator = ObjectAllocator::new();
-        let mut builder = StringObject::builder(5, &allocator.ptr());
+        let mut builder = test_builder(5, &allocator);
         builder.append_bytes(b"hello");
         let s = builder.build();
         assert_eq!(s.len_in_bytes(), 5);
@@ -134,7 +125,7 @@ mod tests {
     #[test]
     fn test_string_object_to_str() {
         let allocator = ObjectAllocator::new();
-        let mut builder = StringObject::builder(5, &allocator.ptr());
+        let mut builder = test_builder(5, &allocator);
         builder.append_bytes(b"hello");
         let s = builder.build();
         assert_eq!(s.to_str().unwrap(), "hello");
@@ -143,11 +134,11 @@ mod tests {
     #[test]
     fn test_string_object_eq() {
         let allocator = ObjectAllocator::new();
-        let mut builder1 = StringObject::builder(5, &allocator.ptr());
+        let mut builder1 = test_builder(5, &allocator);
         builder1.append_bytes(b"hello");
         let s1 = builder1.build();
 
-        let mut builder2 = StringObject::builder(5, &allocator.ptr());
+        let mut builder2 = test_builder(5, &allocator);
         builder2.append_bytes(b"hello");
         let s2 = builder2.build();
 
@@ -157,11 +148,11 @@ mod tests {
     #[test]
     fn test_string_object_ne() {
         let allocator = ObjectAllocator::new();
-        let mut builder1 = StringObject::builder(5, &allocator.ptr());
+        let mut builder1 = test_builder(5, &allocator);
         builder1.append_bytes(b"hello");
         let s1 = builder1.build();
 
-        let mut builder2 = StringObject::builder(5, &allocator.ptr());
+        let mut builder2 = test_builder(5, &allocator);
         builder2.append_bytes(b"world");
         let s2 = builder2.build();
 
@@ -171,7 +162,7 @@ mod tests {
     #[test]
     fn test_string_object_append_char() {
         let allocator = ObjectAllocator::new();
-        let mut builder = StringObject::builder(5, &allocator.ptr());
+        let mut builder = test_builder(5, &allocator);
         builder.append_char('h');
         builder.append_char('e');
         builder.append_char('l');
@@ -184,7 +175,7 @@ mod tests {
     #[test]
     fn test_string_object_empty() {
         let allocator = ObjectAllocator::new();
-        let builder = StringObject::builder(0, &allocator.ptr());
+        let builder = test_builder(0, &allocator);
         let s = builder.build();
         assert_eq!(s.as_bytes(), b"");
         assert_eq!(s.len_in_bytes(), 0);
@@ -194,15 +185,15 @@ mod tests {
     #[test]
     fn test_string_object_contains_nul_bytes() {
         let allocator = ObjectAllocator::new();
-        let mut builder = StringObject::builder(3, &allocator.ptr());
+        let mut builder = test_builder(3, &allocator);
         builder.append_bytes(b"a\x00b");
         let s = builder.build();
 
-        let mut builder2 = StringObject::builder(3, &allocator.ptr());
+        let mut builder2 = test_builder(3, &allocator);
         builder2.append_bytes(b"a\x00b");
         let s2 = builder2.build();
 
-        let mut builder3 = StringObject::builder(4, &allocator.ptr());
+        let mut builder3 = test_builder(4, &allocator);
         builder3.append_bytes(b"a\x00bc");
         let s3 = builder3.build();
 

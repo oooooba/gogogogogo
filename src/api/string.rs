@@ -23,10 +23,8 @@ pub extern "C" fn gox5_string_new_from_byte_slice(
         (frame.byte_slice.size(), frame.byte_slice)
     };
 
-    let mut builder = StringObject::builder_with_buffer(
-        len,
-        ctx.allocate(len + 1, TypeId::new_invalid()) as *mut u8,
-    );
+    let mut builder =
+        StringObject::builder(len, ctx.allocate(len + 1, TypeId::new_invalid()) as *mut u8);
 
     let src_bytes = byte_slice.as_bytes(mem::size_of::<u8>());
     builder.append_bytes(&src_bytes[..len]);
@@ -55,10 +53,8 @@ pub extern "C" fn gox5_string_new_from_rune(ctx: &mut LightWeightThreadContext) 
     let ch = char::from_u32(rune as u32).unwrap();
     let len = ch.len_utf8();
 
-    let mut builder = StringObject::builder_with_buffer(
-        len,
-        ctx.allocate(len + 1, TypeId::new_invalid()) as *mut u8,
-    );
+    let mut builder =
+        StringObject::builder(len, ctx.allocate(len + 1, TypeId::new_invalid()) as *mut u8);
 
     builder.append_char(ch);
 
@@ -96,10 +92,8 @@ pub extern "C" fn gox5_string_new_from_rune_slice(
             })
     };
 
-    let mut builder = StringObject::builder_with_buffer(
-        len,
-        ctx.allocate(len + 1, TypeId::new_invalid()) as *mut u8,
-    );
+    let mut builder =
+        StringObject::builder(len, ctx.allocate(len + 1, TypeId::new_invalid()) as *mut u8);
 
     let elem_size = mem::size_of::<u32>();
     let src_bytes = rune_slice.as_bytes(elem_size);
@@ -133,10 +127,8 @@ pub extern "C" fn gox5_string_append(ctx: &mut LightWeightThreadContext) -> Func
     };
     let len = lhs.len_in_bytes() + rhs.len_in_bytes();
 
-    let mut builder = StringObject::builder_with_buffer(
-        len,
-        ctx.allocate(len + 1, TypeId::new_invalid()) as *mut u8,
-    );
+    let mut builder =
+        StringObject::builder(len, ctx.allocate(len + 1, TypeId::new_invalid()) as *mut u8);
 
     builder.append_bytes(lhs.as_bytes());
     builder.append_bytes(rhs.as_bytes());
@@ -316,10 +308,8 @@ pub extern "C" fn gox5_string_substr(ctx: &mut LightWeightThreadContext) -> Func
     assert!(low <= high);
     let len = high - low;
 
-    let mut builder = StringObject::builder_with_buffer(
-        len,
-        ctx.allocate(len + 1, TypeId::new_invalid()) as *mut u8,
-    );
+    let mut builder =
+        StringObject::builder(len, ctx.allocate(len + 1, TypeId::new_invalid()) as *mut u8);
 
     builder.append_bytes(&base.as_bytes()[low..high]);
 
@@ -390,7 +380,17 @@ mod tests {
     use crate::ObjectAllocator;
     use crate::global_context;
     use crate::light_weight_thread::LightWeightThreadContext;
+    use crate::object::string::StringObjectBuilder;
     use std::mem;
+
+    fn test_builder(len_in_bytes: usize, allocator: &ObjectAllocator) -> StringObjectBuilder {
+        StringObject::builder(
+            len_in_bytes,
+            allocator
+                .ptr()
+                .allocate(len_in_bytes + 1, TypeId::new_invalid()) as *mut u8,
+        )
+    }
 
     fn create_ctx() -> (
         LightWeightThreadContext,
@@ -417,7 +417,7 @@ mod tests {
         );
 
         let allocator = ObjectAllocator::new();
-        let mut builder = StringObject::builder(5, &allocator.ptr());
+        let mut builder = test_builder(5, &allocator);
         builder.append_bytes(b"hello");
         let s = builder.build();
 
@@ -446,7 +446,7 @@ mod tests {
         );
 
         let allocator = ObjectAllocator::new();
-        let builder = StringObject::builder(0, &allocator.ptr());
+        let builder = test_builder(0, &allocator);
         let s = builder.build();
 
         let frame = ctx.stack_frame_mut::<StackFrameStringLength>();
@@ -522,7 +522,7 @@ mod tests {
         );
 
         let allocator = ObjectAllocator::new();
-        let mut builder = StringObject::builder(5, &allocator.ptr());
+        let mut builder = test_builder(5, &allocator);
         builder.append_bytes(b"hello");
         let base = builder.build();
 
@@ -553,7 +553,7 @@ mod tests {
         );
 
         let allocator = ObjectAllocator::new();
-        let mut builder = StringObject::builder(5, &allocator.ptr());
+        let mut builder = test_builder(5, &allocator);
         builder.append_bytes(b"hello");
         let base = builder.build();
 
@@ -584,10 +584,10 @@ mod tests {
         );
 
         let allocator = ObjectAllocator::new();
-        let mut builder1 = StringObject::builder(5, &allocator.ptr());
+        let mut builder1 = test_builder(5, &allocator);
         builder1.append_bytes(b"hello");
         let lhs = builder1.build();
-        let mut builder2 = StringObject::builder(5, &allocator.ptr());
+        let mut builder2 = test_builder(5, &allocator);
         builder2.append_bytes(b"world");
         let rhs = builder2.build();
 
@@ -603,9 +603,12 @@ mod tests {
     }
 
     fn make_string(ctx: &mut LightWeightThreadContext, bytes: &[u8]) -> StringObject {
-        let mut builder = ctx.global_context().process(|mut global_context| {
-            StringObject::builder(bytes.len(), &global_context.allocator())
+        let buffer = ctx.global_context().process(|mut global_context| {
+            global_context
+                .allocator()
+                .allocate(bytes.len() + 1, TypeId::new_invalid()) as *mut u8
         });
+        let mut builder = StringObject::builder(bytes.len(), buffer);
         builder.append_bytes(bytes);
         builder.build()
     }

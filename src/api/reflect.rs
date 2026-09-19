@@ -198,7 +198,7 @@ pub extern "C" fn gox5_reflect_type_string(ctx: &mut LightWeightThreadContext) -
             // Composite/named types need dynamic storage (the C name differs
             // from the Go name), so build a heap-backed string.
             let go_name = mapping_for_name(&cname).1;
-            let mut builder = StringObject::builder_with_buffer(
+            let mut builder = StringObject::builder(
                 go_name.len(),
                 ctx.allocate(go_name.len() + 1, TypeId::new_invalid()) as *mut u8,
             );
