@@ -1,6 +1,8 @@
 use std::slice;
 
+#[cfg(test)]
 use crate::ObjectAllocatorPtr;
+#[cfg(test)]
 use crate::type_id::TypeId;
 
 #[derive(Clone, Eq, Debug)]
@@ -18,11 +20,16 @@ impl StringObject {
         Self(p, len_in_bytes)
     }
 
+    #[cfg(test)]
     pub(crate) fn builder(
         len_in_bytes: usize,
         allocator: &ObjectAllocatorPtr,
     ) -> StringObjectBuilder {
         StringObjectBuilder::new(len_in_bytes, allocator)
+    }
+
+    pub(crate) fn builder_with_buffer(len_in_bytes: usize, ptr: *mut u8) -> StringObjectBuilder {
+        StringObjectBuilder::new_with_buffer(len_in_bytes, ptr)
     }
 
     pub(crate) fn len_in_bytes(&self) -> usize {
@@ -49,8 +56,14 @@ pub(crate) struct StringObjectBuilder {
 }
 
 impl StringObjectBuilder {
+    #[cfg(test)]
     fn new(len_in_bytes: usize, allocator: &ObjectAllocatorPtr) -> Self {
         let ptr = allocator.allocate(len_in_bytes + 1, TypeId::new_invalid()) as *mut u8;
+        Self::new_with_buffer(len_in_bytes, ptr)
+    }
+
+    fn new_with_buffer(len_in_bytes: usize, ptr: *mut u8) -> Self {
+        assert!(!ptr.is_null());
         Self {
             ptr,
             len_in_bytes,

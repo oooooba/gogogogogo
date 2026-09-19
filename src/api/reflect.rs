@@ -182,12 +182,15 @@ struct StackFrameReflectTypeString<'a> {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn gox5_reflect_type_string(ctx: &mut LightWeightThreadContext) -> FunctionObject {
-    let frame = ctx.stack_frame::<StackFrameReflectTypeString>();
+    let type_id = {
+        let frame = ctx.stack_frame::<StackFrameReflectTypeString>();
+        frame.type_id
+    };
 
-    let name = if frame.type_id == 0 {
+    let name = if type_id == 0 {
         StringObject::new(ptr::null(), 0)
     } else {
-        let tid = TypeId::from_raw(frame.type_id);
+        let tid = TypeId::from_raw(type_id);
         let cname = tid.name().to_str().unwrap_or("").to_string();
         if let Some(m) = mapping_for_basic(&cname) {
             StringObject::from_static(m.go_name)
@@ -195,9 +198,10 @@ pub extern "C" fn gox5_reflect_type_string(ctx: &mut LightWeightThreadContext) -
             // Composite/named types need dynamic storage (the C name differs
             // from the Go name), so build a heap-backed string.
             let go_name = mapping_for_name(&cname).1;
-            let mut builder = ctx.global_context().process(|mut global_context| {
-                StringObject::builder(go_name.len(), &global_context.allocator())
-            });
+            let mut builder = StringObject::builder_with_buffer(
+                go_name.len(),
+                ctx.allocate(go_name.len() + 1, TypeId::new_invalid()) as *mut u8,
+            );
             builder.append_bytes(go_name.as_bytes());
             builder.build()
         }

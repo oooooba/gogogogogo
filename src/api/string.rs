@@ -5,6 +5,7 @@ use crate::LightWeightThreadContext;
 use crate::StackFrameCommon;
 use crate::object::slice::SliceObject;
 use crate::object::string::StringObject;
+use crate::type_id::TypeId;
 
 #[repr(C)]
 struct StackFrameStringNewFromByteSlice<'a> {
@@ -17,14 +18,17 @@ struct StackFrameStringNewFromByteSlice<'a> {
 pub extern "C" fn gox5_string_new_from_byte_slice(
     ctx: &mut LightWeightThreadContext,
 ) -> FunctionObject {
-    let frame = ctx.stack_frame::<StackFrameStringNewFromByteSlice>();
-    let len = frame.byte_slice.size();
+    let (len, byte_slice) = {
+        let frame = ctx.stack_frame::<StackFrameStringNewFromByteSlice>();
+        (frame.byte_slice.size(), frame.byte_slice)
+    };
 
-    let mut builder = ctx
-        .global_context()
-        .process(|mut global_context| StringObject::builder(len, &global_context.allocator()));
+    let mut builder = StringObject::builder_with_buffer(
+        len,
+        ctx.allocate(len + 1, TypeId::new_invalid()) as *mut u8,
+    );
 
-    let src_bytes = frame.byte_slice.as_bytes(mem::size_of::<u8>());
+    let src_bytes = byte_slice.as_bytes(mem::size_of::<u8>());
     builder.append_bytes(&src_bytes[..len]);
 
     let frame = ctx.stack_frame_mut::<StackFrameStringNewFromByteSlice>();
@@ -42,16 +46,19 @@ struct StackFrameStringNewFromRune<'a> {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn gox5_string_new_from_rune(ctx: &mut LightWeightThreadContext) -> FunctionObject {
-    let frame = ctx.stack_frame::<StackFrameStringNewFromRune>();
-    let rune = frame.rune;
+    let rune = {
+        let frame = ctx.stack_frame::<StackFrameStringNewFromRune>();
+        frame.rune
+    };
 
     assert!(rune <= u32::MAX as usize);
     let ch = char::from_u32(rune as u32).unwrap();
     let len = ch.len_utf8();
 
-    let mut builder = ctx
-        .global_context()
-        .process(|mut global_context| StringObject::builder(len, &global_context.allocator()));
+    let mut builder = StringObject::builder_with_buffer(
+        len,
+        ctx.allocate(len + 1, TypeId::new_invalid()) as *mut u8,
+    );
 
     builder.append_char(ch);
 
@@ -72,8 +79,10 @@ struct StackFrameStringNewFromRuneSlice<'a> {
 pub extern "C" fn gox5_string_new_from_rune_slice(
     ctx: &mut LightWeightThreadContext,
 ) -> FunctionObject {
-    let stack_frame = ctx.stack_frame::<StackFrameStringNewFromRuneSlice>();
-    let rune_slice = &stack_frame.rune_slice;
+    let rune_slice = {
+        let stack_frame = ctx.stack_frame::<StackFrameStringNewFromRuneSlice>();
+        stack_frame.rune_slice
+    };
 
     let len = {
         let elem_size = mem::size_of::<u32>();
@@ -87,9 +96,10 @@ pub extern "C" fn gox5_string_new_from_rune_slice(
             })
     };
 
-    let mut builder = ctx
-        .global_context()
-        .process(|mut global_context| StringObject::builder(len, &global_context.allocator()));
+    let mut builder = StringObject::builder_with_buffer(
+        len,
+        ctx.allocate(len + 1, TypeId::new_invalid()) as *mut u8,
+    );
 
     let elem_size = mem::size_of::<u32>();
     let src_bytes = rune_slice.as_bytes(elem_size);
@@ -117,15 +127,19 @@ struct StackFrameStringAppend<'a> {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn gox5_string_append(ctx: &mut LightWeightThreadContext) -> FunctionObject {
-    let frame = ctx.stack_frame::<StackFrameStringAppend>();
-    let len = frame.lhs.len_in_bytes() + frame.rhs.len_in_bytes();
+    let (lhs, rhs) = {
+        let frame = ctx.stack_frame::<StackFrameStringAppend>();
+        (frame.lhs.clone(), frame.rhs.clone())
+    };
+    let len = lhs.len_in_bytes() + rhs.len_in_bytes();
 
-    let mut builder = ctx
-        .global_context()
-        .process(|mut global_context| StringObject::builder(len, &global_context.allocator()));
+    let mut builder = StringObject::builder_with_buffer(
+        len,
+        ctx.allocate(len + 1, TypeId::new_invalid()) as *mut u8,
+    );
 
-    builder.append_bytes(frame.lhs.as_bytes());
-    builder.append_bytes(frame.rhs.as_bytes());
+    builder.append_bytes(lhs.as_bytes());
+    builder.append_bytes(rhs.as_bytes());
 
     let frame = ctx.stack_frame_mut::<StackFrameStringAppend>();
     *frame.result_ptr = builder.build();
@@ -272,36 +286,42 @@ struct StackFrameStringSubstr<'a> {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn gox5_string_substr(ctx: &mut LightWeightThreadContext) -> FunctionObject {
-    let frame = ctx.stack_frame::<StackFrameStringSubstr>();
+    let (base, low, high) = {
+        let frame = ctx.stack_frame::<StackFrameStringSubstr>();
+        let base = frame.base.clone();
 
-    let low = {
-        let low = frame.low;
-        if low < 0 {
-            assert_eq!(low, -1);
-            0
-        } else {
-            low as usize
-        }
-    };
+        let low = {
+            let low = frame.low;
+            if low < 0 {
+                assert_eq!(low, -1);
+                0
+            } else {
+                low as usize
+            }
+        };
 
-    let high = {
-        let high = frame.high;
-        if high < 0 {
-            assert_eq!(high, -1);
-            frame.base.len_in_bytes()
-        } else {
-            high as usize
-        }
+        let high = {
+            let high = frame.high;
+            if high < 0 {
+                assert_eq!(high, -1);
+                base.len_in_bytes()
+            } else {
+                high as usize
+            }
+        };
+
+        (base, low, high)
     };
 
     assert!(low <= high);
     let len = high - low;
 
-    let mut builder = ctx
-        .global_context()
-        .process(|mut global_context| StringObject::builder(len, &global_context.allocator()));
+    let mut builder = StringObject::builder_with_buffer(
+        len,
+        ctx.allocate(len + 1, TypeId::new_invalid()) as *mut u8,
+    );
 
-    builder.append_bytes(&frame.base.as_bytes()[low..high]);
+    builder.append_bytes(&base.as_bytes()[low..high]);
 
     let frame = ctx.stack_frame_mut::<StackFrameStringSubstr>();
     *frame.result_ptr = builder.build();
