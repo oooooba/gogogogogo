@@ -104,6 +104,7 @@ typedef struct TypeInfo {
     void *is_equal;
     void *hash;
     uintptr_t size;
+    bool no_pointers;
 } TypeInfo;
 
 typedef struct {

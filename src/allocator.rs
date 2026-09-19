@@ -47,7 +47,6 @@ struct AllocatedObject {
     span: Span,
     kind: AllocationKind,
     marked: bool,
-    #[allow(dead_code)]
     type_id: TypeId,
 }
 
@@ -229,8 +228,13 @@ impl ObjectAllocatorInner {
     }
 
     fn mark_object(&mut self, object_address: usize) {
-        let (span, kind, marked) = match self.allocated_objects.get(&object_address) {
-            Some(object) => (object.span, object.kind, object.marked),
+        let (span, kind, marked, no_pointer) = match self.allocated_objects.get(&object_address) {
+            Some(object) => (
+                object.span,
+                object.kind,
+                object.marked,
+                object.type_id.is_no_pointer(),
+            ),
             None => return,
         };
         if marked {
@@ -240,7 +244,7 @@ impl ObjectAllocatorInner {
             .get_mut(&object_address)
             .unwrap()
             .marked = true;
-        if kind == AllocationKind::Heap {
+        if kind == AllocationKind::Heap && !no_pointer {
             self.mark_range(span.ptr as usize, span.ptr as usize + span.size);
         }
     }
@@ -509,6 +513,56 @@ mod tests {
         inner.free_all_allocated_objects();
         unsafe {
             let _ = Box::from_raw(root_holding);
+        }
+    }
+
+    #[test]
+    fn test_mark_skips_no_pointer_object_interior() {
+        let mut inner = ObjectAllocatorInner::new();
+        let root = Box::into_raw(Box::new(0usize));
+        inner.register_global_object(root as *mut (), mem::size_of::<usize>());
+        let fake = crate::type_id::FakeTypeInfo::new(true);
+        let held_object = inner.allocate(64, fake.tid());
+        let garbage = inner.allocate(64, TypeId::new_invalid());
+        unsafe {
+            root.write(held_object as usize);
+            ptr::write(held_object as *mut usize, garbage as usize);
+        }
+        inner.run_gc(&[]);
+        assert!(
+            inner
+                .allocated_objects
+                .contains_key(&(held_object as usize))
+        );
+        assert!(!inner.allocated_objects.contains_key(&(garbage as usize)));
+        inner.free_all_allocated_objects();
+        unsafe {
+            let _ = Box::from_raw(root);
+        }
+    }
+
+    #[test]
+    fn test_mark_scans_pointer_bearing_object_interior() {
+        let mut inner = ObjectAllocatorInner::new();
+        let root = Box::into_raw(Box::new(0usize));
+        inner.register_global_object(root as *mut (), mem::size_of::<usize>());
+        let fake = crate::type_id::FakeTypeInfo::new(false);
+        let held_object = inner.allocate(64, fake.tid());
+        let garbage = inner.allocate(64, TypeId::new_invalid());
+        unsafe {
+            root.write(held_object as usize);
+            ptr::write(held_object as *mut usize, garbage as usize);
+        }
+        inner.run_gc(&[]);
+        assert!(
+            inner
+                .allocated_objects
+                .contains_key(&(held_object as usize))
+        );
+        assert!(inner.allocated_objects.contains_key(&(garbage as usize)));
+        inner.free_all_allocated_objects();
+        unsafe {
+            let _ = Box::from_raw(root);
         }
     }
 

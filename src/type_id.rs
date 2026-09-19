@@ -12,6 +12,7 @@ struct TypeInfo {
     is_equal: extern "C" fn(ObjectPtr, ObjectPtr) -> bool,
     hash: extern "C" fn(ObjectPtr) -> usize,
     size: usize,
+    no_pointers: bool,
 }
 
 #[allow(dead_code)]
@@ -44,6 +45,13 @@ impl TypeId {
         type_info.size
     }
 
+    pub(crate) fn is_no_pointer(&self) -> bool {
+        if self.0 == 0 {
+            return false;
+        }
+        self.type_info().no_pointers
+    }
+
     pub fn is_equal_func(&self) -> extern "C" fn(ObjectPtr, ObjectPtr) -> bool {
         let type_info = self.type_info();
         type_info.is_equal
@@ -56,6 +64,44 @@ impl TypeId {
 
     pub(crate) fn name(&self) -> &StringObject {
         &self.type_info().name
+    }
+}
+
+#[cfg(test)]
+pub(crate) struct FakeTypeInfo {
+    tid: TypeId,
+    holder: *mut [u64],
+}
+
+#[cfg(test)]
+impl FakeTypeInfo {
+    pub(crate) fn new(no_pointers: bool) -> Self {
+        let mut blob: Box<[u64]> = vec![0u64; TYPE_INFO_SIZE.div_ceil(8)].into_boxed_slice();
+        let ptr = blob.as_mut_ptr() as *mut u8;
+        unsafe {
+            ptr.add(std::mem::offset_of!(TypeInfo, no_pointers))
+                .cast::<bool>()
+                .write(no_pointers);
+        }
+        let leaked: &'static mut [u64] = Box::leak(blob);
+        let holder = leaked as *mut [u64];
+        FakeTypeInfo {
+            tid: TypeId::from_raw(leaked.as_ptr() as usize),
+            holder,
+        }
+    }
+
+    pub(crate) fn tid(&self) -> TypeId {
+        self.tid
+    }
+}
+
+#[cfg(test)]
+impl Drop for FakeTypeInfo {
+    fn drop(&mut self) {
+        unsafe {
+            drop(Box::from_raw(self.holder));
+        }
     }
 }
 
@@ -96,6 +142,13 @@ mod tests {
         let id = TypeId::from_raw(7);
         let debug_str = format!("{:?}", id);
         assert!(debug_str.contains("7"));
+    }
+
+    #[test]
+    fn test_type_id_is_no_pointer() {
+        assert!(FakeTypeInfo::new(true).tid().is_no_pointer());
+        assert!(!FakeTypeInfo::new(false).tid().is_no_pointer());
+        assert!(!TypeId::new_invalid().is_no_pointer());
     }
 
     #[test]

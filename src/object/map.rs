@@ -174,6 +174,7 @@ mod tests {
         is_equal: extern "C" fn(ObjectPtr, ObjectPtr) -> bool,
         hash: extern "C" fn(ObjectPtr) -> usize,
         size: usize,
+        no_pointers: bool,
     }
 
     unsafe impl Send for TestTypeInfo {}
@@ -192,6 +193,7 @@ mod tests {
                 is_equal: test_is_equal,
                 hash: test_hash,
                 size: mem::size_of::<isize>(),
+                no_pointers: false,
             }
         })
     }

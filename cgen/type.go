@@ -278,7 +278,26 @@ func (ctx *Context) emitTypeInfoDefinition(typ types.Type) {
 	fmt.Fprintf(ctx.stream, ".is_equal = equal_%s,\n", createTypeName(typ))
 	fmt.Fprintf(ctx.stream, ".hash = hash_%s,\n", createTypeName(typ))
 	fmt.Fprintf(ctx.stream, ".size = sizeof(%s),\n", createTypeName(typ))
+	noPointers := "0"
+	if isNoPointerType(typ) {
+		noPointers = "1"
+	}
+	fmt.Fprintf(ctx.stream, ".no_pointers = %s,\n", noPointers)
 	fmt.Fprintf(ctx.stream, "};\n")
+}
+
+func isNoPointerType(typ types.Type) bool {
+	basic, ok := typ.Underlying().(*types.Basic)
+	if !ok {
+		return false
+	}
+	switch basic.Kind() {
+	case types.Bool, types.Int, types.Int8, types.Int16, types.Int32, types.Int64,
+		types.Uint, types.Uint8, types.Uint16, types.Uint32, types.Uint64,
+		types.Uintptr, types.Float32, types.Float64, types.Complex64, types.Complex128:
+		return true
+	}
+	return false
 }
 
 func (ctx *Context) emitConstant(cst *ssa.Const) {
