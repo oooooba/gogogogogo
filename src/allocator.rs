@@ -6,6 +6,7 @@ use std::ptr::NonNull;
 
 use allocator_api2::alloc::{AllocError, Allocator, Layout};
 
+use crate::light_weight_thread::LightWeightThreadContext;
 use crate::type_id::TypeId;
 
 pub(crate) struct ObjectAllocator(ObjectAllocatorPtr);
@@ -36,6 +37,7 @@ struct ObjectAllocatorInner {
     total_size: usize,
 }
 
+#[derive(Clone, Copy)]
 struct Span {
     ptr: *mut (),
     size: usize,
@@ -49,14 +51,14 @@ struct AllocatedObject {
     type_id: TypeId,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq)]
 enum AllocationKind {
     Heap,
     GuardedPages,
 }
 
 const ALLOCATION_ALIGNMENT: usize = mem::size_of::<u128>();
-const MAX_TOTAL_ALLOCATED_SIZE: usize = 1 << 20;
+pub(crate) const MAX_TOTAL_ALLOCATED_SIZE: usize = 1 << 20;
 
 impl ObjectAllocatorInner {
     fn new() -> Self {
@@ -69,6 +71,9 @@ impl ObjectAllocatorInner {
 
     fn allocate(&mut self, size: usize, type_id: TypeId) -> *mut () {
         let size = size.div_ceil(ALLOCATION_ALIGNMENT) * ALLOCATION_ALIGNMENT;
+        if self.total_size.saturating_add(size) > MAX_TOTAL_ALLOCATED_SIZE {
+            return ptr::null_mut();
+        }
         let mut buf: Vec<u128> = Vec::new();
         if buf.try_reserve_exact(size / ALLOCATION_ALIGNMENT).is_err() {
             return ptr::null_mut();
@@ -85,12 +90,6 @@ impl ObjectAllocatorInner {
             },
         );
         self.total_size += size;
-        if self.total_size > MAX_TOTAL_ALLOCATED_SIZE {
-            panic!(
-                "total allocated size {} exceeds the limit of {} bytes",
-                self.total_size, MAX_TOTAL_ALLOCATED_SIZE
-            );
-        }
         ptr
     }
 
@@ -200,6 +199,61 @@ impl ObjectAllocatorInner {
             self.total_size
         );
     }
+
+    pub(crate) fn run_gc(&mut self, contexts: &[&LightWeightThreadContext]) {
+        for object in self.allocated_objects.values_mut() {
+            object.marked = false;
+        }
+        let global_spans = mem::take(&mut self.global_spans);
+        for span in &global_spans {
+            self.mark_range(span.ptr as usize, span.ptr as usize + span.size);
+        }
+        self.global_spans = global_spans;
+        for context in contexts {
+            let (start, end) = context.stack_range();
+            self.mark_range(start as usize, end as usize);
+        }
+        self.sweep();
+    }
+
+    fn mark_range(&mut self, start: usize, end: usize) {
+        let word_size = mem::size_of::<usize>();
+        let mut address = start;
+        while address + word_size <= end {
+            let word = unsafe { ptr::read_unaligned(address as *const usize) };
+            if let Some(object_address) = self.containing_object(word) {
+                self.mark_object(object_address);
+            }
+            address += word_size;
+        }
+    }
+
+    fn mark_object(&mut self, object_address: usize) {
+        let (span, kind, marked) = match self.allocated_objects.get(&object_address) {
+            Some(object) => (object.span, object.kind, object.marked),
+            None => return,
+        };
+        if marked {
+            return;
+        }
+        self.allocated_objects
+            .get_mut(&object_address)
+            .unwrap()
+            .marked = true;
+        if kind == AllocationKind::Heap {
+            self.mark_range(span.ptr as usize, span.ptr as usize + span.size);
+        }
+    }
+
+    fn containing_object(&self, address: usize) -> Option<usize> {
+        let (object_address, object) = self.allocated_objects.range(..=address).next_back()?;
+        let object_address = *object_address;
+        if address < object_address + object.span.size {
+            Some(object_address)
+        } else {
+            None
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -218,9 +272,25 @@ impl ObjectAllocatorPtr {
         unsafe { &mut *self.0 }.register_global_object(address, size);
     }
 
+    pub(crate) fn run_gc(&self, contexts: &[&LightWeightThreadContext]) {
+        unsafe { &mut *self.0 }.run_gc(contexts)
+    }
+
     #[cfg(test)]
     pub(crate) fn global_spans_len(&self) -> usize {
         unsafe { &*self.0 }.global_spans.len()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn total_size(&self) -> usize {
+        unsafe { &*self.0 }.total_size
+    }
+
+    #[cfg(test)]
+    pub(crate) fn contains(&self, ptr: *mut ()) -> bool {
+        unsafe { &*self.0 }
+            .allocated_objects
+            .contains_key(&(ptr as usize))
     }
 }
 
@@ -372,19 +442,74 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "exceeds the limit")]
-    fn test_allocate_panics_above_limit() {
-        use std::panic::{AssertUnwindSafe, catch_unwind};
+    fn test_allocate_returns_null_above_limit() {
         let mut inner = ObjectAllocatorInner::new();
-        let result = catch_unwind(AssertUnwindSafe(|| {
-            for _ in 0..MAX_TOTAL_ALLOCATED_SIZE / 65536 + 2 {
-                inner.allocate(65536, TypeId::new_invalid());
-            }
-        }));
-        assert!(result.is_err());
+        while !inner.allocate(65536, TypeId::new_invalid()).is_null() {}
+        assert!(inner.total_size <= MAX_TOTAL_ALLOCATED_SIZE);
+        assert!(inner.allocate(65536, TypeId::new_invalid()).is_null());
         inner.free_all_allocated_objects();
         assert_eq!(inner.total_size, 0);
-        panic!("total allocated size exceeds the limit of 1048576 bytes");
+    }
+
+    #[test]
+    fn test_mark_marks_reachable_digraph() {
+        let mut inner = ObjectAllocatorInner::new();
+        let root = Box::into_raw(Box::new(0usize));
+        inner.register_global_object(root as *mut (), mem::size_of::<usize>());
+        let a = inner.allocate(64, TypeId::new_invalid());
+        let b = inner.allocate(64, TypeId::new_invalid());
+        let c = inner.allocate(64, TypeId::new_invalid());
+        let garbage = inner.allocate(64, TypeId::new_invalid());
+        unsafe {
+            root.write(a as usize);
+            ptr::write(a as *mut usize, b as usize);
+            ptr::write(b as *mut usize, c as usize);
+        }
+        inner.run_gc(&[]);
+        assert!(inner.allocated_objects.contains_key(&(a as usize)));
+        assert!(inner.allocated_objects.contains_key(&(b as usize)));
+        assert!(inner.allocated_objects.contains_key(&(c as usize)));
+        assert!(!inner.allocated_objects.contains_key(&(garbage as usize)));
+        inner.free_all_allocated_objects();
+        unsafe {
+            let _ = Box::from_raw(root);
+        }
+    }
+
+    #[test]
+    fn test_mark_scans_context_stack_range() {
+        let mut inner = ObjectAllocatorInner::new();
+        let kept = inner.allocate(64, TypeId::new_invalid());
+        let garbage = inner.allocate(64, TypeId::new_invalid());
+        let gc = crate::global_context::create_global_context(crate::ObjectAllocator::new());
+        let mut ctx = crate::create_light_weight_thread_context(
+            gc.dupulicate(),
+            crate::FunctionObject::new_null(),
+        );
+        let (start, _end) = ctx.stack_range();
+        ctx.grow_stack(mem::size_of::<usize>());
+        let address = start as *mut usize;
+        unsafe {
+            ptr::write(address, kept as usize);
+        }
+        inner.run_gc(&[&ctx]);
+        assert!(inner.allocated_objects.contains_key(&(kept as usize)));
+        assert!(!inner.allocated_objects.contains_key(&(garbage as usize)));
+        inner.free_all_allocated_objects();
+    }
+
+    #[test]
+    fn test_mark_ignores_one_past_the_end_pointer() {
+        let mut inner = ObjectAllocatorInner::new();
+        let a = inner.allocate(16, TypeId::new_invalid());
+        let root_holding = Box::into_raw(Box::new(a as usize + 16));
+        inner.register_global_object(root_holding as *mut (), mem::size_of::<usize>());
+        inner.run_gc(&[]);
+        assert!(!inner.allocated_objects.contains_key(&(a as usize)));
+        inner.free_all_allocated_objects();
+        unsafe {
+            let _ = Box::from_raw(root_holding);
+        }
     }
 
     #[test]

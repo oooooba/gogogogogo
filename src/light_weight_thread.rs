@@ -124,6 +124,11 @@ impl LightWeightThreadContext {
     pub(crate) fn allocate(&mut self, size: usize, type_id: TypeId) -> *mut () {
         self.global_context().process(|mut global_context| {
             let ptr = global_context.allocator().allocate(size, type_id);
+            if !ptr.is_null() {
+                return ptr;
+            }
+            global_context.run_gc(&*self);
+            let ptr = global_context.allocator().allocate(size, type_id);
             if ptr.is_null() {
                 panic!(
                     "out of memory: failed to allocate {} bytes even after garbage collection",
@@ -151,6 +156,14 @@ impl LightWeightThreadContext {
     pub(crate) fn is_stack_empty(&self) -> bool {
         assert!(self.initial_stack_pointer <= self.stack_pointer);
         self.initial_stack_pointer == self.stack_pointer
+    }
+
+    pub(crate) fn stack_range(&self) -> (*mut u8, *mut u8) {
+        assert!(self.initial_stack_pointer <= self.stack_pointer);
+        (
+            self.initial_stack_pointer as *mut u8,
+            self.stack_pointer as *mut u8,
+        )
     }
 
     pub(crate) fn suspend(&mut self) {
