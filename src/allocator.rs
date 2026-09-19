@@ -17,7 +17,7 @@ impl ObjectAllocator {
         ))))
     }
 
-    pub(crate) fn ptr(&mut self) -> ObjectAllocatorPtr {
+    pub(crate) fn ptr(&self) -> ObjectAllocatorPtr {
         self.0.clone()
     }
 }

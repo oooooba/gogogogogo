@@ -16,12 +16,12 @@ where
     F: FnOnce(&LightWeightThreadContext) -> (FunctionObject, usize, *const WordChunk),
 {
     let (func, result_size, args) = param(ctx);
-    let (args, entry_ptr) = ctx.global_context().process(|mut global_context| {
+
+    let entry_ptr = ctx.allocate(mem::size_of::<DeferStackEntry>(), TypeId::new_invalid())
+        as *mut DeferStackEntry;
+    let args = ctx.global_context().process(|mut global_context| {
         let allocator = global_context.allocator();
-        let args = unsafe { WordChunk::duplicate_raw(args, &allocator) };
-        let entry_ptr = allocator.allocate(mem::size_of::<DeferStackEntry>(), TypeId::new_invalid())
-            as *mut DeferStackEntry;
-        (args, entry_ptr)
+        unsafe { WordChunk::duplicate_raw(args, &allocator) }
     });
 
     let frame = ctx.stack_frame_mut::<StackFrameCommon>();

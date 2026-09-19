@@ -102,7 +102,7 @@ mod tests {
 
     #[test]
     fn test_string_object_builder_and_as_bytes() {
-        let mut allocator = ObjectAllocator::new();
+        let allocator = ObjectAllocator::new();
         let mut builder = StringObject::builder(5, &allocator.ptr());
         builder.append_bytes(b"hello");
         let s = builder.build();
@@ -111,7 +111,7 @@ mod tests {
 
     #[test]
     fn test_string_object_len_in_bytes() {
-        let mut allocator = ObjectAllocator::new();
+        let allocator = ObjectAllocator::new();
         let mut builder = StringObject::builder(5, &allocator.ptr());
         builder.append_bytes(b"hello");
         let s = builder.build();
@@ -120,7 +120,7 @@ mod tests {
 
     #[test]
     fn test_string_object_to_str() {
-        let mut allocator = ObjectAllocator::new();
+        let allocator = ObjectAllocator::new();
         let mut builder = StringObject::builder(5, &allocator.ptr());
         builder.append_bytes(b"hello");
         let s = builder.build();
@@ -129,7 +129,7 @@ mod tests {
 
     #[test]
     fn test_string_object_eq() {
-        let mut allocator = ObjectAllocator::new();
+        let allocator = ObjectAllocator::new();
         let mut builder1 = StringObject::builder(5, &allocator.ptr());
         builder1.append_bytes(b"hello");
         let s1 = builder1.build();
@@ -143,7 +143,7 @@ mod tests {
 
     #[test]
     fn test_string_object_ne() {
-        let mut allocator = ObjectAllocator::new();
+        let allocator = ObjectAllocator::new();
         let mut builder1 = StringObject::builder(5, &allocator.ptr());
         builder1.append_bytes(b"hello");
         let s1 = builder1.build();
@@ -157,7 +157,7 @@ mod tests {
 
     #[test]
     fn test_string_object_append_char() {
-        let mut allocator = ObjectAllocator::new();
+        let allocator = ObjectAllocator::new();
         let mut builder = StringObject::builder(5, &allocator.ptr());
         builder.append_char('h');
         builder.append_char('e');
@@ -170,7 +170,7 @@ mod tests {
 
     #[test]
     fn test_string_object_empty() {
-        let mut allocator = ObjectAllocator::new();
+        let allocator = ObjectAllocator::new();
         let builder = StringObject::builder(0, &allocator.ptr());
         let s = builder.build();
         assert_eq!(s.as_bytes(), b"");
@@ -180,7 +180,7 @@ mod tests {
 
     #[test]
     fn test_string_object_contains_nul_bytes() {
-        let mut allocator = ObjectAllocator::new();
+        let allocator = ObjectAllocator::new();
         let mut builder = StringObject::builder(3, &allocator.ptr());
         builder.append_bytes(b"a\x00b");
         let s = builder.build();

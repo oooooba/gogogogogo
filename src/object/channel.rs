@@ -253,7 +253,7 @@ mod tests {
 
     #[test]
     fn test_buffered_channel_send_receive() {
-        let mut allocator = ObjectAllocator::new();
+        let allocator = ObjectAllocator::new();
         let channel = Rc::new(RefCell::new(ChannelObject::new(1, &allocator.ptr())));
         {
             let data = allocator
@@ -277,7 +277,7 @@ mod tests {
     #[test]
     fn test_buffered_channel_order() {
         let capacity = 10;
-        let mut allocator = ObjectAllocator::new();
+        let allocator = ObjectAllocator::new();
         let channel = Rc::new(RefCell::new(ChannelObject::new(capacity, &allocator.ptr())));
         for i in 0..capacity {
             let data = allocator
@@ -300,7 +300,7 @@ mod tests {
 
     #[test]
     fn test_buffered_channel_first_send_second_receive() {
-        let mut allocator = ObjectAllocator::new();
+        let allocator = ObjectAllocator::new();
         let channel = Rc::new(RefCell::new(ChannelObject::new(1, &allocator.ptr())));
         let first = channel.clone();
         let second = channel;
@@ -325,7 +325,7 @@ mod tests {
 
     #[test]
     fn test_buffered_channel_first_receive_second_send() {
-        let mut allocator = ObjectAllocator::new();
+        let allocator = ObjectAllocator::new();
         let channel = Rc::new(RefCell::new(ChannelObject::new(1, &allocator.ptr())));
         let first = channel.clone();
         let second = channel;
@@ -347,7 +347,7 @@ mod tests {
 
     #[test]
     fn test_buffered_channel_send_close_receive() {
-        let mut allocator = ObjectAllocator::new();
+        let allocator = ObjectAllocator::new();
         let channel = Rc::new(RefCell::new(ChannelObject::new(1, &allocator.ptr())));
         {
             let data = allocator
@@ -377,7 +377,7 @@ mod tests {
 
     #[test]
     fn test_rendezvous_channel_first_send_second_receive() {
-        let mut allocator = ObjectAllocator::new();
+        let allocator = ObjectAllocator::new();
         let channel = Rc::new(RefCell::new(ChannelObject::new(0, &allocator.ptr())));
         let first = channel.clone();
         let second = channel;
@@ -407,7 +407,7 @@ mod tests {
 
     #[test]
     fn test_rendezvous_channel_first_receive_second_send() {
-        let mut allocator = ObjectAllocator::new();
+        let allocator = ObjectAllocator::new();
         let channel = Rc::new(RefCell::new(ChannelObject::new(0, &allocator.ptr())));
         let first = channel.clone();
         let second = channel;
@@ -436,7 +436,7 @@ mod tests {
 
     #[test]
     fn test_rendezvous_channel_first_send_and_close_second_receive() {
-        let mut allocator = ObjectAllocator::new();
+        let allocator = ObjectAllocator::new();
         let channel = Rc::new(RefCell::new(ChannelObject::new(0, &allocator.ptr())));
         let first = channel.clone();
         let second = channel;

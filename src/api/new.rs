@@ -18,10 +18,9 @@ struct StackFrameNew<'a> {
 pub extern "C" fn gox5_new(ctx: &mut LightWeightThreadContext) -> FunctionObject {
     let frame = ctx.stack_frame::<StackFrameNew>();
     let size = frame.size;
+    let type_id = frame.type_id;
 
-    let ptr = ctx
-        .global_context()
-        .process(|mut global_context| global_context.allocator().allocate(size, frame.type_id));
+    let ptr = ctx.allocate(size, type_id);
     let bytes = unsafe { slice::from_raw_parts_mut(ptr as *mut u8, size) };
     bytes.fill(0);
 

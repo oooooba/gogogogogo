@@ -1,5 +1,6 @@
 use std::slice;
 
+#[derive(Clone, Copy)]
 #[repr(C)]
 pub struct SliceObject {
     ptr: *mut (),

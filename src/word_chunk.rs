@@ -86,7 +86,7 @@ mod tests {
 
     #[test]
     fn test_duplicate_raw_empty() {
-        let mut alloc = ObjectAllocator::new();
+        let alloc = ObjectAllocator::new();
         let buf = build_word_chunk(0, &[]);
         let src = buf.as_ptr() as *const WordChunk;
         let dst = unsafe { WordChunk::duplicate_raw(src, &alloc.ptr()) };
@@ -96,7 +96,7 @@ mod tests {
 
     #[test]
     fn test_duplicate_raw_nonempty() {
-        let mut alloc = ObjectAllocator::new();
+        let alloc = ObjectAllocator::new();
         let buf = build_word_chunk(3, &[100, 200, 300]);
         let src = buf.as_ptr() as *const WordChunk;
         let dst = unsafe { WordChunk::duplicate_raw(src, &alloc.ptr()) };
@@ -106,7 +106,7 @@ mod tests {
 
     #[test]
     fn test_duplicate_raw_independent_of_source() {
-        let mut alloc = ObjectAllocator::new();
+        let alloc = ObjectAllocator::new();
         let buf = build_word_chunk(2, &[7, 8]);
         let src = buf.as_ptr() as *const WordChunk;
         let dst = unsafe { WordChunk::duplicate_raw(src, &alloc.ptr()) };

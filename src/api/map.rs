@@ -19,11 +19,7 @@ struct StackFrameMapNew<'a> {
 
 fn allocate_map(ctx: &mut LightWeightThreadContext, map: MapObject) -> *mut MapObject {
     let object_size = mem::size_of::<MapObject>();
-    let ptr = ctx.global_context().process(|mut global_context| {
-        global_context
-            .allocator()
-            .allocate(object_size, TypeId::new_invalid()) as *mut MapObject
-    });
+    let ptr = ctx.allocate(object_size, TypeId::new_invalid()) as *mut MapObject;
 
     unsafe {
         ptr::write(ptr, map);
@@ -94,11 +90,7 @@ pub extern "C" fn gox5_map_clone(ctx: &mut LightWeightThreadContext) -> Function
 
     let ptr = allocate_map(ctx, cloned);
     let slot_size = mem::size_of::<*mut ()>();
-    let slot = ctx.global_context().process(|mut global_context| {
-        global_context
-            .allocator()
-            .allocate(slot_size, TypeId::new_invalid())
-    });
+    let slot = ctx.allocate(slot_size, TypeId::new_invalid());
     unsafe {
         *(slot as *mut *mut ()) = ptr as *mut ();
     }
@@ -356,7 +348,7 @@ mod tests {
 
     #[test]
     fn test_gox5_map_set_and_len() {
-        let mut allocator = ObjectAllocator::new();
+        let allocator = ObjectAllocator::new();
         let map = MapObject::new(test_type_id(), test_type_id(), allocator.ptr());
         let map_ptr = make_map_ptr(&allocator.ptr(), map);
 
@@ -379,7 +371,7 @@ mod tests {
 
     #[test]
     fn test_gox5_map_len_empty() {
-        let mut allocator = ObjectAllocator::new();
+        let allocator = ObjectAllocator::new();
         let map = MapObject::new(test_type_id(), test_type_id(), allocator.ptr());
         let map_ptr = make_map_ptr(&allocator.ptr(), map);
 
@@ -446,7 +438,7 @@ mod tests {
 
     #[test]
     fn test_gox5_map_clear() {
-        let mut allocator = ObjectAllocator::new();
+        let allocator = ObjectAllocator::new();
         let map = MapObject::new(test_type_id(), test_type_id(), allocator.ptr());
         let map_ptr = make_map_ptr(&allocator.ptr(), map);
 

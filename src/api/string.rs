@@ -396,7 +396,7 @@ mod tests {
             FunctionObject::new_null(),
         );
 
-        let mut allocator = ObjectAllocator::new();
+        let allocator = ObjectAllocator::new();
         let mut builder = StringObject::builder(5, &allocator.ptr());
         builder.append_bytes(b"hello");
         let s = builder.build();
@@ -425,7 +425,7 @@ mod tests {
             FunctionObject::new_null(),
         );
 
-        let mut allocator = ObjectAllocator::new();
+        let allocator = ObjectAllocator::new();
         let builder = StringObject::builder(0, &allocator.ptr());
         let s = builder.build();
 
@@ -501,7 +501,7 @@ mod tests {
             FunctionObject::new_null(),
         );
 
-        let mut allocator = ObjectAllocator::new();
+        let allocator = ObjectAllocator::new();
         let mut builder = StringObject::builder(5, &allocator.ptr());
         builder.append_bytes(b"hello");
         let base = builder.build();
@@ -532,7 +532,7 @@ mod tests {
             FunctionObject::new_null(),
         );
 
-        let mut allocator = ObjectAllocator::new();
+        let allocator = ObjectAllocator::new();
         let mut builder = StringObject::builder(5, &allocator.ptr());
         builder.append_bytes(b"hello");
         let base = builder.build();
@@ -563,7 +563,7 @@ mod tests {
             FunctionObject::new_null(),
         );
 
-        let mut allocator = ObjectAllocator::new();
+        let allocator = ObjectAllocator::new();
         let mut builder1 = StringObject::builder(5, &allocator.ptr());
         builder1.append_bytes(b"hello");
         let lhs = builder1.build();

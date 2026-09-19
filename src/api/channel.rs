@@ -20,11 +20,7 @@ struct StackFrameChannelNew<'a> {
 
 fn allocate_channel(ctx: &mut LightWeightThreadContext, capacity: usize) -> *mut ChannelObject {
     let object_size = mem::size_of::<ChannelObject>();
-    let ptr = ctx.global_context().process(|mut global_context| {
-        global_context
-            .allocator()
-            .allocate(object_size, TypeId::new_invalid()) as *mut ChannelObject
-    });
+    let ptr = ctx.allocate(object_size, TypeId::new_invalid()) as *mut ChannelObject;
 
     let channel = ctx
         .global_context()
@@ -57,9 +53,7 @@ fn load_send_data(
     type_id: TypeId,
     ctx: &mut LightWeightThreadContext,
 ) -> ObjectPtr {
-    let dst = ctx
-        .global_context()
-        .process(|mut global_context| global_context.allocator().allocate(size, type_id));
+    let dst = ctx.allocate(size, type_id);
     let src_slice = unsafe { slice::from_raw_parts(src.as_ref::<u8>(), size) };
     let dst_slice = unsafe { slice::from_raw_parts_mut(dst as *mut u8, size) };
     dst_slice.copy_from_slice(src_slice);

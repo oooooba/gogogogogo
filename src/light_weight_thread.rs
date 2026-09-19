@@ -8,6 +8,7 @@ use crate::UserFunction;
 use crate::defer_stack::DeferStack;
 use crate::global_context::GlobalContextPtr;
 use crate::object::interface::Interface;
+use crate::type_id::TypeId;
 
 #[repr(C)]
 pub struct LightWeightThreadContext {
@@ -118,6 +119,19 @@ impl LightWeightThreadContext {
 
     pub(crate) fn global_context(&self) -> &GlobalContextPtr {
         &self.global_context
+    }
+
+    pub(crate) fn allocate(&mut self, size: usize, type_id: TypeId) -> *mut () {
+        self.global_context().process(|mut global_context| {
+            let ptr = global_context.allocator().allocate(size, type_id);
+            if ptr.is_null() {
+                panic!(
+                    "out of memory: failed to allocate {} bytes even after garbage collection",
+                    size
+                );
+            }
+            ptr
+        })
     }
 
     pub(crate) fn stack_pointer(&self) -> *mut StackFrame {

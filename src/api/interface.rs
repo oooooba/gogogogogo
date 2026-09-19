@@ -22,21 +22,21 @@ struct StackFrameInterfaceNew<'a> {
 #[unsafe(no_mangle)]
 pub extern "C" fn gox5_interface_new(ctx: &mut LightWeightThreadContext) -> FunctionObject {
     let frame = ctx.stack_frame::<StackFrameInterfaceNew>();
+    let type_id = frame.type_id;
+    let frame_receiver = frame.receiver.clone();
 
-    let receiver = if frame.receiver.is_null() {
+    let receiver = if frame_receiver.is_null() {
         ObjectPtr(ptr::null_mut())
     } else {
-        let size = frame.type_id.size();
-        let ptr = ctx
-            .global_context()
-            .process(|mut global_context| global_context.allocator().allocate(size, frame.type_id));
-        let src = unsafe { slice::from_raw_parts(frame.receiver.0 as *const u8, size) };
+        let size = type_id.size();
+        let ptr = ctx.allocate(size, type_id);
+        let src = unsafe { slice::from_raw_parts(frame_receiver.0 as *const u8, size) };
         let dst = unsafe { slice::from_raw_parts_mut(ptr as *mut u8, size) };
         dst.copy_from_slice(src);
         ObjectPtr(ptr)
     };
 
-    let interface = Interface::new(receiver, frame.type_id);
+    let interface = Interface::new(receiver, type_id);
 
     let frame = ctx.stack_frame_mut::<StackFrameInterfaceNew>();
     *frame.result_ptr = interface;

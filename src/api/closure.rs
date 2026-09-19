@@ -20,6 +20,7 @@ struct StackFrameClosureNew<'a> {
 #[unsafe(no_mangle)]
 pub extern "C" fn gox5_closure_new(ctx: &mut LightWeightThreadContext) -> FunctionObject {
     let frame = ctx.stack_frame::<StackFrameClosureNew>();
+    let user_function = frame.user_function.clone();
 
     let wc_ptr = unsafe {
         let sp = ctx.stack_pointer() as *const u8;
@@ -28,15 +29,13 @@ pub extern "C" fn gox5_closure_new(ctx: &mut LightWeightThreadContext) -> Functi
     let wc_count = unsafe { ptr::read(wc_ptr as *const usize) };
     let wc_data_size = wc_count * mem::size_of::<*const ()>();
 
-    let ptr = ctx.global_context().process(|mut global_context| {
-        global_context.allocator().allocate(
-            mem::size_of::<ClosureLayout>() + wc_data_size,
-            TypeId::new_invalid(),
-        ) as *mut ClosureLayout
-    });
+    let ptr = ctx.allocate(
+        mem::size_of::<ClosureLayout>() + wc_data_size,
+        TypeId::new_invalid(),
+    ) as *mut ClosureLayout;
 
     unsafe {
-        ptr::addr_of_mut!((*ptr).func).write(frame.user_function.clone());
+        ptr::addr_of_mut!((*ptr).func).write(user_function);
         let wc_dst = ptr::addr_of_mut!((*ptr).object_ptrs) as *mut u8;
         let wc_src_size = mem::size_of::<usize>() + wc_data_size;
         ptr::copy_nonoverlapping(wc_ptr as *const u8, wc_dst, wc_src_size);

@@ -213,14 +213,14 @@ mod tests {
 
     #[test]
     fn test_map_new() {
-        let mut allocator = ObjectAllocator::new();
+        let allocator = ObjectAllocator::new();
         let map = MapObject::new(test_type_id(), test_type_id(), allocator.ptr());
         assert_eq!(map.len(), 0);
     }
 
     #[test]
     fn test_map_set_get() {
-        let mut allocator = ObjectAllocator::new();
+        let allocator = ObjectAllocator::new();
         let mut map = MapObject::new(test_type_id(), test_type_id(), allocator.ptr());
         let key = make_isize_ptr(&allocator.ptr(), 1);
         let value = make_isize_ptr(&allocator.ptr(), 100);
@@ -233,7 +233,7 @@ mod tests {
 
     #[test]
     fn test_map_get_nonexistent() {
-        let mut allocator = ObjectAllocator::new();
+        let allocator = ObjectAllocator::new();
         let map = MapObject::new(test_type_id(), test_type_id(), allocator.ptr());
         let key = make_isize_ptr(&allocator.ptr(), 1);
         let result = make_result_ptr(&allocator.ptr());
@@ -242,7 +242,7 @@ mod tests {
 
     #[test]
     fn test_map_set_overwrite() {
-        let mut allocator = ObjectAllocator::new();
+        let allocator = ObjectAllocator::new();
         let mut map = MapObject::new(test_type_id(), test_type_id(), allocator.ptr());
         let key = make_isize_ptr(&allocator.ptr(), 1);
         let value1 = make_isize_ptr(&allocator.ptr(), 100);
@@ -257,7 +257,7 @@ mod tests {
 
     #[test]
     fn test_map_delete() {
-        let mut allocator = ObjectAllocator::new();
+        let allocator = ObjectAllocator::new();
         let mut map = MapObject::new(test_type_id(), test_type_id(), allocator.ptr());
         let key = make_isize_ptr(&allocator.ptr(), 1);
         let value = make_isize_ptr(&allocator.ptr(), 100);
@@ -271,7 +271,7 @@ mod tests {
 
     #[test]
     fn test_map_delete_nonexistent() {
-        let mut allocator = ObjectAllocator::new();
+        let allocator = ObjectAllocator::new();
         let mut map = MapObject::new(test_type_id(), test_type_id(), allocator.ptr());
         let key = make_isize_ptr(&allocator.ptr(), 999);
         map.delete(key);
@@ -280,7 +280,7 @@ mod tests {
 
     #[test]
     fn test_map_nth() {
-        let mut allocator = ObjectAllocator::new();
+        let allocator = ObjectAllocator::new();
         let mut map = MapObject::new(test_type_id(), test_type_id(), allocator.ptr());
         let key1 = make_isize_ptr(&allocator.ptr(), 1);
         let value1 = make_isize_ptr(&allocator.ptr(), 10);
@@ -297,7 +297,7 @@ mod tests {
 
     #[test]
     fn test_map_nth_null_key() {
-        let mut allocator = ObjectAllocator::new();
+        let allocator = ObjectAllocator::new();
         let mut map = MapObject::new(test_type_id(), test_type_id(), allocator.ptr());
         let key = make_isize_ptr(&allocator.ptr(), 1);
         let value = make_isize_ptr(&allocator.ptr(), 10);
@@ -308,7 +308,7 @@ mod tests {
 
     #[test]
     fn test_map_nth_null_value() {
-        let mut allocator = ObjectAllocator::new();
+        let allocator = ObjectAllocator::new();
         let mut map = MapObject::new(test_type_id(), test_type_id(), allocator.ptr());
         let key = make_isize_ptr(&allocator.ptr(), 1);
         let value = make_isize_ptr(&allocator.ptr(), 10);
@@ -319,7 +319,7 @@ mod tests {
 
     #[test]
     fn test_map_clear() {
-        let mut allocator = ObjectAllocator::new();
+        let allocator = ObjectAllocator::new();
         let mut map = MapObject::new(test_type_id(), test_type_id(), allocator.ptr());
         for (k, v) in [(1isize, 10isize), (2, 20), (3, 30)] {
             let key = make_isize_ptr(&allocator.ptr(), k);
@@ -338,7 +338,7 @@ mod tests {
 
     #[test]
     fn test_map_clear_resets_iteration() {
-        let mut allocator = ObjectAllocator::new();
+        let allocator = ObjectAllocator::new();
         let mut map = MapObject::new(test_type_id(), test_type_id(), allocator.ptr());
         let key1 = make_isize_ptr(&allocator.ptr(), 1);
         let value1 = make_isize_ptr(&allocator.ptr(), 10);
