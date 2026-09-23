@@ -264,16 +264,22 @@ impl ObjectAllocatorInner {
             .unwrap()
             .marked = true;
         if kind == AllocationKind::Heap && !type_id.is_no_pointer() {
-            match type_id.get_member_offset_runs() {
-                Some(get_member_offset_runs) => {
-                    let base = span.ptr as usize;
-                    let inner = self as *mut ObjectAllocatorInner as *mut ffi::c_void;
-                    get_member_offset_runs(mark_range_visitor, base, inner);
-                }
-                None => {
-                    self.mark_range(span.ptr as usize, span.ptr as usize + span.size);
-                }
+            if type_id.is_interface_type() {
+                self.mark_interface_object(span.ptr as usize);
+            } else if let Some(get_member_offset_runs) = type_id.get_member_offset_runs() {
+                let base = span.ptr as usize;
+                let inner = self as *mut ObjectAllocatorInner as *mut ffi::c_void;
+                get_member_offset_runs(mark_range_visitor, base, inner);
+            } else {
+                self.mark_range(span.ptr as usize, span.ptr as usize + span.size);
             }
+        }
+    }
+
+    fn mark_interface_object(&mut self, base: usize) {
+        let receiver = unsafe { ptr::read_unaligned(base as *const usize) };
+        if let Some(object_address) = self.containing_object(receiver) {
+            self.mark_object(object_address);
         }
     }
 
@@ -690,6 +696,143 @@ mod tests {
         assert!(inner.allocated_objects.contains_key(&(middle as usize)));
         assert!(inner.allocated_objects.contains_key(&(leaf as usize)));
         assert!(!inner.allocated_objects.contains_key(&(garbage as usize)));
+        inner.free_all_allocated_objects();
+        unsafe {
+            let _ = Box::from_raw(root);
+        }
+    }
+
+    #[test]
+    fn test_mark_interface_object_marks_receiver_box() {
+        let mut inner = ObjectAllocatorInner::new();
+        let root = Box::into_raw(Box::new(0usize));
+        inner.register_global_object(root as *mut (), mem::size_of::<usize>());
+        let interface_type = crate::type_id::FakeTypeInfo::new_interface(false);
+        let receiver_box = inner.allocate(
+            mem::size_of::<crate::object::interface::Interface>(),
+            TypeId::new_invalid(),
+        );
+        let garbage = inner.allocate(16, TypeId::new_invalid());
+        let interface_object = inner.allocate(
+            mem::size_of::<crate::object::interface::Interface>(),
+            interface_type.tid(),
+        );
+        unsafe {
+            root.write(interface_object as usize);
+            ptr::write(interface_object as *mut usize, receiver_box as usize);
+        }
+        inner.run_gc(&[]);
+        assert!(
+            inner
+                .allocated_objects
+                .contains_key(&(interface_object as usize))
+        );
+        assert!(
+            inner
+                .allocated_objects
+                .contains_key(&(receiver_box as usize))
+        );
+        assert!(!inner.allocated_objects.contains_key(&(garbage as usize)));
+        inner.free_all_allocated_objects();
+        unsafe {
+            let _ = Box::from_raw(root);
+        }
+    }
+
+    #[test]
+    fn test_mark_interface_object_with_nil_receiver() {
+        let mut inner = ObjectAllocatorInner::new();
+        let root = Box::into_raw(Box::new(0usize));
+        inner.register_global_object(root as *mut (), mem::size_of::<usize>());
+        let interface_type = crate::type_id::FakeTypeInfo::new_interface(false);
+        let garbage = inner.allocate(16, TypeId::new_invalid());
+        let interface_object = inner.allocate(
+            mem::size_of::<crate::object::interface::Interface>(),
+            interface_type.tid(),
+        );
+        unsafe {
+            root.write(interface_object as usize);
+            ptr::write(interface_object as *mut usize, 0usize);
+        }
+        inner.run_gc(&[]);
+        assert!(
+            inner
+                .allocated_objects
+                .contains_key(&(interface_object as usize))
+        );
+        assert!(!inner.allocated_objects.contains_key(&(garbage as usize)));
+        inner.free_all_allocated_objects();
+        unsafe {
+            let _ = Box::from_raw(root);
+        }
+    }
+
+    #[test]
+    fn test_mark_interface_object_receiver_no_pointer_interior_not_scanned() {
+        let mut inner = ObjectAllocatorInner::new();
+        let root = Box::into_raw(Box::new(0usize));
+        inner.register_global_object(root as *mut (), mem::size_of::<usize>());
+        let interface_type = crate::type_id::FakeTypeInfo::new_interface(false);
+        let no_pointer_type = crate::type_id::FakeTypeInfo::new(true);
+        let receiver_box = inner.allocate(16, no_pointer_type.tid());
+        let garbage = inner.allocate(16, TypeId::new_invalid());
+        let interface_object = inner.allocate(
+            mem::size_of::<crate::object::interface::Interface>(),
+            interface_type.tid(),
+        );
+        unsafe {
+            root.write(interface_object as usize);
+            ptr::write(interface_object as *mut usize, receiver_box as usize);
+            ptr::write(receiver_box as *mut usize, garbage as usize);
+        }
+        inner.run_gc(&[]);
+        assert!(
+            inner
+                .allocated_objects
+                .contains_key(&(interface_object as usize))
+        );
+        assert!(
+            inner
+                .allocated_objects
+                .contains_key(&(receiver_box as usize))
+        );
+        assert!(!inner.allocated_objects.contains_key(&(garbage as usize)));
+        inner.free_all_allocated_objects();
+        unsafe {
+            let _ = Box::from_raw(root);
+        }
+    }
+
+    #[test]
+    fn test_mark_interface_object_receiver_pointer_interior_scanned() {
+        let mut inner = ObjectAllocatorInner::new();
+        let root = Box::into_raw(Box::new(0usize));
+        inner.register_global_object(root as *mut (), mem::size_of::<usize>());
+        let interface_type = crate::type_id::FakeTypeInfo::new_interface(false);
+        let pointer_type = crate::type_id::FakeTypeInfo::new(false);
+        let receiver_box = inner.allocate(16, pointer_type.tid());
+        let garbage = inner.allocate(16, TypeId::new_invalid());
+        let interface_object = inner.allocate(
+            mem::size_of::<crate::object::interface::Interface>(),
+            interface_type.tid(),
+        );
+        unsafe {
+            root.write(interface_object as usize);
+            ptr::write(interface_object as *mut usize, receiver_box as usize);
+            ptr::write(receiver_box as *mut usize, garbage as usize);
+        }
+        inner.run_gc(&[]);
+        assert!(
+            inner
+                .allocated_objects
+                .contains_key(&(interface_object as usize))
+        );
+        assert!(
+            inner
+                .allocated_objects
+                .contains_key(&(receiver_box as usize))
+        );
+        assert!(inner.allocated_objects.contains_key(&(garbage as usize)));
         inner.free_all_allocated_objects();
         unsafe {
             let _ = Box::from_raw(root);

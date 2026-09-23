@@ -181,6 +181,7 @@ mod tests {
                 hash: test_hash,
                 size: mem::size_of::<isize>(),
                 no_pointers: false,
+                is_interface: false,
                 get_member_offset_runs: None,
             }
         })

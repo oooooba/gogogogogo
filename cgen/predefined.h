@@ -108,6 +108,7 @@ typedef struct TypeInfo {
     void *hash;
     uintptr_t size;
     bool no_pointers;
+    bool is_interface;
     void (*get_member_offset_runs)(TypeOffsetVisitor visit, uintptr_t base,
                                    void *arg);
 } TypeInfo;

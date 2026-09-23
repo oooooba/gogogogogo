@@ -29,6 +29,7 @@ pub(crate) struct TypeInfo {
     pub(crate) hash: extern "C" fn(ObjectPtr) -> usize,
     pub(crate) size: usize,
     pub(crate) no_pointers: bool,
+    pub(crate) is_interface: bool,
     pub(crate) get_member_offset_runs: Option<GetMemberOffsetRunsFunc>,
 }
 
@@ -72,6 +73,13 @@ impl TypeId {
         self.type_info().no_pointers
     }
 
+    pub(crate) fn is_interface_type(&self) -> bool {
+        if self.0 == 0 {
+            return false;
+        }
+        self.type_info().is_interface
+    }
+
     pub(crate) fn get_member_offset_runs(&self) -> Option<GetMemberOffsetRunsFunc> {
         if self.0 == 0 {
             return None;
@@ -106,13 +114,25 @@ impl FakeTypeInfo {
         Self::new_with_get_member_offset_runs(no_pointers, None)
     }
 
-    // Writes a no_pointers flag and an optional get_member_offset_runs function
-    // pointer into a zeroed TypeInfo-sized blob. The blob is Box::leak'ed and
-    // reclaimed via a raw pointer in Drop (Miri Stacked Borrows); writes happen
-    // after the leak so the raw pointer tags are not invalidated by its Unique
-    // retag.
+    pub(crate) fn new_interface(no_pointers: bool) -> Self {
+        Self::new_with_flags(no_pointers, true, None)
+    }
+
     pub(crate) fn new_with_get_member_offset_runs(
         no_pointers: bool,
+        get_member_offset_runs: Option<GetMemberOffsetRunsFunc>,
+    ) -> Self {
+        Self::new_with_flags(no_pointers, false, get_member_offset_runs)
+    }
+
+    // Writes a no_pointers flag, an interface flag, and an optional
+    // get_member_offset_runs function pointer into a zeroed TypeInfo-sized
+    // blob. The blob is Box::leak'ed and reclaimed via a raw pointer in Drop
+    // (Miri Stacked Borrows); writes happen after the leak so the raw pointer
+    // tags are not invalidated by its Unique retag.
+    pub(crate) fn new_with_flags(
+        no_pointers: bool,
+        is_interface: bool,
         get_member_offset_runs: Option<GetMemberOffsetRunsFunc>,
     ) -> Self {
         let blob_len = TYPE_INFO_SIZE;
@@ -123,6 +143,9 @@ impl FakeTypeInfo {
             ptr.add(mem::offset_of!(TypeInfo, no_pointers))
                 .cast::<bool>()
                 .write(no_pointers);
+            ptr.add(mem::offset_of!(TypeInfo, is_interface))
+                .cast::<bool>()
+                .write(is_interface);
             ptr.add(mem::offset_of!(TypeInfo, get_member_offset_runs))
                 .cast::<Option<GetMemberOffsetRunsFunc>>()
                 .write(get_member_offset_runs);
@@ -192,6 +215,15 @@ mod tests {
         assert!(FakeTypeInfo::new(true).tid().is_no_pointer());
         assert!(!FakeTypeInfo::new(false).tid().is_no_pointer());
         assert!(!TypeId::new_invalid().is_no_pointer());
+    }
+
+    #[test]
+    fn test_type_id_is_interface_type() {
+        assert!(!TypeId::new_invalid().is_interface_type());
+        assert!(FakeTypeInfo::new_interface(false).tid().is_interface_type());
+        assert!(FakeTypeInfo::new_interface(true).tid().is_interface_type());
+        assert!(!FakeTypeInfo::new(false).tid().is_interface_type());
+        assert!(!FakeTypeInfo::new(true).tid().is_interface_type());
     }
 
     extern "C" fn test_probe_get_member_offset_runs(

@@ -288,6 +288,11 @@ func (ctx *Context) emitTypeInfoDefinition(typ types.Type) {
 		noPointers = "1"
 	}
 	fmt.Fprintf(ctx.stream, ".no_pointers = %s,\n", noPointers)
+	isInterface := "0"
+	if _, ok := typ.Underlying().(*types.Interface); ok {
+		isInterface = "1"
+	}
+	fmt.Fprintf(ctx.stream, ".is_interface = %s,\n", isInterface)
 	if hasGetMemberOffsetRuns {
 		fmt.Fprintf(ctx.stream, ".get_member_offset_runs = %s,\n", getMemberOffsetRunsName(typ))
 	}
