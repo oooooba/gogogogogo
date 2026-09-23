@@ -271,6 +271,8 @@ func (ctx *Context) emitTypeInfoDefinition(typ types.Type) {
 	numMethods := fmt.Sprintf("sizeof(%s.entries)/sizeof(%s.entries[0])", interfaceTableName, interfaceTableName)
 	interfaceTable := fmt.Sprintf("&%s.entries[0]", interfaceTableName)
 
+	hasMemberOffsets := emitMemberOffsetRunsArray(ctx, typ)
+
 	fmt.Fprintf(ctx.stream, "const TypeInfo %s = {\n", createTypeIdName(typ))
 	fmt.Fprintf(ctx.stream, ".name = (StringObject){.raw = \"%s\", .len = sizeof(\"%s\") - 1},\n", createTypeName(typ), createTypeName(typ))
 	fmt.Fprintf(ctx.stream, ".num_methods = %s,\n", numMethods)
@@ -283,7 +285,101 @@ func (ctx *Context) emitTypeInfoDefinition(typ types.Type) {
 		noPointers = "1"
 	}
 	fmt.Fprintf(ctx.stream, ".no_pointers = %s,\n", noPointers)
+	if hasMemberOffsets {
+		offsetsName := memberOffsetRunsName(typ)
+		fmt.Fprintf(ctx.stream, ".num_member_offset_runs = sizeof(%s)/sizeof(%s[0]),\n", offsetsName, offsetsName)
+		fmt.Fprintf(ctx.stream, ".member_offset_runs = %s,\n", offsetsName)
+	}
 	fmt.Fprintf(ctx.stream, "};\n")
+}
+
+// memberOffsetRun describes one byte range inside an object that can hold
+// pointers. The GC marks only these ranges instead of every word of the object.
+type memberOffsetRun struct {
+	// offsetDesignator is the C member designator of the run's first byte
+	// ("" means the object base); the emitted offset expression is
+	// "offsetof(<type>, <designator>)".
+	offsetDesignator string
+	// sizeTypeName is a C type whose sizeof is the run size in bytes.
+	sizeTypeName string
+}
+
+// collectMemberOffsetRuns gathers one run per pointer-bearing member of typ.
+// Arrays are represented by a single run covering the whole array range (only
+// when their element type holds pointers), so a huge fixed array (e.g. the
+// runtime's [4194304]*heapArena) costs one entry instead of one entry per
+// element.
+func collectMemberOffsetRuns(typ types.Type, designator string, result *[]memberOffsetRun) {
+	underlying := typ.Underlying()
+	switch t := underlying.(type) {
+	case *types.Struct:
+		for i := 0; i < t.NumFields(); i++ {
+			field := t.Field(i)
+			sub := joinDesignator(designator, createFieldName(field, i))
+			collectMemberOffsetRuns(field.Type(), sub, result)
+		}
+
+	case *types.Array:
+		if !isNoPointerType(t.Elem()) {
+			*result = append(*result, memberOffsetRun{offsetDesignator: designator, sizeTypeName: createTypeName(typ)})
+		}
+
+	case *types.Pointer, *types.Slice, *types.Map, *types.Chan, *types.Signature, *types.Interface:
+		*result = append(*result, memberOffsetRun{offsetDesignator: designator, sizeTypeName: createTypeName(typ)})
+
+	default:
+		if basic, ok := t.(*types.Basic); ok {
+			switch basic.Kind() {
+			case types.String, types.UnsafePointer:
+				*result = append(*result, memberOffsetRun{offsetDesignator: designator, sizeTypeName: createTypeName(typ)})
+			}
+		}
+	}
+}
+
+func joinDesignator(base, ident string) string {
+	if base == "" {
+		return ident
+	}
+	return base + "." + ident
+}
+
+func memberOffsetRunsName(typ types.Type) string {
+	return fmt.Sprintf("member_offset_runs_%s", createTypeName(typ))
+}
+
+// emitMemberOffsetRunsArray emits the static array of pointer-bearing member
+// ranges for typ, and reports whether any such run exists. Only struct and
+// array layouts are known precisely; other root types (map, slice, pointer,
+// ...) keep the fallback full interior scan. If there are too many runs to be
+// worth listing, no runs are emitted at all and the GC falls back to its
+// legacy full-word interior scan (never a partial list, which would let live
+// objects slip through).
+const maxMemberOffsetRuns = 2048
+
+func emitMemberOffsetRunsArray(ctx *Context, typ types.Type) bool {
+	switch typ.Underlying().(type) {
+	case *types.Struct, *types.Array:
+	default:
+		return false
+	}
+
+	runs := []memberOffsetRun{}
+	collectMemberOffsetRuns(typ, "", &runs)
+	if len(runs) == 0 || len(runs) > maxMemberOffsetRuns {
+		return false
+	}
+
+	fmt.Fprintf(ctx.stream, "static const TypeOffsetRun %s[] = {\n", memberOffsetRunsName(typ))
+	for _, run := range runs {
+		offset := "0"
+		if run.offsetDesignator != "" {
+			offset = fmt.Sprintf("offsetof(%s, %s)", createTypeName(typ), run.offsetDesignator)
+		}
+		fmt.Fprintf(ctx.stream, "\t{%s, sizeof(%s)},\n", offset, run.sizeTypeName)
+	}
+	fmt.Fprintf(ctx.stream, "};\n")
+	return true
 }
 
 func isNoPointerType(typ types.Type) bool {

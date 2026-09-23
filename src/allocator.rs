@@ -252,13 +252,8 @@ impl ObjectAllocatorInner {
     }
 
     fn mark_object(&mut self, object_address: usize) {
-        let (span, kind, marked, no_pointer) = match self.allocated_objects.get(&object_address) {
-            Some(object) => (
-                object.span,
-                object.kind,
-                object.marked,
-                object.type_id.is_no_pointer(),
-            ),
+        let (span, kind, marked, type_id) = match self.allocated_objects.get(&object_address) {
+            Some(object) => (object.span, object.kind, object.marked, object.type_id),
             None => return,
         };
         if marked {
@@ -268,8 +263,15 @@ impl ObjectAllocatorInner {
             .get_mut(&object_address)
             .unwrap()
             .marked = true;
-        if kind == AllocationKind::Heap && !no_pointer {
-            self.mark_range(span.ptr as usize, span.ptr as usize + span.size);
+        if kind == AllocationKind::Heap && !type_id.is_no_pointer() {
+            if let Some(runs) = type_id.member_offset_runs() {
+                let base = span.ptr as usize;
+                for run in runs {
+                    self.mark_range(base + run.offset, base + run.offset + run.size);
+                }
+            } else {
+                self.mark_range(span.ptr as usize, span.ptr as usize + span.size);
+            }
         }
     }
 
@@ -588,6 +590,83 @@ mod tests {
                 .contains_key(&(held_object as usize))
         );
         assert!(inner.allocated_objects.contains_key(&(garbage as usize)));
+        inner.free_all_allocated_objects();
+        unsafe {
+            let _ = Box::from_raw(root);
+        }
+    }
+
+    #[test]
+    fn test_mark_scans_only_listed_member_offsets() {
+        let mut inner = ObjectAllocatorInner::new();
+        let root = Box::into_raw(Box::new(0usize));
+        inner.register_global_object(root as *mut (), mem::size_of::<usize>());
+        let runs = [crate::type_id::TypeOffsetRun {
+            offset: 32,
+            size: 8,
+        }];
+        let fake = crate::type_id::FakeTypeInfo::new_with_member_offset_runs(false, &runs);
+        let held_object = inner.allocate(64, fake.tid());
+        let at_listed_offset = inner.allocate(64, TypeId::new_invalid());
+        let at_unlisted_offset = inner.allocate(64, TypeId::new_invalid());
+        unsafe {
+            root.write(held_object as usize);
+            ptr::write(
+                (held_object as usize + 32) as *mut usize,
+                at_listed_offset as usize,
+            );
+            ptr::write(held_object as *mut usize, at_unlisted_offset as usize);
+        }
+        inner.run_gc(&[]);
+        assert!(
+            inner
+                .allocated_objects
+                .contains_key(&(held_object as usize))
+        );
+        assert!(
+            inner
+                .allocated_objects
+                .contains_key(&(at_listed_offset as usize))
+        );
+        assert!(
+            !inner
+                .allocated_objects
+                .contains_key(&(at_unlisted_offset as usize))
+        );
+        inner.free_all_allocated_objects();
+        unsafe {
+            let _ = Box::from_raw(root);
+        }
+    }
+
+    #[test]
+    fn test_mark_member_offsets_keep_transitive_targets() {
+        let mut inner = ObjectAllocatorInner::new();
+        let root = Box::into_raw(Box::new(0usize));
+        inner.register_global_object(root as *mut (), mem::size_of::<usize>());
+        let runs = [crate::type_id::TypeOffsetRun {
+            offset: 16,
+            size: 8,
+        }];
+        let fake = crate::type_id::FakeTypeInfo::new_with_member_offset_runs(false, &runs);
+        let held_object = inner.allocate(64, fake.tid());
+        let middle = inner.allocate(64, TypeId::new_invalid());
+        let leaf = inner.allocate(64, TypeId::new_invalid());
+        let garbage = inner.allocate(64, TypeId::new_invalid());
+        unsafe {
+            root.write(held_object as usize);
+            ptr::write((held_object as usize + 16) as *mut usize, middle as usize);
+            ptr::write(middle as *mut usize, leaf as usize);
+        }
+        inner.run_gc(&[]);
+        assert!(
+            inner
+                .allocated_objects
+                .contains_key(&(held_object as usize))
+        );
+        assert!(inner.allocated_objects.contains_key(&(middle as usize)));
+        assert!(inner.allocated_objects.contains_key(&(leaf as usize)));
+        assert!(!inner.allocated_objects.contains_key(&(garbage as usize)));
         inner.free_all_allocated_objects();
         unsafe {
             let _ = Box::from_raw(root);

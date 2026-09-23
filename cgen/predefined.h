@@ -5,6 +5,7 @@
 #include <math.h>
 #include <stdatomic.h>
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -97,6 +98,11 @@ typedef struct {
     StringObject method_signature;
 } InterfaceTableEntry;
 
+typedef struct {
+    uintptr_t offset;
+    uintptr_t size;
+} TypeOffsetRun;
+
 typedef struct TypeInfo {
     StringObject name;
     uintptr_t num_methods;
@@ -105,6 +111,8 @@ typedef struct TypeInfo {
     void *hash;
     uintptr_t size;
     bool no_pointers;
+    uintptr_t num_member_offset_runs;
+    const TypeOffsetRun *member_offset_runs;
 } TypeInfo;
 
 typedef struct {

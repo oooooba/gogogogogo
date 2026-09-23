@@ -1,8 +1,18 @@
 use std::slice;
 
+#[cfg(test)]
+use std::mem;
+
 use super::ObjectPtr;
 use crate::object::interface::InterfaceTableEntry;
 use crate::object::string::StringObject;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(C)]
+pub(crate) struct TypeOffsetRun {
+    pub(crate) offset: usize,
+    pub(crate) size: usize,
+}
 
 #[repr(C)]
 struct TypeInfo {
@@ -13,6 +23,8 @@ struct TypeInfo {
     hash: extern "C" fn(ObjectPtr) -> usize,
     size: usize,
     no_pointers: bool,
+    num_member_offset_runs: usize,
+    member_offset_runs: *const TypeOffsetRun,
 }
 
 #[allow(dead_code)]
@@ -52,6 +64,22 @@ impl TypeId {
         self.type_info().no_pointers
     }
 
+    pub(crate) fn member_offset_runs(&self) -> Option<&[TypeOffsetRun]> {
+        if self.0 == 0 {
+            return None;
+        }
+        let type_info = self.type_info();
+        if type_info.num_member_offset_runs == 0 {
+            return None;
+        }
+        unsafe {
+            Some(slice::from_raw_parts(
+                type_info.member_offset_runs,
+                type_info.num_member_offset_runs,
+            ))
+        }
+    }
+
     pub fn is_equal_func(&self) -> extern "C" fn(ObjectPtr, ObjectPtr) -> bool {
         let type_info = self.type_info();
         type_info.is_equal
@@ -76,14 +104,32 @@ pub(crate) struct FakeTypeInfo {
 #[cfg(test)]
 impl FakeTypeInfo {
     pub(crate) fn new(no_pointers: bool) -> Self {
-        let mut blob: Box<[u64]> = vec![0u64; TYPE_INFO_SIZE.div_ceil(8)].into_boxed_slice();
-        let ptr = blob.as_mut_ptr() as *mut u8;
+        Self::new_with_member_offset_runs(no_pointers, &[])
+    }
+
+    // Stores the TypeInfo followed by a copy of `runs` in one allocation, so a
+    // single held pointer keeps both alive and freeing the holder releases both
+    // without dropping any live shared reference (Miri Stacked Borrows).
+    pub(crate) fn new_with_member_offset_runs(no_pointers: bool, runs: &[TypeOffsetRun]) -> Self {
+        let blob_len = TYPE_INFO_SIZE + mem::size_of_val(runs);
+        let blob: Box<[u64]> = vec![0u64; blob_len.div_ceil(8)].into_boxed_slice();
+        let leaked: &'static mut [u64] = Box::leak(blob);
+        let ptr = leaked.as_mut_ptr() as *mut u8;
         unsafe {
-            ptr.add(std::mem::offset_of!(TypeInfo, no_pointers))
+            ptr.add(mem::offset_of!(TypeInfo, no_pointers))
                 .cast::<bool>()
                 .write(no_pointers);
+            if !runs.is_empty() {
+                let runs_ptr = ptr.add(TYPE_INFO_SIZE) as *mut TypeOffsetRun;
+                std::ptr::copy_nonoverlapping(runs.as_ptr(), runs_ptr, runs.len());
+                ptr.add(mem::offset_of!(TypeInfo, num_member_offset_runs))
+                    .cast::<usize>()
+                    .write(runs.len());
+                ptr.add(mem::offset_of!(TypeInfo, member_offset_runs))
+                    .cast::<*const TypeOffsetRun>()
+                    .write(runs_ptr);
+            }
         }
-        let leaked: &'static mut [u64] = Box::leak(blob);
         let holder = leaked as *mut [u64];
         FakeTypeInfo {
             tid: TypeId::from_raw(leaked.as_ptr() as usize),
@@ -149,6 +195,38 @@ mod tests {
         assert!(FakeTypeInfo::new(true).tid().is_no_pointer());
         assert!(!FakeTypeInfo::new(false).tid().is_no_pointer());
         assert!(!TypeId::new_invalid().is_no_pointer());
+    }
+
+    #[test]
+    fn test_type_id_member_offset_runs() {
+        assert_eq!(TypeId::new_invalid().member_offset_runs(), None);
+        assert_eq!(FakeTypeInfo::new(false).tid().member_offset_runs(), None);
+        let runs = [
+            TypeOffsetRun {
+                offset: 16,
+                size: 8,
+            },
+            TypeOffsetRun {
+                offset: 32,
+                size: 64,
+            },
+        ];
+        let fake = FakeTypeInfo::new_with_member_offset_runs(false, &runs);
+        assert_eq!(
+            fake.tid().member_offset_runs(),
+            Some(
+                &[
+                    TypeOffsetRun {
+                        offset: 16,
+                        size: 8
+                    },
+                    TypeOffsetRun {
+                        offset: 32,
+                        size: 64
+                    }
+                ][..]
+            )
+        );
     }
 
     #[test]
