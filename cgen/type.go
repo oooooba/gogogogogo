@@ -287,14 +287,33 @@ func (ctx *Context) emitTypeInfoDefinition(typ types.Type) {
 }
 
 func isNoPointerType(typ types.Type) bool {
-	basic, ok := typ.Underlying().(*types.Basic)
-	if !ok {
+	switch typ := typ.Underlying().(type) {
+	case *types.Array:
+		return isNoPointerType(typ.Elem())
+
+	case *types.Basic:
+		switch typ.Kind() {
+		case types.Bool, types.Int, types.Int8, types.Int16, types.Int32, types.Int64,
+			types.Uint, types.Uint8, types.Uint16, types.Uint32, types.Uint64,
+			types.Uintptr, types.Float32, types.Float64, types.Complex64, types.Complex128:
+			return true
+		}
 		return false
-	}
-	switch basic.Kind() {
-	case types.Bool, types.Int, types.Int8, types.Int16, types.Int32, types.Int64,
-		types.Uint, types.Uint8, types.Uint16, types.Uint32, types.Uint64,
-		types.Uintptr, types.Float32, types.Float64, types.Complex64, types.Complex128:
+
+	case *types.Struct:
+		for i := 0; i < typ.NumFields(); i++ {
+			if !isNoPointerType(typ.Field(i).Type()) {
+				return false
+			}
+		}
+		return true
+
+	case *types.Tuple:
+		for i := 0; i < typ.Len(); i++ {
+			if !isNoPointerType(typ.At(i).Type()) {
+				return false
+			}
+		}
 		return true
 	}
 	return false
