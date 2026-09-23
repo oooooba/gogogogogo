@@ -21,16 +21,19 @@ pub(crate) type GetMemberOffsetRunsFunc =
     extern "C" fn(visit: TypeOffsetVisitor, base: usize, arg: *mut ffi::c_void);
 
 #[repr(C)]
-struct TypeInfo {
-    name: StringObject,
-    num_methods: usize,
-    interface_table: *const InterfaceTableEntry,
-    is_equal: extern "C" fn(ObjectPtr, ObjectPtr) -> bool,
-    hash: extern "C" fn(ObjectPtr) -> usize,
-    size: usize,
-    no_pointers: bool,
-    get_member_offset_runs: Option<GetMemberOffsetRunsFunc>,
+pub(crate) struct TypeInfo {
+    pub(crate) name: StringObject,
+    pub(crate) num_methods: usize,
+    pub(crate) interface_table: *const InterfaceTableEntry,
+    pub(crate) is_equal: extern "C" fn(ObjectPtr, ObjectPtr) -> bool,
+    pub(crate) hash: extern "C" fn(ObjectPtr) -> usize,
+    pub(crate) size: usize,
+    pub(crate) no_pointers: bool,
+    pub(crate) get_member_offset_runs: Option<GetMemberOffsetRunsFunc>,
 }
+
+unsafe impl Send for TypeInfo {}
+unsafe impl Sync for TypeInfo {}
 
 #[allow(dead_code)]
 pub(crate) const TYPE_INFO_SIZE: usize = std::mem::size_of::<TypeInfo>();

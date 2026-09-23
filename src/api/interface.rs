@@ -169,9 +169,8 @@ mod tests {
     use crate::ObjectAllocator;
     use crate::global_context;
     use crate::light_weight_thread::LightWeightThreadContext;
-    use crate::object::interface::InterfaceTableEntry;
     use crate::object::string::StringObject;
-    use crate::type_id::TypeId;
+    use crate::type_id::{TypeId, TypeInfo};
     use std::mem;
     use std::sync::OnceLock;
 
@@ -183,27 +182,12 @@ mod tests {
         unsafe { *(a.0 as *const isize) as usize }
     }
 
-    #[repr(C)]
-    struct TestTypeInfo {
-        name: StringObject,
-        num_methods: usize,
-        interface_table: *const InterfaceTableEntry,
-        is_equal: extern "C" fn(ObjectPtr, ObjectPtr) -> bool,
-        hash: extern "C" fn(ObjectPtr) -> usize,
-        size: usize,
-        no_pointers: bool,
-        get_member_offset_runs: Option<crate::type_id::GetMemberOffsetRunsFunc>,
-    }
-
-    unsafe impl Send for TestTypeInfo {}
-    unsafe impl Sync for TestTypeInfo {}
-
-    fn test_type_info() -> &'static TestTypeInfo {
-        static INSTANCE: OnceLock<TestTypeInfo> = OnceLock::new();
+    fn test_type_info() -> &'static TypeInfo {
+        static INSTANCE: OnceLock<TypeInfo> = OnceLock::new();
         INSTANCE.get_or_init(|| {
             static TEST_NAME: [u8; 5] = *b"test\0";
             let name = StringObject::new(TEST_NAME.as_ptr(), 4);
-            TestTypeInfo {
+            TypeInfo {
                 name,
                 num_methods: 0,
                 interface_table: ptr::null(),
@@ -217,7 +201,7 @@ mod tests {
     }
 
     fn test_type_id() -> TypeId {
-        TypeId::from_raw(test_type_info() as *const TestTypeInfo as usize)
+        TypeId::from_raw(test_type_info() as *const TypeInfo as usize)
     }
 
     fn create_ctx() -> (
