@@ -6,6 +6,7 @@ use std::ptr::NonNull;
 
 use allocator_api2::alloc::{AllocError, Allocator, Layout};
 
+use crate::FUNCTION_OBJECT_CLOSURE_FLAG;
 use crate::light_weight_thread::LightWeightThreadContext;
 use crate::type_id::TypeId;
 
@@ -48,9 +49,10 @@ struct AllocatedObject {
     kind: AllocationKind,
     marked: bool,
     type_id: TypeId,
+    is_closure: bool,
 }
 
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, PartialEq, Debug)]
 enum AllocationKind {
     Heap,
     GuardedPages,
@@ -69,6 +71,14 @@ impl ObjectAllocatorInner {
     }
 
     fn allocate(&mut self, size: usize, type_id: TypeId) -> *mut () {
+        self.allocate_impl(size, type_id, false)
+    }
+
+    fn allocate_closure(&mut self, size: usize) -> *mut () {
+        self.allocate_impl(size, TypeId::new_invalid(), true)
+    }
+
+    fn allocate_impl(&mut self, size: usize, type_id: TypeId, is_closure: bool) -> *mut () {
         let size = size.div_ceil(ALLOCATION_ALIGNMENT) * ALLOCATION_ALIGNMENT;
         if self.total_size.saturating_add(size) > MAX_TOTAL_ALLOCATED_SIZE {
             return ptr::null_mut();
@@ -86,6 +96,7 @@ impl ObjectAllocatorInner {
                 kind: AllocationKind::Heap,
                 marked: false,
                 type_id,
+                is_closure,
             },
         );
         self.total_size += size;
@@ -137,6 +148,7 @@ impl ObjectAllocatorInner {
                     kind: AllocationKind::GuardedPages,
                     marked: false,
                     type_id,
+                    is_closure: false,
                 },
             );
             ptr
@@ -223,6 +235,18 @@ impl ObjectAllocatorInner {
             if let Some(object_address) = self.containing_object(word) {
                 self.mark_object(object_address);
             }
+            if (word & FUNCTION_OBJECT_CLOSURE_FLAG) != 0 {
+                let cleared_address = word & !FUNCTION_OBJECT_CLOSURE_FLAG;
+                if let Some(object_address) = self.containing_object(cleared_address) {
+                    let is_closure = match self.allocated_objects.get(&object_address) {
+                        Some(object) => object.is_closure,
+                        None => false,
+                    };
+                    if is_closure {
+                        self.mark_object(object_address);
+                    }
+                }
+            }
             address += word_size;
         }
     }
@@ -266,6 +290,10 @@ pub(crate) struct ObjectAllocatorPtr(*mut ObjectAllocatorInner);
 impl ObjectAllocatorPtr {
     pub(crate) fn allocate(&self, size: usize, type_id: TypeId) -> *mut () {
         unsafe { &mut *self.0 }.allocate(size, type_id)
+    }
+
+    pub(crate) fn allocate_closure(&self, size: usize) -> *mut () {
+        unsafe { &mut *self.0 }.allocate_closure(size)
     }
 
     pub(crate) fn allocate_guarded_pages(&self, num_pages: usize) -> *mut () {
@@ -560,6 +588,80 @@ mod tests {
                 .contains_key(&(held_object as usize))
         );
         assert!(inner.allocated_objects.contains_key(&(garbage as usize)));
+        inner.free_all_allocated_objects();
+        unsafe {
+            let _ = Box::from_raw(root);
+        }
+    }
+
+    #[test]
+    fn test_allocate_closure_is_registered_with_closure_metadata() {
+        let mut inner = ObjectAllocatorInner::new();
+        let ptr = inner.allocate_closure(32);
+        assert!(!ptr.is_null());
+        let object = inner.allocated_objects.get(&(ptr as usize)).unwrap();
+        assert_eq!(object.kind, AllocationKind::Heap);
+        assert!(object.is_closure);
+        inner.free_all_allocated_objects();
+    }
+
+    #[test]
+    fn test_mark_marks_tagged_closure_pointers() {
+        let mut inner = ObjectAllocatorInner::new();
+        let root = Box::into_raw(Box::new(0usize));
+        inner.register_global_object(root as *mut (), mem::size_of::<usize>());
+        let closure = inner.allocate_closure(64);
+        let garbage = inner.allocate(64, TypeId::new_invalid());
+        let base = closure as usize;
+        unsafe {
+            root.write(base | crate::FUNCTION_OBJECT_CLOSURE_FLAG);
+        }
+        inner.run_gc(&[]);
+        assert!(inner.allocated_objects.contains_key(&base));
+        assert!(!inner.allocated_objects.contains_key(&(garbage as usize)));
+        inner.free_all_allocated_objects();
+        unsafe {
+            let _ = Box::from_raw(root);
+        }
+    }
+
+    #[test]
+    fn test_mark_scans_tagged_closure_interior() {
+        let mut inner = ObjectAllocatorInner::new();
+        let root = Box::into_raw(Box::new(0usize));
+        inner.register_global_object(root as *mut (), mem::size_of::<usize>());
+        let closure = inner.allocate_closure(64);
+        let kept = inner.allocate(64, TypeId::new_invalid());
+        let garbage = inner.allocate(64, TypeId::new_invalid());
+        let base = closure as usize;
+        unsafe {
+            root.write(base | crate::FUNCTION_OBJECT_CLOSURE_FLAG);
+            ptr::write((base + 16) as *mut usize, kept as usize);
+        }
+        inner.run_gc(&[]);
+        assert!(inner.allocated_objects.contains_key(&base));
+        assert!(inner.allocated_objects.contains_key(&(kept as usize)));
+        assert!(!inner.allocated_objects.contains_key(&(garbage as usize)));
+        inner.free_all_allocated_objects();
+        unsafe {
+            let _ = Box::from_raw(root);
+        }
+    }
+
+    #[test]
+    fn test_mark_ignores_tagged_word_into_non_closure_object() {
+        let mut inner = ObjectAllocatorInner::new();
+        let root = Box::into_raw(Box::new(0usize));
+        inner.register_global_object(root as *mut (), mem::size_of::<usize>());
+        let object = inner.allocate(64, TypeId::new_invalid());
+        let garbage = inner.allocate(64, TypeId::new_invalid());
+        let base = object as usize;
+        unsafe {
+            root.write(base | crate::FUNCTION_OBJECT_CLOSURE_FLAG);
+        }
+        inner.run_gc(&[]);
+        assert!(!inner.allocated_objects.contains_key(&base));
+        assert!(!inner.allocated_objects.contains_key(&(garbage as usize)));
         inner.free_all_allocated_objects();
         unsafe {
             let _ = Box::from_raw(root);

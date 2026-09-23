@@ -16,6 +16,8 @@ use defer_stack::DeferStack;
 use global_context::GlobalContextPtr;
 use light_weight_thread::LightWeightThreadContext;
 
+pub(crate) const FUNCTION_OBJECT_CLOSURE_FLAG: usize = 1usize << (usize::BITS - 1);
+
 #[derive(Clone, PartialEq, Eq, Debug)]
 #[repr(C)]
 pub struct FunctionObject(*const ());
@@ -33,7 +35,7 @@ impl FunctionObject {
 
     pub fn from_closure_layout_ptr(closure_layout_ptr: *const ()) -> Self {
         let addr = closure_layout_ptr as usize;
-        let flag = 1 << 63;
+        let flag = FUNCTION_OBJECT_CLOSURE_FLAG;
         assert_eq!(addr & flag, 0);
         FunctionObject((addr | flag) as *const ())
     }
@@ -44,7 +46,7 @@ impl FunctionObject {
 
     pub fn extract_user_function(&self) -> (UserFunction, Option<*mut ()>) {
         let addr = self.0 as usize;
-        let flag = 1 << 63;
+        let flag = FUNCTION_OBJECT_CLOSURE_FLAG;
         if (addr & flag) == 0 {
             let func = unsafe { mem::transmute::<*const (), UserFunction>(self.0) };
             return (func, None);

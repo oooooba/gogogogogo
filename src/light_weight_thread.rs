@@ -2,6 +2,7 @@ use std::mem;
 use std::ptr;
 
 use crate::FunctionObject;
+use crate::ObjectAllocatorPtr;
 use crate::StackFrame;
 use crate::StackFrameCommon;
 use crate::UserFunction;
@@ -122,13 +123,25 @@ impl LightWeightThreadContext {
     }
 
     pub(crate) fn allocate(&mut self, size: usize, type_id: TypeId) -> *mut () {
+        self.allocate_with(size, move |allocator| allocator.allocate(size, type_id))
+    }
+
+    pub(crate) fn allocate_closure(&mut self, size: usize) -> *mut () {
+        self.allocate_with(size, |allocator| allocator.allocate_closure(size))
+    }
+
+    fn allocate_with(
+        &mut self,
+        size: usize,
+        allocate: impl Fn(ObjectAllocatorPtr) -> *mut (),
+    ) -> *mut () {
         self.global_context().process(|mut global_context| {
-            let ptr = global_context.allocator().allocate(size, type_id);
+            let ptr = allocate(global_context.allocator());
             if !ptr.is_null() {
                 return ptr;
             }
             global_context.run_gc(&*self);
-            let ptr = global_context.allocator().allocate(size, type_id);
+            let ptr = allocate(global_context.allocator());
             if ptr.is_null() {
                 panic!(
                     "out of memory: failed to allocate {} bytes even after garbage collection",
