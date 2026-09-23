@@ -1,3 +1,4 @@
+use std::ffi;
 use std::slice;
 
 #[cfg(test)]
@@ -7,12 +8,17 @@ use super::ObjectPtr;
 use crate::object::interface::InterfaceTableEntry;
 use crate::object::string::StringObject;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(C)]
-pub(crate) struct TypeOffsetRun {
-    pub(crate) offset: usize,
-    pub(crate) size: usize,
-}
+/// C signature `TypeOffsetVisitor`: `void (*)(uintptr_t offset, uintptr_t size, void *arg)`.
+pub(crate) type TypeOffsetVisitor =
+    extern "C" fn(offset: usize, size: usize, arg: *mut ffi::c_void);
+
+/// C signature of the per-type enumerator function stored in `TypeInfo`: it
+/// reports every pointer-bearing member range of an object by calling `visit`
+/// with `base`-relative (offset, size) ranges, mirroring the generated
+/// `get_member_offset_runs_<type>` functions.
+#[allow(dead_code)]
+pub(crate) type GetMemberOffsetRunsFunc =
+    extern "C" fn(visit: TypeOffsetVisitor, base: usize, arg: *mut ffi::c_void);
 
 #[repr(C)]
 struct TypeInfo {
@@ -23,8 +29,7 @@ struct TypeInfo {
     hash: extern "C" fn(ObjectPtr) -> usize,
     size: usize,
     no_pointers: bool,
-    num_member_offset_runs: usize,
-    member_offset_runs: *const TypeOffsetRun,
+    get_member_offset_runs: Option<GetMemberOffsetRunsFunc>,
 }
 
 #[allow(dead_code)]
@@ -64,20 +69,11 @@ impl TypeId {
         self.type_info().no_pointers
     }
 
-    pub(crate) fn member_offset_runs(&self) -> Option<&[TypeOffsetRun]> {
+    pub(crate) fn get_member_offset_runs(&self) -> Option<GetMemberOffsetRunsFunc> {
         if self.0 == 0 {
             return None;
         }
-        let type_info = self.type_info();
-        if type_info.num_member_offset_runs == 0 {
-            return None;
-        }
-        unsafe {
-            Some(slice::from_raw_parts(
-                type_info.member_offset_runs,
-                type_info.num_member_offset_runs,
-            ))
-        }
+        self.type_info().get_member_offset_runs
     }
 
     pub fn is_equal_func(&self) -> extern "C" fn(ObjectPtr, ObjectPtr) -> bool {
@@ -104,14 +100,19 @@ pub(crate) struct FakeTypeInfo {
 #[cfg(test)]
 impl FakeTypeInfo {
     pub(crate) fn new(no_pointers: bool) -> Self {
-        Self::new_with_member_offset_runs(no_pointers, &[])
+        Self::new_with_get_member_offset_runs(no_pointers, None)
     }
 
-    // Stores the TypeInfo followed by a copy of `runs` in one allocation, so a
-    // single held pointer keeps both alive and freeing the holder releases both
-    // without dropping any live shared reference (Miri Stacked Borrows).
-    pub(crate) fn new_with_member_offset_runs(no_pointers: bool, runs: &[TypeOffsetRun]) -> Self {
-        let blob_len = TYPE_INFO_SIZE + mem::size_of_val(runs);
+    // Writes a no_pointers flag and an optional get_member_offset_runs function
+    // pointer into a zeroed TypeInfo-sized blob. The blob is Box::leak'ed and
+    // reclaimed via a raw pointer in Drop (Miri Stacked Borrows); writes happen
+    // after the leak so the raw pointer tags are not invalidated by its Unique
+    // retag.
+    pub(crate) fn new_with_get_member_offset_runs(
+        no_pointers: bool,
+        get_member_offset_runs: Option<GetMemberOffsetRunsFunc>,
+    ) -> Self {
+        let blob_len = TYPE_INFO_SIZE;
         let blob: Box<[u64]> = vec![0u64; blob_len.div_ceil(8)].into_boxed_slice();
         let leaked: &'static mut [u64] = Box::leak(blob);
         let ptr = leaked.as_mut_ptr() as *mut u8;
@@ -119,16 +120,9 @@ impl FakeTypeInfo {
             ptr.add(mem::offset_of!(TypeInfo, no_pointers))
                 .cast::<bool>()
                 .write(no_pointers);
-            if !runs.is_empty() {
-                let runs_ptr = ptr.add(TYPE_INFO_SIZE) as *mut TypeOffsetRun;
-                std::ptr::copy_nonoverlapping(runs.as_ptr(), runs_ptr, runs.len());
-                ptr.add(mem::offset_of!(TypeInfo, num_member_offset_runs))
-                    .cast::<usize>()
-                    .write(runs.len());
-                ptr.add(mem::offset_of!(TypeInfo, member_offset_runs))
-                    .cast::<*const TypeOffsetRun>()
-                    .write(runs_ptr);
-            }
+            ptr.add(mem::offset_of!(TypeInfo, get_member_offset_runs))
+                .cast::<Option<GetMemberOffsetRunsFunc>>()
+                .write(get_member_offset_runs);
         }
         let holder = leaked as *mut [u64];
         FakeTypeInfo {
@@ -197,35 +191,27 @@ mod tests {
         assert!(!TypeId::new_invalid().is_no_pointer());
     }
 
+    extern "C" fn test_probe_get_member_offset_runs(
+        _visit: TypeOffsetVisitor,
+        _base: usize,
+        _arg: *mut std::ffi::c_void,
+    ) {
+    }
+
     #[test]
-    fn test_type_id_member_offset_runs() {
-        assert_eq!(TypeId::new_invalid().member_offset_runs(), None);
-        assert_eq!(FakeTypeInfo::new(false).tid().member_offset_runs(), None);
-        let runs = [
-            TypeOffsetRun {
-                offset: 16,
-                size: 8,
-            },
-            TypeOffsetRun {
-                offset: 32,
-                size: 64,
-            },
-        ];
-        let fake = FakeTypeInfo::new_with_member_offset_runs(false, &runs);
+    fn test_type_id_get_member_offset_runs() {
+        assert!(TypeId::new_invalid().get_member_offset_runs().is_none());
+        assert!(
+            FakeTypeInfo::new(false)
+                .tid()
+                .get_member_offset_runs()
+                .is_none()
+        );
+        let probe = test_probe_get_member_offset_runs as GetMemberOffsetRunsFunc;
+        let fake = FakeTypeInfo::new_with_get_member_offset_runs(false, Some(probe));
         assert_eq!(
-            fake.tid().member_offset_runs(),
-            Some(
-                &[
-                    TypeOffsetRun {
-                        offset: 16,
-                        size: 8
-                    },
-                    TypeOffsetRun {
-                        offset: 32,
-                        size: 64
-                    }
-                ][..]
-            )
+            fake.tid().get_member_offset_runs().map(|f| f as usize),
+            Some(probe as usize)
         );
     }
 

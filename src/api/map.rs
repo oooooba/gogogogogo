@@ -270,8 +270,7 @@ mod tests {
         hash: extern "C" fn(ObjectPtr) -> usize,
         size: usize,
         no_pointers: bool,
-        num_member_offset_runs: usize,
-        member_offset_runs: *const crate::type_id::TypeOffsetRun,
+        get_member_offset_runs: Option<crate::type_id::GetMemberOffsetRunsFunc>,
     }
 
     unsafe impl Send for TestTypeInfo {}
@@ -290,8 +289,7 @@ mod tests {
                 hash: test_hash,
                 size: mem::size_of::<isize>(),
                 no_pointers: false,
-                num_member_offset_runs: 0,
-                member_offset_runs: ptr::null(),
+                get_member_offset_runs: None,
             }
         })
     }

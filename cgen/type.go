@@ -271,7 +271,10 @@ func (ctx *Context) emitTypeInfoDefinition(typ types.Type) {
 	numMethods := fmt.Sprintf("sizeof(%s.entries)/sizeof(%s.entries[0])", interfaceTableName, interfaceTableName)
 	interfaceTable := fmt.Sprintf("&%s.entries[0]", interfaceTableName)
 
-	hasMemberOffsets := emitMemberOffsetRunsArray(ctx, typ)
+	hasGetMemberOffsetRuns := hasEnumerablePointerMembers(typ)
+	if hasGetMemberOffsetRuns {
+		ctx.emitGetMemberOffsetRunsFunctionDefinition(typ)
+	}
 
 	fmt.Fprintf(ctx.stream, "const TypeInfo %s = {\n", createTypeIdName(typ))
 	fmt.Fprintf(ctx.stream, ".name = (StringObject){.raw = \"%s\", .len = sizeof(\"%s\") - 1},\n", createTypeName(typ), createTypeName(typ))
@@ -285,101 +288,112 @@ func (ctx *Context) emitTypeInfoDefinition(typ types.Type) {
 		noPointers = "1"
 	}
 	fmt.Fprintf(ctx.stream, ".no_pointers = %s,\n", noPointers)
-	if hasMemberOffsets {
-		offsetsName := memberOffsetRunsName(typ)
-		fmt.Fprintf(ctx.stream, ".num_member_offset_runs = sizeof(%s)/sizeof(%s[0]),\n", offsetsName, offsetsName)
-		fmt.Fprintf(ctx.stream, ".member_offset_runs = %s,\n", offsetsName)
+	if hasGetMemberOffsetRuns {
+		fmt.Fprintf(ctx.stream, ".get_member_offset_runs = %s,\n", getMemberOffsetRunsName(typ))
 	}
 	fmt.Fprintf(ctx.stream, "};\n")
 }
 
-// memberOffsetRun describes one byte range inside an object that can hold
-// pointers. The GC marks only these ranges instead of every word of the object.
-type memberOffsetRun struct {
-	// offsetDesignator is the C member designator of the run's first byte
-	// ("" means the object base); the emitted offset expression is
-	// "offsetof(<type>, <designator>)".
-	offsetDesignator string
-	// sizeTypeName is a C type whose sizeof is the run size in bytes.
-	sizeTypeName string
-}
-
-// collectMemberOffsetRuns gathers one run per pointer-bearing member of typ.
-// Arrays are represented by a single run covering the whole array range (only
-// when their element type holds pointers), so a huge fixed array (e.g. the
-// runtime's [4194304]*heapArena) costs one entry instead of one entry per
-// element.
-func collectMemberOffsetRuns(typ types.Type, designator string, result *[]memberOffsetRun) {
-	underlying := typ.Underlying()
-	switch t := underlying.(type) {
-	case *types.Struct:
-		for i := 0; i < t.NumFields(); i++ {
-			field := t.Field(i)
-			sub := joinDesignator(designator, createFieldName(field, i))
-			collectMemberOffsetRuns(field.Type(), sub, result)
-		}
-
-	case *types.Array:
-		if !isNoPointerType(t.Elem()) {
-			*result = append(*result, memberOffsetRun{offsetDesignator: designator, sizeTypeName: createTypeName(typ)})
-		}
-
-	case *types.Pointer, *types.Slice, *types.Map, *types.Chan, *types.Signature, *types.Interface:
-		*result = append(*result, memberOffsetRun{offsetDesignator: designator, sizeTypeName: createTypeName(typ)})
-
-	default:
-		if basic, ok := t.(*types.Basic); ok {
-			switch basic.Kind() {
-			case types.String, types.UnsafePointer:
-				*result = append(*result, memberOffsetRun{offsetDesignator: designator, sizeTypeName: createTypeName(typ)})
-			}
-		}
-	}
-}
-
-func joinDesignator(base, ident string) string {
-	if base == "" {
-		return ident
-	}
-	return base + "." + ident
-}
-
-func memberOffsetRunsName(typ types.Type) string {
-	return fmt.Sprintf("member_offset_runs_%s", createTypeName(typ))
-}
-
-// emitMemberOffsetRunsArray emits the static array of pointer-bearing member
-// ranges for typ, and reports whether any such run exists. Only struct and
-// array layouts are known precisely; other root types (map, slice, pointer,
-// ...) keep the fallback full interior scan. If there are too many runs to be
-// worth listing, no runs are emitted at all and the GC falls back to its
-// legacy full-word interior scan (never a partial list, which would let live
-// objects slip through).
-const maxMemberOffsetRuns = 2048
-
-func emitMemberOffsetRunsArray(ctx *Context, typ types.Type) bool {
+// isStructOrArrayRoot reports whether typ's layout is known precisely enough
+// for the GC to enumerate its pointer-bearing member ranges. Map, slice,
+// pointer, interface and signature roots keep the fallback full interior scan.
+func isStructOrArrayRoot(typ types.Type) bool {
 	switch typ.Underlying().(type) {
 	case *types.Struct, *types.Array:
-	default:
-		return false
+		return true
 	}
+	return false
+}
 
-	runs := []memberOffsetRun{}
-	collectMemberOffsetRuns(typ, "", &runs)
-	if len(runs) == 0 || len(runs) > maxMemberOffsetRuns {
-		return false
-	}
+func getMemberOffsetRunsName(typ types.Type) string {
+	return fmt.Sprintf("get_member_offset_runs_%s", createTypeName(typ))
+}
 
-	fmt.Fprintf(ctx.stream, "static const TypeOffsetRun %s[] = {\n", memberOffsetRunsName(typ))
-	for _, run := range runs {
-		offset := "0"
-		if run.offsetDesignator != "" {
-			offset = fmt.Sprintf("offsetof(%s, %s)", createTypeName(typ), run.offsetDesignator)
+// hasEnumerablePointerMembers reports whether typ has at least one
+// pointer-bearing member the enumerator function can emit. Array roots qualify
+// when their element type holds pointers; a struct qualifies only when it has
+// a non-blank pointer-bearing member AND no blank ("_") member that can hold
+// pointers (blank members cannot be named by a C designator, so their slots
+// are never emitted; to keep the scan sound such structs fall back to the
+// full interior scan via a NULL get_member_offset_runs).
+func hasEnumerablePointerMembers(typ types.Type) bool {
+	switch t := typ.Underlying().(type) {
+	case *types.Array:
+		return !isNoPointerType(t.Elem())
+	case *types.Struct:
+		found := false
+		for i := 0; i < t.NumFields(); i++ {
+			field := t.Field(i)
+			if field.Name() == "_" {
+				if !isNoPointerType(field.Type()) {
+					return false
+				}
+				continue
+			}
+			if !isNoPointerType(field.Type()) {
+				found = true
+			}
 		}
-		fmt.Fprintf(ctx.stream, "\t{%s, sizeof(%s)},\n", offset, run.sizeTypeName)
+		return found
 	}
-	fmt.Fprintf(ctx.stream, "};\n")
-	return true
+	return false
+}
+
+func (ctx *Context) emitGetMemberOffsetRunsFunctionDeclaration(typ types.Type) {
+	if !isStructOrArrayRoot(typ) {
+		return
+	}
+	fmt.Fprintf(ctx.stream, `void %s(TypeOffsetVisitor visit, uintptr_t base, void *arg); // %s
+`, getMemberOffsetRunsName(typ), typ)
+}
+
+// emitGetMemberOffsetRunsFunctionDefinition emits a per-type enumerator
+// function that feeds every pointer-bearing member range of typ to `visit`.
+// Like the equal_/hash_ functions, it composes the enumerator functions of the
+// member types: a struct member of struct type is enumerated by calling that
+// type's own function, while every other pointer-bearing member (including a
+// whole fixed array, emitted as one range covering the whole array when its
+// element type holds pointers) is reported as a single (offset, size) range.
+func (ctx *Context) emitGetMemberOffsetRunsFunctionDefinition(typ types.Type) {
+	typeName := createTypeName(typ)
+	if !ctx.markTypeDefinition("get_member_offset_runs", typeName) {
+		return
+	}
+
+	var body string
+	if underlyingType := typ.Underlying(); typ == underlyingType {
+		switch t := typ.(type) {
+		case *types.Array:
+			if !isNoPointerType(t.Elem()) {
+				body += fmt.Sprintf("\tvisit(base, sizeof(%s), arg); // whole array\n", typeName)
+			}
+		case *types.Struct:
+			for i := 0; i < t.NumFields(); i++ {
+				field := t.Field(i)
+				if field.Name() == "_" {
+					continue
+				}
+				name := createFieldName(field, i)
+				if isNoPointerType(field.Type()) {
+					continue
+				}
+				if hasEnumerablePointerMembers(field.Type()) {
+					body += fmt.Sprintf("\t%s(visit, base + offsetof(%s, %s), arg); // %s\n", getMemberOffsetRunsName(field.Type()), typeName, name, field)
+				} else {
+					// The field type has no enumerator of its own (e.g. it has
+					// blank pointer-bearing members); cover its whole span so
+					// those slots are still scanned.
+					body += fmt.Sprintf("\tvisit(base + offsetof(%s, %s), sizeof(%s), arg); // %s\n", typeName, name, createTypeName(field.Type()), field)
+				}
+			}
+		}
+	} else if !isNoPointerType(typ) {
+		body += fmt.Sprintf("\t%s(visit, base, arg); // underlying: %s\n", getMemberOffsetRunsName(underlyingType), underlyingType)
+	}
+
+	fmt.Fprintf(ctx.stream, "void %s(TypeOffsetVisitor visit, uintptr_t base, void *arg) { // %s\n", getMemberOffsetRunsName(typ), typ)
+	fmt.Fprintf(ctx.stream, "%s", body)
+	fmt.Fprintf(ctx.stream, "}\n")
 }
 
 func isNoPointerType(typ types.Type) bool {

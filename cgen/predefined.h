@@ -98,10 +98,7 @@ typedef struct {
     StringObject method_signature;
 } InterfaceTableEntry;
 
-typedef struct {
-    uintptr_t offset;
-    uintptr_t size;
-} TypeOffsetRun;
+typedef void (*TypeOffsetVisitor)(uintptr_t offset, uintptr_t size, void *arg);
 
 typedef struct TypeInfo {
     StringObject name;
@@ -111,8 +108,8 @@ typedef struct TypeInfo {
     void *hash;
     uintptr_t size;
     bool no_pointers;
-    uintptr_t num_member_offset_runs;
-    const TypeOffsetRun *member_offset_runs;
+    void (*get_member_offset_runs)(TypeOffsetVisitor visit, uintptr_t base,
+                                   void *arg);
 } TypeInfo;
 
 typedef struct {

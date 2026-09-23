@@ -71,6 +71,7 @@ extern const TypeInfo runtime_info_type_Interface;
 		}
 		ctx.emitInterfaceTableDeclaration(typ, allowSet)
 		ctx.emitTypeInfoDeclaration(typ)
+		ctx.emitGetMemberOffsetRunsFunctionDeclaration(typ)
 	})
 	for _, typ := range sortedAssertedInterfaceTypes(ctx.assertedInterfaceTypes) {
 		if ctx.visitedInterfaceNames != nil && ctx.visitedInterfaceNames[createInterfaceTypeSymbolName(typ)] {
@@ -81,6 +82,7 @@ extern const TypeInfo runtime_info_type_Interface;
 	}
 	for _, typ := range sortedInstantiatedNamedTypes(ctx.instantiatedNamedTypes) {
 		ctx.emitTypeInfoDeclaration(typ)
+		ctx.emitGetMemberOffsetRunsFunctionDeclaration(typ)
 	}
 	for _, typ := range ctx.instanceOrderedTypes {
 		if _, ok := typ.(*types.Interface); !ok {
@@ -89,6 +91,7 @@ extern const TypeInfo runtime_info_type_Interface;
 		}
 		ctx.emitInterfaceTableDeclaration(typ, allowSet)
 		ctx.emitTypeInfoDeclaration(typ)
+		ctx.emitGetMemberOffsetRunsFunctionDeclaration(typ)
 	}
 }
 

@@ -264,13 +264,15 @@ impl ObjectAllocatorInner {
             .unwrap()
             .marked = true;
         if kind == AllocationKind::Heap && !type_id.is_no_pointer() {
-            if let Some(runs) = type_id.member_offset_runs() {
-                let base = span.ptr as usize;
-                for run in runs {
-                    self.mark_range(base + run.offset, base + run.offset + run.size);
+            match type_id.get_member_offset_runs() {
+                Some(get_member_offset_runs) => {
+                    let base = span.ptr as usize;
+                    let inner = self as *mut ObjectAllocatorInner as *mut ffi::c_void;
+                    get_member_offset_runs(mark_range_visitor, base, inner);
                 }
-            } else {
-                self.mark_range(span.ptr as usize, span.ptr as usize + span.size);
+                None => {
+                    self.mark_range(span.ptr as usize, span.ptr as usize + span.size);
+                }
             }
         }
     }
@@ -284,6 +286,13 @@ impl ObjectAllocatorInner {
             None
         }
     }
+}
+
+/// Visitor passed to a generated get_member_offset_runs function: marks every
+/// (offset, size) member range it is handed.
+extern "C" fn mark_range_visitor(offset: usize, size: usize, arg: *mut ffi::c_void) {
+    let inner = unsafe { &mut *(arg as *mut ObjectAllocatorInner) };
+    inner.mark_range(offset, offset + size);
 }
 
 #[derive(Clone)]
@@ -596,16 +605,23 @@ mod tests {
         }
     }
 
+    extern "C" fn test_generator_offset_32(
+        visit: crate::type_id::TypeOffsetVisitor,
+        base: usize,
+        arg: *mut ffi::c_void,
+    ) {
+        visit(base + 32, 8, arg);
+    }
+
     #[test]
     fn test_mark_scans_only_listed_member_offsets() {
         let mut inner = ObjectAllocatorInner::new();
         let root = Box::into_raw(Box::new(0usize));
         inner.register_global_object(root as *mut (), mem::size_of::<usize>());
-        let runs = [crate::type_id::TypeOffsetRun {
-            offset: 32,
-            size: 8,
-        }];
-        let fake = crate::type_id::FakeTypeInfo::new_with_member_offset_runs(false, &runs);
+        let fake = crate::type_id::FakeTypeInfo::new_with_get_member_offset_runs(
+            false,
+            Some(test_generator_offset_32),
+        );
         let held_object = inner.allocate(64, fake.tid());
         let at_listed_offset = inner.allocate(64, TypeId::new_invalid());
         let at_unlisted_offset = inner.allocate(64, TypeId::new_invalid());
@@ -639,16 +655,23 @@ mod tests {
         }
     }
 
+    extern "C" fn test_generator_offset_16(
+        visit: crate::type_id::TypeOffsetVisitor,
+        base: usize,
+        arg: *mut ffi::c_void,
+    ) {
+        visit(base + 16, 8, arg);
+    }
+
     #[test]
     fn test_mark_member_offsets_keep_transitive_targets() {
         let mut inner = ObjectAllocatorInner::new();
         let root = Box::into_raw(Box::new(0usize));
         inner.register_global_object(root as *mut (), mem::size_of::<usize>());
-        let runs = [crate::type_id::TypeOffsetRun {
-            offset: 16,
-            size: 8,
-        }];
-        let fake = crate::type_id::FakeTypeInfo::new_with_member_offset_runs(false, &runs);
+        let fake = crate::type_id::FakeTypeInfo::new_with_get_member_offset_runs(
+            false,
+            Some(test_generator_offset_16),
+        );
         let held_object = inner.allocate(64, fake.tid());
         let middle = inner.allocate(64, TypeId::new_invalid());
         let leaf = inner.allocate(64, TypeId::new_invalid());
