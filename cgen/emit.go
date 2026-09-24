@@ -722,12 +722,10 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 
 	case *ssa.MakeSlice:
 		result := createValueRelName(instr)
-		fmt.Fprintf(ctx.stream, "%s.typed.size = %s.raw;\n", result, createValueRelName(instr.Len))
-		fmt.Fprintf(ctx.stream, "%s.typed.capacity = %s.raw;\n", result, createValueRelName(instr.Cap))
-		ptr := fmt.Sprintf("%s.typed.ptr", result)
-		size := fmt.Sprintf("(%s.raw) * sizeof(%s)", createValueRelName(instr.Cap), createTypeName(instr.Type().Underlying().(*types.Slice).Elem()))
-		ctx.switchFunctionToCallRuntimeApi("gox5_new", "StackFrameNew", createInstructionName(instr), &ptr, nil,
-			paramArgPair{param: "size", arg: size},
+		ptr := fmt.Sprintf("%s.raw", result)
+		ctx.switchFunctionToCallRuntimeApi("gox5_slice_new", "StackFrameSliceNew", createInstructionName(instr), &ptr, nil,
+			paramArgPair{param: "length", arg: fmt.Sprintf("%s.raw", createValueRelName(instr.Len))},
+			paramArgPair{param: "capacity", arg: fmt.Sprintf("%s.raw", createValueRelName(instr.Cap))},
 			paramArgPair{param: "type_id", arg: wrapInTypeId(instr.Type().Underlying().(*types.Slice).Elem())},
 		)
 
@@ -861,43 +859,54 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 				paramArgPair{param: "high", arg: high},
 			)
 		} else {
+			result := createValueRelName(instr)
 			startIndex := "0"
 			if instr.Low != nil {
 				startIndex = fmt.Sprintf("%s.raw", createValueRelName(instr.Low))
 			}
 
-			ptr := ""
-			endIndexDefault := ""
-			capacityDefault := ""
 			switch t := instr.X.Type().Underlying().(type) {
 			case *types.Pointer:
-				ptr = "raw->raw"
+				// (*[N]T)[i:j:k] -- array to slice: built inline. No heap buffer is
+				// created, so the GC needs no update; the array itself is scanned
+				// through its own registration.
 				elemType := t.Elem().Underlying().(*types.Array)
 				length := fmt.Sprintf("%d", elemType.Len())
-				endIndexDefault = length
-				capacityDefault = length
+				endIndex := length
+				if instr.High != nil {
+					endIndex = fmt.Sprintf("%s.raw", createValueRelName(instr.High))
+				}
+				capacity := length
+				if instr.Max != nil {
+					capacity = fmt.Sprintf("%s.raw", createValueRelName(instr.Max))
+				}
+				fmt.Fprintf(ctx.stream, "%s = %s;\n", result, wrapInObject("0", instr.Type()))
+				fmt.Fprintf(ctx.stream, "%s.typed.ptr = %s.raw->raw + %s;\n", result, createValueRelName(instr.X), startIndex)
+				fmt.Fprintf(ctx.stream, "%s.typed.size = %s - %s;\n", result, endIndex, startIndex)
+				fmt.Fprintf(ctx.stream, "%s.typed.capacity = %s - %s;\n", result, capacity, startIndex)
 			case *types.Slice:
-				ptr = "typed.ptr"
-				endIndexDefault = fmt.Sprintf("%s.typed.size", createValueRelName(instr.X))
-				capacityDefault = fmt.Sprintf("%s.typed.capacity", createValueRelName(instr.X))
+				endIndex := fmt.Sprintf("%s.typed.size", createValueRelName(instr.X))
+				if instr.High != nil {
+					endIndex = fmt.Sprintf("%s.raw", createValueRelName(instr.High))
+				}
+				capacity := fmt.Sprintf("%s.typed.capacity", createValueRelName(instr.X))
+				if instr.Max != nil {
+					capacity = fmt.Sprintf("%s.raw", createValueRelName(instr.Max))
+				}
+				// Slice sub-slicing is routed through the runtime so the GC can
+				// observe how far the buffer's accessible prefix extends; an
+				// extended sub-slice (s[:cap]) makes tail elements reachable.
+				ptr := fmt.Sprintf("%s.raw", result)
+				ctx.switchFunctionToCallRuntimeApi("gox5_slice_sub", "StackFrameSliceSub", createInstructionName(instr), &ptr, nil,
+					paramArgPair{param: "base", arg: fmt.Sprintf("%s.raw", createValueRelName(instr.X))},
+					paramArgPair{param: "low", arg: startIndex},
+					paramArgPair{param: "high", arg: endIndex},
+					paramArgPair{param: "max", arg: capacity},
+					paramArgPair{param: "type_id", arg: wrapInTypeId(instr.Type().Underlying().(*types.Slice).Elem())},
+				)
 			default:
 				panic(fmt.Sprintf("not implemented: %s (%T)", t, t))
 			}
-
-			endIndex := endIndexDefault
-			if instr.High != nil {
-				endIndex = fmt.Sprintf("%s.raw", createValueRelName(instr.High))
-			}
-
-			capacity := capacityDefault
-			if instr.Max != nil {
-				capacity = fmt.Sprintf("%s.raw", createValueRelName(instr.Max))
-			}
-
-			fmt.Fprintf(ctx.stream, "%s = %s;\n", createValueRelName(instr), wrapInObject("0", instr.Type()))
-			fmt.Fprintf(ctx.stream, "%s.typed.ptr = %s.%s + %s;\n", createValueRelName(instr), createValueRelName(instr.X), ptr, startIndex)
-			fmt.Fprintf(ctx.stream, "%s.typed.size = %s - %s;\n", createValueRelName(instr), endIndex, startIndex)
-			fmt.Fprintf(ctx.stream, "%s.typed.capacity = %s - %s;\n", createValueRelName(instr), capacity, startIndex)
 		}
 
 	case *ssa.SliceToArrayPointer:

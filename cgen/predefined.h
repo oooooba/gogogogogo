@@ -222,6 +222,26 @@ typedef struct {
     TypeId type_id;
 } StackFrameSliceNewUninitialized;
 DECLARE_RUNTIME_API(slice_new_uninitialized, StackFrameSliceNewUninitialized);
+
+typedef struct {
+    StackFrameCommon common;
+    SliceObject *result_ptr;
+    uintptr_t length;
+    uintptr_t capacity;
+    TypeId type_id;
+} StackFrameSliceNew;
+DECLARE_RUNTIME_API(slice_new, StackFrameSliceNew);
+
+typedef struct {
+    StackFrameCommon common;
+    SliceObject *result_ptr;
+    SliceObject base;
+    uintptr_t low;
+    uintptr_t high;
+    uintptr_t max;
+    TypeId type_id;
+} StackFrameSliceSub;
+DECLARE_RUNTIME_API(slice_sub, StackFrameSliceSub);
 typedef struct {
     StackFrameCommon common;
     IntObject *result_ptr;

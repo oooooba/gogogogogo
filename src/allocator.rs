@@ -50,6 +50,11 @@ struct AllocatedObject {
     marked: bool,
     type_id: TypeId,
     is_closure: bool,
+    /// True when the allocation backs a Go slice and must be scanned only up to
+    /// (a high-water mark of) the accessible prefix instead of the full span.
+    is_slice_buffer: bool,
+    /// Number of bytes from `span.ptr` that may be scanned (<= span.size).
+    slice_scan_end: usize,
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -71,14 +76,32 @@ impl ObjectAllocatorInner {
     }
 
     fn allocate(&mut self, size: usize, type_id: TypeId) -> *mut () {
-        self.allocate_impl(size, type_id, false)
+        self.allocate_impl(size, type_id, false, false, size)
     }
 
     fn allocate_closure(&mut self, size: usize) -> *mut () {
-        self.allocate_impl(size, TypeId::new_invalid(), true)
+        self.allocate_impl(size, TypeId::new_invalid(), true, false, size)
     }
 
-    fn allocate_impl(&mut self, size: usize, type_id: TypeId, is_closure: bool) -> *mut () {
+    fn allocate_slice_buffer(
+        &mut self,
+        size: usize,
+        type_id: TypeId,
+        accessible_bytes: usize,
+    ) -> *mut () {
+        let target_size = size.div_ceil(ALLOCATION_ALIGNMENT) * ALLOCATION_ALIGNMENT;
+        let accessible_bytes = accessible_bytes.min(target_size);
+        self.allocate_impl(size, type_id, false, true, accessible_bytes)
+    }
+
+    fn allocate_impl(
+        &mut self,
+        size: usize,
+        type_id: TypeId,
+        is_closure: bool,
+        is_slice_buffer: bool,
+        slice_scan_end: usize,
+    ) -> *mut () {
         let size = size.div_ceil(ALLOCATION_ALIGNMENT) * ALLOCATION_ALIGNMENT;
         if self.total_size.saturating_add(size) > MAX_TOTAL_ALLOCATED_SIZE {
             return ptr::null_mut();
@@ -97,6 +120,8 @@ impl ObjectAllocatorInner {
                 marked: false,
                 type_id,
                 is_closure,
+                is_slice_buffer,
+                slice_scan_end,
             },
         );
         self.total_size += size;
@@ -149,6 +174,8 @@ impl ObjectAllocatorInner {
                     marked: false,
                     type_id,
                     is_closure: false,
+                    is_slice_buffer: false,
+                    slice_scan_end: 4096 * num_pages,
                 },
             );
             ptr
@@ -252,10 +279,18 @@ impl ObjectAllocatorInner {
     }
 
     fn mark_object(&mut self, object_address: usize) {
-        let (span, kind, marked, type_id) = match self.allocated_objects.get(&object_address) {
-            Some(object) => (object.span, object.kind, object.marked, object.type_id),
-            None => return,
-        };
+        let (span, kind, marked, type_id, is_slice_buffer, slice_scan_end) =
+            match self.allocated_objects.get(&object_address) {
+                Some(object) => (
+                    object.span,
+                    object.kind,
+                    object.marked,
+                    object.type_id,
+                    object.is_slice_buffer,
+                    object.slice_scan_end,
+                ),
+                None => return,
+            };
         if marked {
             return;
         }
@@ -266,6 +301,14 @@ impl ObjectAllocatorInner {
         if kind == AllocationKind::Heap && !type_id.is_no_pointer() {
             if type_id.is_interface_type() {
                 self.mark_interface_object(span.ptr as usize);
+            } else if is_slice_buffer {
+                // A slice buffer is scanned only up to the accessible-prefix
+                // high-water mark; out-of-range tail entries are not scanned.
+                // Scanning the buffer as a raw word range (not via the element
+                // type's generator) keeps every element within the prefix alive.
+                let start = span.ptr as usize;
+                let end = start + slice_scan_end;
+                self.mark_range(start, end);
             } else if let Some(get_member_offset_runs) = type_id.get_member_offset_runs() {
                 let base = span.ptr as usize;
                 let inner = self as *mut ObjectAllocatorInner as *mut ffi::c_void;
@@ -292,6 +335,37 @@ impl ObjectAllocatorInner {
             None
         }
     }
+
+    #[cfg(test)]
+    fn slice_scan_end_of(&self, address: usize) -> usize {
+        self.allocated_objects
+            .get(&address)
+            .map(|object| object.slice_scan_end)
+            .expect("object not found")
+    }
+
+    /// Records that the slice view ending at `absolute_end` (absolute address
+    /// into the heap) has become accessible. `interior_addr` is any live
+    /// pointer into the buffer (typically the descriptor's `addr`), which is
+    /// resolved to the buffer's base object. The stored scan end is a monotone
+    /// high-water mark clamped to the allocation size: it never shrinks, so any
+    /// still-live sub-slice that extended the buffer keeps its coverage.
+    fn set_slice_scan_end(&mut self, interior_addr: usize, absolute_end: usize) {
+        let Some(base) = self.containing_object(interior_addr) else {
+            return;
+        };
+        let object = self
+            .allocated_objects
+            .get_mut(&base)
+            .expect("containing_object returned an address that is not in the map");
+        if !object.is_slice_buffer || object.kind != AllocationKind::Heap {
+            return;
+        }
+        let new_end = absolute_end.saturating_sub(base).min(object.span.size);
+        if new_end > object.slice_scan_end {
+            object.slice_scan_end = new_end;
+        }
+    }
 }
 
 /// Visitor passed to a generated get_member_offset_runs function: marks every
@@ -311,6 +385,29 @@ impl ObjectAllocatorPtr {
 
     pub(crate) fn allocate_closure(&self, size: usize) -> *mut () {
         unsafe { &mut *self.0 }.allocate_closure(size)
+    }
+
+    pub(crate) fn allocate_slice_buffer(
+        &self,
+        size: usize,
+        type_id: TypeId,
+        accessible_bytes: usize,
+    ) -> *mut () {
+        unsafe { &mut *self.0 }.allocate_slice_buffer(size, type_id, accessible_bytes)
+    }
+
+    pub(crate) fn set_slice_scan_end(&self, interior_addr: usize, absolute_end: usize) {
+        unsafe { &mut *self.0 }.set_slice_scan_end(interior_addr, absolute_end);
+    }
+
+    /// Test-only: scan_end recorded for the object at `object_address`.
+    #[cfg(test)]
+    pub(crate) fn slice_scan_end(&self, object_address: usize) -> usize {
+        unsafe { &mut *self.0 }
+            .allocated_objects
+            .get(&object_address)
+            .map(|object| object.slice_scan_end)
+            .expect("object not found")
     }
 
     pub(crate) fn allocate_guarded_pages(&self, num_pages: usize) -> *mut () {
@@ -847,6 +944,96 @@ mod tests {
         let object = inner.allocated_objects.get(&(ptr as usize)).unwrap();
         assert_eq!(object.kind, AllocationKind::Heap);
         assert!(object.is_closure);
+        inner.free_all_allocated_objects();
+    }
+
+    #[test]
+    fn test_mark_slice_buffer_scans_only_accessible_prefix() {
+        let mut inner = ObjectAllocatorInner::new();
+        let root = Box::into_raw(Box::new(0usize));
+        inner.register_global_object(root as *mut (), mem::size_of::<usize>());
+        let fake = crate::type_id::FakeTypeInfo::new(false);
+        let buffer = inner.allocate_slice_buffer(64, fake.tid(), 3 * 8);
+        let within = inner.allocate(64, TypeId::new_invalid());
+        let beyond = inner.allocate(64, TypeId::new_invalid());
+        unsafe {
+            root.write(buffer as usize);
+            ptr::write(buffer as *mut usize, within as usize);
+            ptr::write((buffer as usize + 3 * 8) as *mut usize, beyond as usize);
+        }
+        inner.run_gc(&[]);
+        assert!(inner.allocated_objects.contains_key(&(buffer as usize)));
+        assert!(inner.allocated_objects.contains_key(&(within as usize)));
+        // The tail entry (out of range: beyond the accessible prefix) is swept.
+        assert!(!inner.allocated_objects.contains_key(&(beyond as usize)));
+        inner.free_all_allocated_objects();
+        unsafe {
+            let _ = Box::from_raw(root);
+        }
+    }
+
+    extern "C" fn test_generator_offset_0(
+        visit: crate::type_id::TypeOffsetVisitor,
+        base: usize,
+        arg: *mut ffi::c_void,
+    ) {
+        visit(base, 8, arg);
+    }
+
+    #[test]
+    fn test_mark_slice_buffer_bypasses_element_generator() {
+        // A slice buffer must be scanned as a raw word range over the whole
+        // accessible prefix, NOT as a single element via the element type's
+        // get_member_offset_runs (which would scan just the first element).
+        let mut inner = ObjectAllocatorInner::new();
+        let root = Box::into_raw(Box::new(0usize));
+        inner.register_global_object(root as *mut (), mem::size_of::<usize>());
+        let gen_fake = crate::type_id::FakeTypeInfo::new_with_get_member_offset_runs(
+            false,
+            Some(test_generator_offset_0),
+        );
+        let buffer = inner.allocate_slice_buffer(64, gen_fake.tid(), 64);
+        let second_elem_target = inner.allocate(64, TypeId::new_invalid());
+        unsafe {
+            root.write(buffer as usize);
+            ptr::write(
+                (buffer as usize + 16) as *mut usize,
+                second_elem_target as usize,
+            );
+        }
+        inner.run_gc(&[]);
+        assert!(
+            inner
+                .allocated_objects
+                .contains_key(&(second_elem_target as usize))
+        );
+        inner.free_all_allocated_objects();
+        unsafe {
+            let _ = Box::from_raw(root);
+        }
+    }
+
+    #[test]
+    fn test_set_slice_scan_end_is_monotone_and_clamped() {
+        let mut inner = ObjectAllocatorInner::new();
+        let ptr = inner.allocate_slice_buffer(64, TypeId::new_invalid(), 16);
+        let base = ptr as usize;
+        assert_eq!(inner.slice_scan_end_of(base), 16);
+        // bump via an interior pointer within the buffer
+        inner.set_slice_scan_end(base + 8, base + 32);
+        assert_eq!(inner.slice_scan_end_of(base), 32);
+        // shrinking (a shorter sub-slice) never reduces the high-water mark
+        inner.set_slice_scan_end(base, base + 8);
+        assert_eq!(inner.slice_scan_end_of(base), 32);
+        // clamped to the allocation size
+        inner.set_slice_scan_end(base, base + 80);
+        assert_eq!(inner.slice_scan_end_of(base), 64);
+        // a non-slice allocation ignores bumps and keeps its full span
+        let other = inner.allocate(64, TypeId::new_invalid());
+        inner.set_slice_scan_end(other as usize, other as usize);
+        let other_obj = inner.allocated_objects.get(&(other as usize)).unwrap();
+        assert!(!other_obj.is_slice_buffer);
+        assert_eq!(other_obj.slice_scan_end, 64);
         inner.free_all_allocated_objects();
     }
 

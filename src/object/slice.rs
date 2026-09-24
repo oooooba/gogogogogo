@@ -22,6 +22,10 @@ impl SliceObject {
         Self::new(self.ptr, self.size + addition, self.capacity)
     }
 
+    pub(crate) fn ptr(&self) -> *mut () {
+        self.ptr
+    }
+
     pub(crate) fn size(&self) -> usize {
         self.size
     }

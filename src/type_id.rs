@@ -115,25 +115,30 @@ impl FakeTypeInfo {
     }
 
     pub(crate) fn new_interface(no_pointers: bool) -> Self {
-        Self::new_with_flags(no_pointers, true, None)
+        Self::new_with_flags(no_pointers, true, None, 0)
+    }
+
+    pub(crate) fn new_with_size(no_pointers: bool, size: usize) -> Self {
+        Self::new_with_flags(no_pointers, false, None, size)
     }
 
     pub(crate) fn new_with_get_member_offset_runs(
         no_pointers: bool,
         get_member_offset_runs: Option<GetMemberOffsetRunsFunc>,
     ) -> Self {
-        Self::new_with_flags(no_pointers, false, get_member_offset_runs)
+        Self::new_with_flags(no_pointers, false, get_member_offset_runs, 0)
     }
 
-    // Writes a no_pointers flag, an interface flag, and an optional
-    // get_member_offset_runs function pointer into a zeroed TypeInfo-sized
-    // blob. The blob is Box::leak'ed and reclaimed via a raw pointer in Drop
-    // (Miri Stacked Borrows); writes happen after the leak so the raw pointer
-    // tags are not invalidated by its Unique retag.
+    // Writes a no_pointers flag, an interface flag, an optional
+    // get_member_offset_runs function pointer, and a size into a zeroed
+    // TypeInfo-sized blob. The blob is Box::leak'ed and reclaimed via a raw
+    // pointer in Drop (Miri Stacked Borrows); writes happen through the leaked
+    // marker so the raw pointer tags are not invalidated by its Unique retag.
     pub(crate) fn new_with_flags(
         no_pointers: bool,
         is_interface: bool,
         get_member_offset_runs: Option<GetMemberOffsetRunsFunc>,
+        size: usize,
     ) -> Self {
         let blob_len = TYPE_INFO_SIZE;
         let blob: Box<[u64]> = vec![0u64; blob_len.div_ceil(8)].into_boxed_slice();
@@ -146,6 +151,9 @@ impl FakeTypeInfo {
             ptr.add(mem::offset_of!(TypeInfo, is_interface))
                 .cast::<bool>()
                 .write(is_interface);
+            ptr.add(mem::offset_of!(TypeInfo, size))
+                .cast::<usize>()
+                .write(size);
             ptr.add(mem::offset_of!(TypeInfo, get_member_offset_runs))
                 .cast::<Option<GetMemberOffsetRunsFunc>>()
                 .write(get_member_offset_runs);

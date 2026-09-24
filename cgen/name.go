@@ -236,6 +236,9 @@ func requireSwitchFunction(instruction ssa.Instruction) bool {
 		if dstType, ok := t.Type().Underlying().(*types.Basic); ok && dstType.Kind() == types.String {
 			return true
 		}
+		if _, ok := t.X.Type().Underlying().(*types.Slice); ok {
+			return true
+		}
 		return false
 	case *ssa.UnOp:
 		if t.Op == token.ARROW {

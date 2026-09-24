@@ -130,6 +130,25 @@ impl LightWeightThreadContext {
         self.allocate_with(size, |allocator| allocator.allocate_closure(size))
     }
 
+    pub(crate) fn allocate_slice_buffer(
+        &mut self,
+        size: usize,
+        type_id: TypeId,
+        accessible_bytes: usize,
+    ) -> *mut () {
+        self.allocate_with(size, move |allocator| {
+            allocator.allocate_slice_buffer(size, type_id, accessible_bytes)
+        })
+    }
+
+    pub(crate) fn set_slice_scan_end(&mut self, interior_addr: usize, absolute_end: usize) {
+        self.global_context().process(|mut global_context| {
+            global_context
+                .allocator()
+                .set_slice_scan_end(interior_addr, absolute_end);
+        });
+    }
+
     fn allocate_with(
         &mut self,
         size: usize,
