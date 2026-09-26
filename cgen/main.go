@@ -63,6 +63,7 @@ type Context struct {
 	visitedInterfaceNames    map[string]bool
 	emittedTypeDefinitions   map[string]struct{}
 	instanceOrderedTypes     []types.Type
+	functionEscapeInfo       map[*ssa.Function]*allocEscapeInfo
 }
 
 func (ctx *Context) markTypeDefinition(kind, name string) bool {

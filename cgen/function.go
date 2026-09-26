@@ -94,6 +94,11 @@ func (ctx *Context) emitFunctionVariableStructure(function *ssa.Function) {
 			if local.Heap {
 				panic(fmt.Sprintf("%s", local))
 			}
+			if ctx.allocBufferEligibleForHostStack(function, local) {
+				// Promoted to a host-stack local of the generated C function that
+				// owns the Alloc instruction; see functionHostLocalBuffers.
+				continue
+			}
 			id := fmt.Sprintf("%s_buf", createValueName(local))
 			fmt.Fprintf(ctx.stream, "\t%s %s;\n", createTypeName(local.Type().(*types.Pointer).Elem()), id)
 		}
@@ -172,7 +177,7 @@ func globalValueMakeInterfaces(function *ssa.Function) []*ssa.MakeInterface {
 	return result
 }
 
-func (ctx *Context) emitFunctionDefinitionPrologue(storage string, functionName string, frameName string, hasFreeVariables bool) {
+func (ctx *Context) emitFunctionDefinitionPrologue(storage string, functionName string, frameName string, hasFreeVariables bool, hostBuffers []*ssa.Alloc) {
 	fmt.Fprintf(ctx.stream, "%sFunctionObject %s (LightWeightThreadContext* ctx){\n", storage, functionName)
 	freeVarsCompareOp := "=="
 	if hasFreeVariables {
@@ -182,6 +187,10 @@ func (ctx *Context) emitFunctionDefinitionPrologue(storage string, functionName 
 	StackFrame_%s* frame = (void*)ctx->stack_pointer;
 	assert(frame->common.free_vars %s NULL);
 `, frameName, freeVarsCompareOp)
+	for _, alloc := range hostBuffers {
+		id := fmt.Sprintf("%s_buf", createValueName(alloc))
+		fmt.Fprintf(ctx.stream, "\t%s %s;\n", createTypeName(alloc.Type().(*types.Pointer).Elem()), id)
+	}
 }
 
 func (ctx *Context) emitFunctionDefinitionEpilogue() {
@@ -242,8 +251,9 @@ func (ctx *Context) emitFunctionDefinition(function *ssa.Function) {
 
 	frameName := createFunctionName(function)
 	hasFreeVariables := len(function.FreeVars) != 0
+	hostBuffers := ctx.functionHostLocalBuffers(function)
 	for _, basicBlock := range function.Blocks {
-		ctx.emitFunctionDefinitionPrologue(storage, createBasicBlockName(basicBlock), frameName, hasFreeVariables)
+		ctx.emitFunctionDefinitionPrologue(storage, createBasicBlockName(basicBlock), frameName, hasFreeVariables, hostBuffers[createBasicBlockName(basicBlock)])
 
 		ctx.emitBlockPhis(basicBlock)
 
@@ -255,7 +265,7 @@ func (ctx *Context) emitFunctionDefinition(function *ssa.Function) {
 
 			if requireSwitchFunction(instr) {
 				ctx.emitFunctionDefinitionEpilogue()
-				ctx.emitFunctionDefinitionPrologue(storage, createInstructionName(instr), frameName, hasFreeVariables)
+				ctx.emitFunctionDefinitionPrologue(storage, createInstructionName(instr), frameName, hasFreeVariables, hostBuffers[createInstructionName(instr)])
 			}
 		}
 
@@ -277,7 +287,7 @@ func (ctx *Context) emitReceiverBoundThunkGlue(function *ssa.Function, storage s
 	origFuncName := createFunctionName(function)
 	boundFuncName := fmt.Sprintf("%s%s", origFuncName, encode("$bound"))
 	resumeFuncName := fmt.Sprintf("%s_return", boundFuncName)
-	ctx.emitFunctionDefinitionPrologue(storage, resumeFuncName, boundFuncName, true)
+	ctx.emitFunctionDefinitionPrologue(storage, resumeFuncName, boundFuncName, true, nil)
 	fmt.Fprintf(ctx.stream, `
 	assert(ctx->marker == 0xdeadbeef);
 	ctx->stack_pointer = frame->common.prev_stack_pointer;
@@ -285,7 +295,7 @@ func (ctx *Context) emitReceiverBoundThunkGlue(function *ssa.Function, storage s
 `)
 	ctx.emitFunctionDefinitionEpilogue()
 
-	ctx.emitFunctionDefinitionPrologue(storage, boundFuncName, boundFuncName, true)
+	ctx.emitFunctionDefinitionPrologue(storage, boundFuncName, boundFuncName, true, nil)
 	nextFuncName := wrapInFunctionObject(origFuncName)
 	signatureName := createSignatureName(signature, false, false)
 	result := "*frame->signature.result_ptr"
@@ -299,7 +309,7 @@ func (ctx *Context) emitReceiverBoundThunkGlue(function *ssa.Function, storage s
 
 	thunkFuncName := fmt.Sprintf("%s%s", origFuncName, encode("$thunk"))
 	thunkResumeFuncName := fmt.Sprintf("%s_return", thunkFuncName)
-	ctx.emitFunctionDefinitionPrologue(storage, thunkResumeFuncName, origFuncName, false)
+	ctx.emitFunctionDefinitionPrologue(storage, thunkResumeFuncName, origFuncName, false, nil)
 	fmt.Fprintf(ctx.stream, `
 	assert(ctx->marker == 0xdeadbeef);
 	ctx->stack_pointer = frame->common.prev_stack_pointer;
@@ -307,7 +317,7 @@ func (ctx *Context) emitReceiverBoundThunkGlue(function *ssa.Function, storage s
 `)
 	ctx.emitFunctionDefinitionEpilogue()
 
-	ctx.emitFunctionDefinitionPrologue(storage, thunkFuncName, origFuncName, false)
+	ctx.emitFunctionDefinitionPrologue(storage, thunkFuncName, origFuncName, false, nil)
 	nextFuncName = wrapInFunctionObject(origFuncName)
 	signatureName = createSignatureName(signature, false, false)
 	result = "*frame->signature.result_ptr"

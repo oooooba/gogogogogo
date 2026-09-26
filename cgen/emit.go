@@ -24,8 +24,14 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 		} else {
 			v := createValueRelName(instr)
 			elemType := instr.Type().(*types.Pointer).Elem()
-			fmt.Fprintf(ctx.stream, "%s_buf = (%s){};\n", v, createTypeName(elemType))
-			fmt.Fprintf(ctx.stream, "%s* raw = &%s_buf;\n", createTypeName(elemType), v)
+			if instr.Parent() != nil && ctx.allocBufferEligibleForHostStack(instr.Parent(), instr) {
+				bufName := fmt.Sprintf("%s_buf", createValueName(instr))
+				fmt.Fprintf(ctx.stream, "%s = (%s){};\n", bufName, createTypeName(elemType))
+				fmt.Fprintf(ctx.stream, "%s* raw = &%s;\n", createTypeName(elemType), bufName)
+			} else {
+				fmt.Fprintf(ctx.stream, "%s_buf = (%s){};\n", v, createTypeName(elemType))
+				fmt.Fprintf(ctx.stream, "%s* raw = &%s_buf;\n", createTypeName(elemType), v)
+			}
 			fmt.Fprintf(ctx.stream, "%s = %s;\n", v, wrapInObject("raw", instr.Type()))
 		}
 
