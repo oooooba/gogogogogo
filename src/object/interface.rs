@@ -16,13 +16,38 @@ pub(crate) struct InterfaceTableEntry {
     method_signature: StringObject,
 }
 
+// Only the tests share an interface table across threads (through a OnceLock);
+// it is built once and then only read, so that is sound.
+#[cfg(test)]
+unsafe impl Send for InterfaceTableEntry {}
+#[cfg(test)]
+unsafe impl Sync for InterfaceTableEntry {}
+
 impl InterfaceTableEntry {
+    #[cfg(test)]
+    pub(crate) fn new(
+        method_name: StringObject,
+        method: FunctionObject,
+        method_signature: StringObject,
+    ) -> Self {
+        InterfaceTableEntry {
+            method_name,
+            method,
+            method_signature,
+        }
+    }
+
     pub(crate) fn method_name(&self) -> &StringObject {
         &self.method_name
     }
 
     pub(crate) fn method_signature(&self) -> &StringObject {
         &self.method_signature
+    }
+
+    #[cfg(test)]
+    pub(crate) fn method(&self) -> &FunctionObject {
+        &self.method
     }
 }
 
