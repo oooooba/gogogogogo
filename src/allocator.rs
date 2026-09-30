@@ -34,6 +34,11 @@ impl Drop for ObjectAllocator {
 
 struct ObjectAllocatorInner {
     allocated_objects: BTreeMap<usize, AllocatedObject>,
+    /// Closure allocations live apart from ordinary objects: a closure is
+    /// referenced through a `FunctionObject` whose address has the most
+    /// significant bit set, so the GC must distinguish tagged words from plain
+    /// pointers. Membership in this map is what makes that call.
+    allocated_closures: BTreeMap<usize, AllocatedObject>,
     global_spans: Vec<Span>,
     total_size: usize,
 }
@@ -49,7 +54,6 @@ struct AllocatedObject {
     kind: AllocationKind,
     marked: bool,
     type_id: TypeId,
-    is_closure: bool,
     /// True when the allocation backs a Go slice and must be scanned only up to
     /// (a high-water mark of) the accessible prefix instead of the full span.
     is_slice_buffer: bool,
@@ -70,17 +74,32 @@ impl ObjectAllocatorInner {
     fn new() -> Self {
         ObjectAllocatorInner {
             allocated_objects: BTreeMap::new(),
+            allocated_closures: BTreeMap::new(),
             global_spans: Vec::new(),
             total_size: 0,
         }
     }
 
     fn allocate(&mut self, size: usize, type_id: TypeId) -> *mut () {
-        self.allocate_impl(size, type_id, false, false, size)
+        Self::allocate_span(
+            &mut self.total_size,
+            size,
+            type_id,
+            false,
+            size,
+            &mut self.allocated_objects,
+        )
     }
 
     fn allocate_closure(&mut self, size: usize) -> *mut () {
-        self.allocate_impl(size, TypeId::new_invalid(), true, false, size)
+        Self::allocate_span(
+            &mut self.total_size,
+            size,
+            TypeId::new_invalid(),
+            false,
+            size,
+            &mut self.allocated_closures,
+        )
     }
 
     fn allocate_slice_buffer(
@@ -91,19 +110,28 @@ impl ObjectAllocatorInner {
     ) -> *mut () {
         let target_size = size.div_ceil(ALLOCATION_ALIGNMENT) * ALLOCATION_ALIGNMENT;
         let accessible_bytes = accessible_bytes.min(target_size);
-        self.allocate_impl(size, type_id, false, true, accessible_bytes)
+        Self::allocate_span(
+            &mut self.total_size,
+            size,
+            type_id,
+            true,
+            accessible_bytes,
+            &mut self.allocated_objects,
+        )
     }
 
-    fn allocate_impl(
-        &mut self,
+    /// Allocates a zero-initialized, 16-byte-aligned heap span and records it
+    /// in `destinations` (either the ordinary objects or the closures map).
+    fn allocate_span(
+        total_size: &mut usize,
         size: usize,
         type_id: TypeId,
-        is_closure: bool,
         is_slice_buffer: bool,
         slice_scan_end: usize,
+        destinations: &mut BTreeMap<usize, AllocatedObject>,
     ) -> *mut () {
         let size = size.div_ceil(ALLOCATION_ALIGNMENT) * ALLOCATION_ALIGNMENT;
-        if self.total_size.saturating_add(size) > MAX_TOTAL_ALLOCATED_SIZE {
+        if total_size.saturating_add(size) > MAX_TOTAL_ALLOCATED_SIZE {
             return ptr::null_mut();
         }
         let mut buf: Vec<u128> = Vec::new();
@@ -112,19 +140,18 @@ impl ObjectAllocatorInner {
         }
         buf.resize(size / ALLOCATION_ALIGNMENT, 0);
         let ptr = buf.leak().as_mut_ptr() as *mut ();
-        self.allocated_objects.insert(
+        destinations.insert(
             ptr as usize,
             AllocatedObject {
                 span: Span { ptr, size },
                 kind: AllocationKind::Heap,
                 marked: false,
                 type_id,
-                is_closure,
                 is_slice_buffer,
                 slice_scan_end,
             },
         );
-        self.total_size += size;
+        *total_size += size;
         ptr
     }
 
@@ -173,7 +200,6 @@ impl ObjectAllocatorInner {
                     kind: AllocationKind::GuardedPages,
                     marked: false,
                     type_id,
-                    is_closure: false,
                     is_slice_buffer: false,
                     slice_scan_end: 4096 * num_pages,
                 },
@@ -220,6 +246,19 @@ impl ObjectAllocatorInner {
             })
             .collect();
         self.allocated_objects = kept;
+        let closures = mem::take(&mut self.allocated_closures);
+        let kept = closures
+            .into_iter()
+            .filter_map(|(address, object)| {
+                if object.marked {
+                    Some((address, object))
+                } else {
+                    self.free(&object);
+                    None
+                }
+            })
+            .collect();
+        self.allocated_closures = kept;
     }
 
     fn register_global_object(&mut self, address: *mut (), size: usize) {
@@ -228,6 +267,9 @@ impl ObjectAllocatorInner {
 
     fn free_all_allocated_objects(&mut self) {
         for object in self.allocated_objects.values_mut() {
+            object.marked = false;
+        }
+        for object in self.allocated_closures.values_mut() {
             object.marked = false;
         }
         self.sweep();
@@ -240,6 +282,9 @@ impl ObjectAllocatorInner {
 
     pub(crate) fn run_gc(&mut self, contexts: &[&LightWeightThreadContext]) {
         for object in self.allocated_objects.values_mut() {
+            object.marked = false;
+        }
+        for object in self.allocated_closures.values_mut() {
             object.marked = false;
         }
         let global_spans = mem::take(&mut self.global_spans);
@@ -299,14 +344,8 @@ impl ObjectAllocatorInner {
             }
             if (word & FUNCTION_OBJECT_CLOSURE_FLAG) != 0 {
                 let cleared_address = word & !FUNCTION_OBJECT_CLOSURE_FLAG;
-                if let Some(object_address) = self.containing_object(cleared_address) {
-                    let is_closure = match self.allocated_objects.get(&object_address) {
-                        Some(object) => object.is_closure,
-                        None => false,
-                    };
-                    if is_closure {
-                        self.mark_object(object_address);
-                    }
+                if let Some(closure_address) = self.containing_closure(cleared_address) {
+                    self.mark_object(closure_address);
                 }
             }
             address += word_size;
@@ -315,24 +354,14 @@ impl ObjectAllocatorInner {
 
     fn mark_object(&mut self, object_address: usize) {
         let (span, kind, marked, type_id, is_slice_buffer, slice_scan_end) =
-            match self.allocated_objects.get(&object_address) {
-                Some(object) => (
-                    object.span,
-                    object.kind,
-                    object.marked,
-                    object.type_id,
-                    object.is_slice_buffer,
-                    object.slice_scan_end,
-                ),
+            match self.lookup_object(object_address) {
+                Some(record) => record,
                 None => return,
             };
         if marked {
             return;
         }
-        self.allocated_objects
-            .get_mut(&object_address)
-            .unwrap()
-            .marked = true;
+        self.mark_object_as_marked(object_address);
         if kind == AllocationKind::Heap && !type_id.is_no_pointer() {
             if type_id.is_interface_type() {
                 self.mark_interface_object(span.ptr as usize);
@@ -368,6 +397,49 @@ impl ObjectAllocatorInner {
             Some(object_address)
         } else {
             None
+        }
+    }
+
+    fn containing_closure(&self, address: usize) -> Option<usize> {
+        let (closure_address, closure) = self.allocated_closures.range(..=address).next_back()?;
+        let closure_address = *closure_address;
+        if address < closure_address + closure.span.size {
+            Some(closure_address)
+        } else {
+            None
+        }
+    }
+
+    fn lookup_object(
+        &self,
+        object_address: usize,
+    ) -> Option<(Span, AllocationKind, bool, TypeId, bool, usize)> {
+        if let Some(object) = self.allocated_objects.get(&object_address) {
+            return Some((
+                object.span,
+                object.kind,
+                object.marked,
+                object.type_id,
+                object.is_slice_buffer,
+                object.slice_scan_end,
+            ));
+        }
+        let object = self.allocated_closures.get(&object_address)?;
+        Some((
+            object.span,
+            object.kind,
+            object.marked,
+            object.type_id,
+            object.is_slice_buffer,
+            object.slice_scan_end,
+        ))
+    }
+
+    fn mark_object_as_marked(&mut self, object_address: usize) {
+        if let Some(object) = self.allocated_objects.get_mut(&object_address) {
+            object.marked = true;
+        } else if let Some(object) = self.allocated_closures.get_mut(&object_address) {
+            object.marked = true;
         }
     }
 
@@ -1043,13 +1115,18 @@ mod tests {
     }
 
     #[test]
-    fn test_allocate_closure_is_registered_with_closure_metadata() {
+    fn test_allocate_closure_is_registered_apart_from_ordinary_objects() {
         let mut inner = ObjectAllocatorInner::new();
         let ptr = inner.allocate_closure(32);
         assert!(!ptr.is_null());
-        let object = inner.allocated_objects.get(&(ptr as usize)).unwrap();
+        // A closure is recorded in allocated_closures, not allocated_objects:
+        // its address (with the MSB set in FunctionObject form) must not be
+        // treated as an ordinary heap pointer.
+        let object = inner.allocated_closures.get(&(ptr as usize)).unwrap();
         assert_eq!(object.kind, AllocationKind::Heap);
-        assert!(object.is_closure);
+        assert!(!inner.allocated_objects.contains_key(&(ptr as usize)));
+        let ordinary = inner.allocate(32, TypeId::new_invalid());
+        assert!(!inner.allocated_closures.contains_key(&(ordinary as usize)));
         inner.free_all_allocated_objects();
     }
 
@@ -1155,7 +1232,8 @@ mod tests {
             root.write(base | crate::FUNCTION_OBJECT_CLOSURE_FLAG);
         }
         inner.run_gc(&[]);
-        assert!(inner.allocated_objects.contains_key(&base));
+        assert!(inner.allocated_closures.contains_key(&base));
+        assert!(!inner.allocated_objects.contains_key(&base));
         assert!(!inner.allocated_objects.contains_key(&(garbage as usize)));
         inner.free_all_allocated_objects();
         unsafe {
@@ -1177,7 +1255,7 @@ mod tests {
             ptr::write((base + 16) as *mut usize, kept as usize);
         }
         inner.run_gc(&[]);
-        assert!(inner.allocated_objects.contains_key(&base));
+        assert!(inner.allocated_closures.contains_key(&base));
         assert!(inner.allocated_objects.contains_key(&(kept as usize)));
         assert!(!inner.allocated_objects.contains_key(&(garbage as usize)));
         inner.free_all_allocated_objects();
