@@ -410,6 +410,11 @@ mod tests {
         let result_raw = ctx.stack_pointer() as *mut isize;
         ctx.grow_stack(mem::size_of::<StackFrameStringLength>());
         ctx.push_frame(
+            LightWeightThreadContext::frame_extent(
+                mem::size_of::<StackFrameStringLength>(),
+                mem::size_of::<StackFrameStringLength>(),
+                0,
+            ),
             prev_sp,
             Some(result_raw as *const ()),
             &[],
@@ -439,6 +444,11 @@ mod tests {
         let result_raw = ctx.stack_pointer() as *mut isize;
         ctx.grow_stack(mem::size_of::<StackFrameStringLength>());
         ctx.push_frame(
+            LightWeightThreadContext::frame_extent(
+                mem::size_of::<StackFrameStringLength>(),
+                mem::size_of::<StackFrameStringLength>(),
+                0,
+            ),
             prev_sp,
             Some(result_raw as *const ()),
             &[],
@@ -467,6 +477,11 @@ mod tests {
         let result_raw = ctx.stack_pointer() as *mut StringObject;
         ctx.grow_stack(mem::size_of::<StackFrameStringNewFromRune>());
         ctx.push_frame(
+            LightWeightThreadContext::frame_extent(
+                mem::size_of::<StackFrameStringNewFromRune>(),
+                mem::size_of::<StackFrameStringNewFromRune>(),
+                0,
+            ),
             prev_sp,
             Some(result_raw as *const ()),
             &[],
@@ -491,6 +506,11 @@ mod tests {
         let result_raw = ctx.stack_pointer() as *mut StringObject;
         ctx.grow_stack(mem::size_of::<StackFrameStringNewFromRune>());
         ctx.push_frame(
+            LightWeightThreadContext::frame_extent(
+                mem::size_of::<StackFrameStringNewFromRune>(),
+                mem::size_of::<StackFrameStringNewFromRune>(),
+                0,
+            ),
             prev_sp,
             Some(result_raw as *const ()),
             &[],
@@ -515,6 +535,11 @@ mod tests {
         let result_raw = ctx.stack_pointer() as *mut StringObject;
         ctx.grow_stack(mem::size_of::<StackFrameStringSubstr>());
         ctx.push_frame(
+            LightWeightThreadContext::frame_extent(
+                mem::size_of::<StackFrameStringSubstr>(),
+                mem::size_of::<StackFrameStringSubstr>(),
+                0,
+            ),
             prev_sp,
             Some(result_raw as *const ()),
             &[],
@@ -546,6 +571,11 @@ mod tests {
         let result_raw = ctx.stack_pointer() as *mut StringObject;
         ctx.grow_stack(mem::size_of::<StackFrameStringSubstr>());
         ctx.push_frame(
+            LightWeightThreadContext::frame_extent(
+                mem::size_of::<StackFrameStringSubstr>(),
+                mem::size_of::<StackFrameStringSubstr>(),
+                0,
+            ),
             prev_sp,
             Some(result_raw as *const ()),
             &[],
@@ -577,6 +607,11 @@ mod tests {
         let result_raw = ctx.stack_pointer() as *mut StringObject;
         ctx.grow_stack(mem::size_of::<StackFrameStringAppend>());
         ctx.push_frame(
+            LightWeightThreadContext::frame_extent(
+                mem::size_of::<StackFrameStringAppend>(),
+                mem::size_of::<StackFrameStringAppend>(),
+                0,
+            ),
             prev_sp,
             Some(result_raw as *const ()),
             &[],
@@ -634,7 +669,13 @@ mod tests {
 
         let prev_sp = ctx.stack_pointer();
         ctx.grow_stack(mem::size_of::<StackFrameStringNext>());
-        ctx.push_frame(prev_sp, None, &[], FunctionObject::new_null());
+        ctx.push_frame(
+            mem::size_of::<StackFrameStringNext>(),
+            prev_sp,
+            None,
+            &[],
+            FunctionObject::new_null(),
+        );
 
         {
             let frame = ctx.stack_frame_mut::<StackFrameStringNext>();
@@ -802,6 +843,11 @@ mod tests {
         let result_raw = ctx.stack_pointer() as *mut isize;
         ctx.grow_stack(mem::size_of::<StackFrameStringSearchByte>());
         ctx.push_frame(
+            LightWeightThreadContext::frame_extent(
+                mem::size_of::<StackFrameStringSearchByte>(),
+                mem::size_of::<StackFrameStringSearchByte>(),
+                0,
+            ),
             prev_sp,
             Some(result_raw as *const ()),
             &[],
@@ -856,6 +902,11 @@ mod tests {
         let result_raw = ctx.stack_pointer() as *mut isize;
         ctx.grow_stack(mem::size_of::<StackFrameStringSearchString>());
         ctx.push_frame(
+            LightWeightThreadContext::frame_extent(
+                mem::size_of::<StackFrameStringSearchString>(),
+                mem::size_of::<StackFrameStringSearchString>(),
+                0,
+            ),
             prev_sp,
             Some(result_raw as *const ()),
             &[],

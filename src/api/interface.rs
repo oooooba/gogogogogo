@@ -162,6 +162,7 @@ pub extern "C" fn gox5_interface_invoke(ctx: &mut LightWeightThreadContext) -> F
     ctx.grow_stack((current_stack_pointer as usize) - (prev_stack_pointer as usize));
 
     ctx.push_frame(
+        (current_stack_pointer as usize) - (prev_stack_pointer as usize),
         prev_stack_pointer,
         result_pointer,
         unsafe { WordChunk::as_slice_raw(args.as_ptr()) },
@@ -237,6 +238,7 @@ mod tests {
         let result_raw = ctx.stack_pointer() as *mut Interface;
         ctx.grow_stack(mem::size_of::<StackFrameInterfaceNew>());
         ctx.push_frame(
+            mem::size_of::<StackFrameInterfaceNew>(),
             prev_sp,
             Some(result_raw as *const ()),
             &[],
@@ -263,6 +265,7 @@ mod tests {
         let result_raw = ctx.stack_pointer() as *mut Interface;
         ctx.grow_stack(mem::size_of::<StackFrameInterfaceNew>());
         ctx.push_frame(
+            mem::size_of::<StackFrameInterfaceNew>(),
             prev_sp,
             Some(result_raw as *const ()),
             &[],
@@ -360,7 +363,13 @@ mod tests {
         let resume_func = FunctionObject::from_user_function(UserFunction::new(test_invoke_resume));
         let prev_stack_pointer = ctx.stack_pointer();
         ctx.grow_stack(mem::size_of::<StackFrameCommon>());
-        ctx.push_frame(prev_stack_pointer, None, &[], resume_func.clone());
+        ctx.push_frame(
+            mem::size_of::<StackFrameCommon>(),
+            prev_stack_pointer,
+            None,
+            &[],
+            resume_func.clone(),
+        );
         ctx.grow_stack(mem::size_of::<StackFrameInterfaceInvoke>() + mem::size_of_val(args));
 
         // The argument buffer of the interface invoke frame: a count followed by
@@ -382,6 +391,8 @@ mod tests {
         frame.common.prev_stack_pointer = prev_stack_pointer;
         frame.common.free_vars = ptr::null_mut();
         frame.common.defer_stack = DeferStack::new();
+        frame.common.frame_size =
+            mem::size_of::<StackFrameInterfaceInvoke>() + mem::size_of::<usize>() * args.len();
         frame.result_ptr = result_ptr;
         frame.interface = interface;
         frame.method_name =
@@ -445,11 +456,27 @@ mod tests {
         let filler_type = FakeTypeInfo::new(true);
         let collectible_size = 65536;
         let referenced_size = MAX_TOTAL_ALLOCATED_SIZE - collectible_size;
-        let (start, _end) = ctx.stack_range();
-        ctx.grow_stack(mem::size_of::<usize>());
         let referenced = ctx.allocate(referenced_size, filler_type.tid());
         assert!(!referenced.is_null());
-        unsafe { ptr::write(start as *mut usize, referenced as usize) };
+        // The GC scans the live frames one by one, so the big chunk is
+        // referenced from a real frame rather than from the unused bottom of
+        // the stack region.
+        ctx.grow_stack(mem::size_of::<StackFrameCommon>() + mem::size_of::<usize>());
+        let root_frame = ctx.stack_pointer() as *mut u8;
+        let prev_stack_pointer = ctx.stack_pointer();
+        ctx.push_frame(
+            mem::size_of::<StackFrameCommon>() + mem::size_of::<usize>(),
+            prev_stack_pointer,
+            None,
+            &[],
+            FunctionObject::new_null(),
+        );
+        unsafe {
+            ptr::write(
+                root_frame.add(mem::size_of::<StackFrameCommon>()) as *mut usize,
+                referenced as usize,
+            )
+        };
         let collectible = ctx.allocate(collectible_size, filler_type.tid());
         assert!(!collectible.is_null());
         let total_before = gc.process(|mut gc| gc.allocator().total_size());

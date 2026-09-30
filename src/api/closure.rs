@@ -76,6 +76,11 @@ mod tests {
         let result_raw = ctx.stack_pointer() as *mut FunctionObject;
         ctx.grow_stack(mem::size_of::<StackFrameClosureNew>());
         ctx.push_frame(
+            LightWeightThreadContext::frame_extent(
+                mem::size_of::<StackFrameClosureNew>(),
+                mem::size_of::<StackFrameClosureNew>(),
+                0,
+            ),
             prev_sp,
             Some(result_raw as *const ()),
             &[],
@@ -107,6 +112,11 @@ mod tests {
         let result_raw = ctx.stack_pointer() as *mut FunctionObject;
         ctx.grow_stack(mem::size_of::<StackFrameClosureNew>());
         ctx.push_frame(
+            LightWeightThreadContext::frame_extent(
+                mem::size_of::<StackFrameClosureNew>(),
+                mem::size_of::<StackFrameClosureNew>(),
+                0,
+            ),
             prev_sp,
             Some(result_raw as *const ()),
             &[],

@@ -117,6 +117,11 @@ pub extern "C" fn gox5_defer_execute(ctx: &mut LightWeightThreadContext) -> Func
     ctx.grow_stack(entry.result_size());
 
     ctx.push_frame(
+        LightWeightThreadContext::frame_extent(
+            mem::size_of::<StackFrameDeferExecute>(),
+            entry.result_size(),
+            entry.args().len(),
+        ),
         prev_stack_pointer,
         result_pointer,
         entry.args(),
@@ -163,7 +168,13 @@ mod tests {
 
         // Push inner frame on top of outer frame
         ctx.grow_stack(mem::size_of::<StackFrameDeferRegister>() + mem::size_of::<WordChunk>());
-        ctx.push_frame(outer_sp, None, &[], FunctionObject::new_null());
+        ctx.push_frame(
+            mem::size_of::<StackFrameDeferRegister>() + mem::size_of::<WordChunk>(),
+            outer_sp,
+            None,
+            &[],
+            FunctionObject::new_null(),
+        );
 
         let frame = ctx.stack_frame_mut::<StackFrameDeferRegister>();
         frame.func = FunctionObject::new_null();
@@ -185,7 +196,13 @@ mod tests {
 
         // Push defer_execute frame on top of outer frame
         ctx.grow_stack(mem::size_of::<StackFrameDeferExecute>());
-        ctx.push_frame(outer_sp, None, &[], FunctionObject::new_null());
+        ctx.push_frame(
+            mem::size_of::<StackFrameDeferExecute>(),
+            outer_sp,
+            None,
+            &[],
+            FunctionObject::new_null(),
+        );
 
         // Outer frame has empty defer stack, so defer_execute should just pop
         let result = gox5_defer_execute(&mut ctx);
@@ -213,11 +230,27 @@ mod tests {
         let referenced_size =
             MAX_TOTAL_ALLOCATED_SIZE - mem::size_of::<DeferStackEntry>() - collectible_size;
 
-        let (start, _end) = ctx.stack_range();
-        ctx.grow_stack(mem::size_of::<usize>());
         let referenced = ctx.allocate(referenced_size, filler_type.tid());
         assert!(!referenced.is_null());
-        unsafe { ptr::write(start as *mut usize, referenced as usize) };
+        // The GC scans the live frames one by one, so the big chunk is
+        // referenced from a real frame rather than from the unused bottom of
+        // the stack region.
+        ctx.grow_stack(mem::size_of::<StackFrameCommon>() + mem::size_of::<usize>());
+        let root_frame = ctx.stack_pointer() as *mut u8;
+        let prev_stack_pointer = ctx.stack_pointer();
+        ctx.push_frame(
+            mem::size_of::<StackFrameCommon>() + mem::size_of::<usize>(),
+            prev_stack_pointer,
+            None,
+            &[],
+            FunctionObject::new_null(),
+        );
+        unsafe {
+            ptr::write(
+                root_frame.add(mem::size_of::<StackFrameCommon>()) as *mut usize,
+                referenced as usize,
+            )
+        };
         let collectible = ctx.allocate(collectible_size, filler_type.tid());
         assert!(!collectible.is_null());
         let total_before = total_size(&gc);
@@ -234,13 +267,27 @@ mod tests {
         ];
         let prev_stack_pointer = ctx.stack_pointer();
         ctx.grow_stack(mem::size_of::<StackFrameCommon>());
-        ctx.push_frame(prev_stack_pointer, None, &[], FunctionObject::new_null());
+        ctx.push_frame(
+            mem::size_of::<StackFrameCommon>(),
+            prev_stack_pointer,
+            None,
+            &[],
+            FunctionObject::new_null(),
+        );
         ctx.grow_stack(
             mem::size_of::<StackFrameDeferRegister>()
                 + mem::size_of::<WordChunk>()
                 + mem::size_of::<*const ()>() * args.len(),
         );
-        ctx.push_frame(prev_stack_pointer, None, &[], FunctionObject::new_null());
+        ctx.push_frame(
+            mem::size_of::<StackFrameDeferRegister>()
+                + mem::size_of::<WordChunk>()
+                + mem::size_of::<*const ()>() * args.len(),
+            prev_stack_pointer,
+            None,
+            &[],
+            FunctionObject::new_null(),
+        );
         let frame = ctx.stack_frame_mut::<StackFrameDeferRegister>();
         frame.func = func.clone();
         frame.result_size = 0;

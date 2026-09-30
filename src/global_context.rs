@@ -127,6 +127,7 @@ mod tests {
     use super::*;
     use crate::FunctionObject;
     use crate::ObjectAllocator;
+    use crate::StackFrameCommon;
     use crate::allocator::MAX_TOTAL_ALLOCATED_SIZE;
     use crate::create_light_weight_thread_context;
     use crate::type_id::TypeId;
@@ -142,13 +143,26 @@ mod tests {
         let gc = make_gc();
         let mut ctx =
             create_light_weight_thread_context(gc.dupulicate(), FunctionObject::new_null());
-        let (start, _end) = ctx.stack_range();
-        ctx.grow_stack(mem::size_of::<usize>());
-        let root = start as *mut usize;
+        // The GC scans the live frames one by one, so the object is
+        // referenced from a real frame rather than from the unused bottom of
+        // the stack region.
+        ctx.grow_stack(mem::size_of::<StackFrameCommon>() + mem::size_of::<usize>());
+        let root = ctx.stack_pointer() as *mut u8;
+        let prev_stack_pointer = ctx.stack_pointer();
+        ctx.push_frame(
+            mem::size_of::<StackFrameCommon>() + mem::size_of::<usize>(),
+            prev_stack_pointer,
+            None,
+            &[],
+            FunctionObject::new_null(),
+        );
         let kept = ctx.allocate(64, TypeId::new_invalid());
         assert!(!kept.is_null());
         unsafe {
-            ptr::write(root, kept as usize);
+            ptr::write(
+                root.add(mem::size_of::<StackFrameCommon>()) as *mut usize,
+                kept as usize,
+            );
             ptr::write(kept as *mut u8, 0xAB);
         }
         for _ in 0..10 {
@@ -171,6 +185,18 @@ mod tests {
         let gc = make_gc();
         let mut ctx =
             create_light_weight_thread_context(gc.dupulicate(), FunctionObject::new_null());
+        // Lay the self-linked bottom frame on the otherwise empty stack. Without
+        // it the garbage collector falls back to scanning the whole stack region
+        // for the one frame, which is both wasteful (word-by-word BTree lookups
+        // under Miri) and unlike production, where the bootstrap always leaves a
+        // frame with a recorded extent.
+        ctx.push_frame(
+            mem::size_of::<StackFrameCommon>(),
+            ctx.stack_pointer(),
+            None,
+            &[],
+            FunctionObject::new_null(),
+        );
         ctx.allocate(MAX_TOTAL_ALLOCATED_SIZE + 1, TypeId::new_invalid());
     }
 

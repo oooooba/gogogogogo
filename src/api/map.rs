@@ -317,6 +317,11 @@ mod tests {
         let result_raw = ctx.stack_pointer() as *mut ObjectPtr;
         ctx.grow_stack(mem::size_of::<StackFrameMapNew>());
         ctx.push_frame(
+            LightWeightThreadContext::frame_extent(
+                mem::size_of::<StackFrameMapNew>(),
+                mem::size_of::<StackFrameMapNew>(),
+                0,
+            ),
             prev_sp,
             Some(result_raw as *const ()),
             &[],
@@ -348,7 +353,13 @@ mod tests {
         let (mut ctx, _gc) = create_ctx();
         let prev_sp = ctx.stack_pointer();
         ctx.grow_stack(mem::size_of::<StackFrameMapSet>());
-        ctx.push_frame(prev_sp, None, &[], FunctionObject::new_null());
+        ctx.push_frame(
+            mem::size_of::<StackFrameMapSet>(),
+            prev_sp,
+            None,
+            &[],
+            FunctionObject::new_null(),
+        );
 
         let frame = ctx.stack_frame_mut::<StackFrameMapSet>();
         frame.map = map_ptr.clone();
@@ -371,6 +382,11 @@ mod tests {
         let result_raw = ctx.stack_pointer() as *mut usize;
         ctx.grow_stack(mem::size_of::<StackFrameMapLen>());
         ctx.push_frame(
+            LightWeightThreadContext::frame_extent(
+                mem::size_of::<StackFrameMapLen>(),
+                mem::size_of::<StackFrameMapLen>(),
+                0,
+            ),
             prev_sp,
             Some(result_raw as *const ()),
             &[],
@@ -395,6 +411,11 @@ mod tests {
         let result_raw = ctx.stack_pointer() as *mut usize;
         ctx.grow_stack(mem::size_of::<StackFrameMapLen>());
         ctx.push_frame(
+            LightWeightThreadContext::frame_extent(
+                mem::size_of::<StackFrameMapLen>(),
+                mem::size_of::<StackFrameMapLen>(),
+                0,
+            ),
             prev_sp,
             Some(result_raw as *const ()),
             &[],
@@ -416,7 +437,13 @@ mod tests {
         let (mut ctx, _gc) = create_ctx();
         let prev_sp = ctx.stack_pointer();
         ctx.grow_stack(mem::size_of::<StackFrameMapDelete>());
-        ctx.push_frame(prev_sp, None, &[], FunctionObject::new_null());
+        ctx.push_frame(
+            mem::size_of::<StackFrameMapDelete>(),
+            prev_sp,
+            None,
+            &[],
+            FunctionObject::new_null(),
+        );
 
         let frame = ctx.stack_frame_mut::<StackFrameMapDelete>();
         frame.map = ObjectPtr(ptr::null_mut());
@@ -440,7 +467,13 @@ mod tests {
 
             let prev_sp = ctx.stack_pointer();
             ctx.grow_stack(mem::size_of::<StackFrameMapSet>());
-            ctx.push_frame(prev_sp, None, &[], FunctionObject::new_null());
+            ctx.push_frame(
+                mem::size_of::<StackFrameMapSet>(),
+                prev_sp,
+                None,
+                &[],
+                FunctionObject::new_null(),
+            );
 
             let frame = ctx.stack_frame_mut::<StackFrameMapSet>();
             frame.map = map_ptr.clone();
@@ -456,7 +489,13 @@ mod tests {
 
         let prev_sp = ctx.stack_pointer();
         ctx.grow_stack(mem::size_of::<StackFrameMapClear>());
-        ctx.push_frame(prev_sp, None, &[], FunctionObject::new_null());
+        ctx.push_frame(
+            mem::size_of::<StackFrameMapClear>(),
+            prev_sp,
+            None,
+            &[],
+            FunctionObject::new_null(),
+        );
 
         let frame = ctx.stack_frame_mut::<StackFrameMapClear>();
         frame.map = map_ptr.clone();
@@ -473,7 +512,13 @@ mod tests {
         let (mut ctx, _gc) = create_ctx();
         let prev_sp = ctx.stack_pointer();
         ctx.grow_stack(mem::size_of::<StackFrameMapClear>());
-        ctx.push_frame(prev_sp, None, &[], FunctionObject::new_null());
+        ctx.push_frame(
+            mem::size_of::<StackFrameMapClear>(),
+            prev_sp,
+            None,
+            &[],
+            FunctionObject::new_null(),
+        );
 
         let frame = ctx.stack_frame_mut::<StackFrameMapClear>();
         frame.map = ObjectPtr(ptr::null_mut());

@@ -203,6 +203,7 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 						fmt.Fprintf(ctx.stream, "num_arg_buffer_words += (sizeof(%s) + sizeof(next_frame->arg_buffer[0]) - 1) / sizeof(next_frame->arg_buffer[0]);\n", argType)
 					}
 					fmt.Fprintf(ctx.stream, "next_frame->num_arg_buffer_words = num_arg_buffer_words;\n")
+					ctx.emitFrameSizeFromTail("arg_buffer", "num_arg_buffer_words")
 				},
 				paramArgPair{param: "result_ptr", arg: result_ptr},
 				paramArgPair{param: "interface", arg: fmt.Sprintf("&%s", createValueRelName(callCommon.Value))},
@@ -831,6 +832,7 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 						receive_count += 1
 					}
 				}
+				ctx.emitFrameSizeFromTail("entry_buffer", "next_frame->entry_count")
 			},
 			paramArgPair{param: "selected_index", arg: fmt.Sprintf("&%s.raw.e0", result)},
 			paramArgPair{param: "receive_available", arg: fmt.Sprintf("&%s.raw.e1", result)},

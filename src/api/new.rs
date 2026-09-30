@@ -56,6 +56,11 @@ mod tests {
         let result_raw = ctx.stack_pointer() as *mut ObjectPtr;
         ctx.grow_stack(mem::size_of::<StackFrameNew>());
         ctx.push_frame(
+            LightWeightThreadContext::frame_extent(
+                mem::size_of::<StackFrameNew>(),
+                mem::size_of::<StackFrameNew>(),
+                0,
+            ),
             prev_sp,
             Some(result_raw as *const ()),
             &[],
@@ -83,6 +88,11 @@ mod tests {
         let result_raw = ctx.stack_pointer() as *mut ObjectPtr;
         ctx.grow_stack(mem::size_of::<StackFrameNew>());
         ctx.push_frame(
+            LightWeightThreadContext::frame_extent(
+                mem::size_of::<StackFrameNew>(),
+                mem::size_of::<StackFrameNew>(),
+                0,
+            ),
             prev_sp,
             Some(result_raw as *const ()),
             &[],

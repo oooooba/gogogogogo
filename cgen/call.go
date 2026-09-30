@@ -43,6 +43,10 @@ func (ctx *Context) switchFunctionToCallRuntimeApi(nextFunction string, nextFunc
 	fmt.Fprintf(ctx.stream, "*next_frame = (%s){ 0 };\n", nextFunctionFrame)
 	fmt.Fprintf(ctx.stream, "next_frame->common.resume_func = %s;\n", wrapInFunctionObject(resumeFunction))
 	fmt.Fprintf(ctx.stream, "next_frame->common.prev_stack_pointer = ctx->stack_pointer;\n")
+	// The GC scans a frame that carries no stack map of its own
+	// conservatively, so the frame has to record its own extent. A frame with
+	// a trailing buffer refines this once the buffer length is known.
+	fmt.Fprintf(ctx.stream, "next_frame->common.frame_size = sizeof(%s);\n", nextFunctionFrame)
 
 	if resultPtr != nil {
 		fmt.Fprintf(ctx.stream, "next_frame->result_ptr = &%s;\n", *resultPtr)
@@ -59,6 +63,13 @@ func (ctx *Context) switchFunctionToCallRuntimeApi(nextFunction string, nextFunc
 	fmt.Fprintf(ctx.stream, "return %s;\n", wrapInFunctionObject(nextFunction))
 }
 
+// emitFrameSizeFromTail emits the extent of a runtime frame whose trailing
+// buffer is only sized at run time: the frame ends right after the words that
+// were actually used.
+func (ctx *Context) emitFrameSizeFromTail(buffer string, length string) {
+	fmt.Fprintf(ctx.stream, "next_frame->common.frame_size = (uintptr_t)((char*)&next_frame->%s[%s] - (char*)next_frame);\n", buffer, length)
+}
+
 func (ctx *Context) emitArgBufferCopies(args []ssa.Value) {
 	fmt.Fprintf(ctx.stream, "intptr_t num_arg_buffer_words = 0;\n")
 	for i, arg := range args {
@@ -70,6 +81,7 @@ func (ctx *Context) emitArgBufferCopies(args []ssa.Value) {
 		fmt.Fprintf(ctx.stream, "num_arg_buffer_words += (sizeof(%s) + sizeof(next_frame->arg_buffer[0]) - 1) / sizeof(next_frame->arg_buffer[0]);\n", argType)
 	}
 	fmt.Fprintf(ctx.stream, "next_frame->num_arg_buffer_words = num_arg_buffer_words;\n")
+	ctx.emitFrameSizeFromTail("arg_buffer", "num_arg_buffer_words")
 }
 
 func (ctx *Context) emitGoOrDefer(instr ssa.Instruction, callCommon *ssa.CallCommon, registerApi string, registerFrame string, invokeApi string, invokeFrame string, builtinPrintSupported bool) {
@@ -194,6 +206,7 @@ func (ctx *Context) emitCallCommonForMethod(callCommon *ssa.CallCommon, nextFunc
 				fmt.Fprintf(ctx.stream, "num_arg_buffer_words += (sizeof(%s) + sizeof(next_frame->arg_buffer[0]) - 1) / sizeof(next_frame->arg_buffer[0]);\n", argType)
 			}
 			fmt.Fprintf(ctx.stream, "next_frame->num_arg_buffer_words = num_arg_buffer_words;\n")
+			ctx.emitFrameSizeFromTail("arg_buffer", "num_arg_buffer_words")
 		},
 		paramArgPair{param: "interface", arg: fmt.Sprintf("&%s", createValueRelName(callCommon.Value))},
 		paramArgPair{param: "method_name", arg: fmt.Sprintf("(StringObject){.raw = \"%s\", .len = sizeof(\"%s\") - 1}", callCommon.Method.Name(), callCommon.Method.Name())},

@@ -15,6 +15,7 @@ use allocator::{ObjectAllocator, ObjectAllocatorPtr};
 use defer_stack::DeferStack;
 use global_context::GlobalContextPtr;
 use light_weight_thread::LightWeightThreadContext;
+use type_id::TypeId;
 
 pub(crate) const FUNCTION_OBJECT_CLOSURE_FLAG: usize = 1usize << (usize::BITS - 1);
 
@@ -90,12 +91,21 @@ pub struct StackFrame {
     additional_words: [*const (); 0],
 }
 
+// Stack map of a frame: reports every pointer-bearing slot of the frame as
+// frame-relative (offset, size) ranges, exactly like the
+// get_member_offset_runs function of a TypeInfo. A frame whose TypeId is
+// invalid (the runtime frames) is scanned conservatively over frame_size.
 #[repr(C)]
 struct StackFrameCommon {
     resume_func: FunctionObject,
     prev_stack_pointer: *mut StackFrame,
     free_vars: *mut (),
     defer_stack: DeferStack,
+    // TypeInfo describing this frame's layout, installed by the callee before
+    // it can allocate anything.
+    frame_type: TypeId,
+    // Total size of the frame in bytes, trailing argument buffer included.
+    frame_size: usize,
 }
 
 impl StackFrameCommon {
@@ -162,6 +172,7 @@ fn create_light_weight_thread_context(
 extern "C" fn enter_main(ctx: &mut LightWeightThreadContext) -> FunctionObject {
     let prev_stack_pointer = ctx.stack_pointer();
     ctx.push_frame(
+        mem::size_of::<StackFrameCommon>(),
         prev_stack_pointer,
         None,
         &[],
@@ -191,6 +202,11 @@ fn main() {
     let prev_stack_pointer = ctx.stack_pointer();
     ctx.grow_stack(mem::size_of::<isize>());
     ctx.push_frame(
+        LightWeightThreadContext::frame_extent(
+            mem::size_of::<StackFrameCommon>(),
+            mem::size_of::<*const ()>(),
+            0,
+        ),
         prev_stack_pointer,
         Some(prev_stack_pointer as *const ()),
         &[],

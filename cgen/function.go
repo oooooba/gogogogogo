@@ -71,6 +71,7 @@ func (ctx *Context) emitFunctionVariableStructure(function *ssa.Function) {
 		fmt.Fprintf(ctx.stream, "\tStackFrameCommon common;\n")
 		fmt.Fprintf(ctx.stream, "\t%s signature;\n", receiverBoundSignatureName)
 		fmt.Fprintf(ctx.stream, "} StackFrame_%s;\n", receiverBoundFuncName)
+		ctx.emitFrameStackMap(function, receiverBoundFuncName, receiverBoundSignatureName, nil)
 
 		receiverThunkFuncName := fmt.Sprintf("%s%s", createFunctionName(function), encode("$thunk"))
 		fmt.Fprintf(ctx.stream, "%sFunctionObject %s (LightWeightThreadContext* ctx);\n", functionStorageClass(function), receiverThunkFuncName)
@@ -89,6 +90,10 @@ func (ctx *Context) emitFunctionVariableStructure(function *ssa.Function) {
 	fmt.Fprintf(ctx.stream, "\tStackFrameCommon common;\n")
 	fmt.Fprintf(ctx.stream, "\t%s signature;\n", concreteSignatureName)
 
+	// The GC stack map below has to walk exactly the members emitted here, so
+	// they are collected as they are written out.
+	members := []frameMember{}
+
 	if function.Blocks != nil {
 		for _, local := range function.Locals {
 			if local.Heap {
@@ -100,7 +105,9 @@ func (ctx *Context) emitFunctionVariableStructure(function *ssa.Function) {
 				continue
 			}
 			id := fmt.Sprintf("%s_buf", createValueName(local))
-			fmt.Fprintf(ctx.stream, "\t%s %s;\n", createTypeName(local.Type().(*types.Pointer).Elem()), id)
+			elemType := local.Type().(*types.Pointer).Elem()
+			fmt.Fprintf(ctx.stream, "\t%s %s;\n", createTypeName(elemType), id)
+			members = append(members, frameMember{name: id, typ: elemType})
 		}
 
 		ctx.traverseValue(function, func(value ssa.Value) {
@@ -121,6 +128,7 @@ func (ctx *Context) emitFunctionVariableStructure(function *ssa.Function) {
 
 			id := createValueName(value)
 			fmt.Fprintf(ctx.stream, "\t%s %s; // %s : %s\n", createTypeName(value.Type()), id, value, value.Type())
+			members = append(members, frameMember{name: id, typ: value.Type()})
 		})
 	}
 
@@ -131,6 +139,7 @@ func (ctx *Context) emitFunctionVariableStructure(function *ssa.Function) {
 		// the time the runtime reads it (the machine-stack slot is dead and may
 		// be reused), so keep a stable copy in the frame instead.
 		fmt.Fprintf(ctx.stream, "\tFunctionObject makeInterfaceReceiver;\n")
+		members = append(members, frameMember{name: "makeInterfaceReceiver", typ: nil})
 	}
 
 	for _, makeInterface := range globalValueMakeInterfaces(function) {
@@ -138,10 +147,82 @@ func (ctx *Context) emitFunctionVariableStructure(function *ssa.Function) {
 		// is a package global would otherwise hand gox5_interface_new the
 		// address of a block-scoped compound literal, which is invalid by the
 		// time the runtime reads it. Keep a stable copy in the frame instead.
-		fmt.Fprintf(ctx.stream, "\t%s makeInterfaceReceiver_%s;\n", createTypeName(makeInterface.X.Type()), createValueName(makeInterface))
+		id := fmt.Sprintf("makeInterfaceReceiver_%s", createValueName(makeInterface))
+		fmt.Fprintf(ctx.stream, "\t%s %s;\n", createTypeName(makeInterface.X.Type()), id)
+		members = append(members, frameMember{name: id, typ: makeInterface.X.Type()})
 	}
 
 	fmt.Fprintf(ctx.stream, "} StackFrame_%s;\n", createFunctionName(function))
+	ctx.emitFrameStackMap(function, createFunctionName(function), concreteSignatureName, members)
+}
+
+// frameMember is one pointer-bearing-capable member of a generated stack
+// frame: the C designator to offsetof and the Go type stored in it. A nil typ
+// means the member is a bare pointer word.
+type frameMember struct {
+	name string
+	typ  types.Type
+}
+
+func createFrameTypeInfoName(frameName string) string {
+	return fmt.Sprintf("TypeInfo_StackFrame_%s", frameName)
+}
+
+func getFrameOffsetRunsName(frameName string) string {
+	return fmt.Sprintf("get_member_offset_runs_StackFrame_%s", frameName)
+}
+
+// stackMapMemberRun returns the enumeration of one member: the member type's
+// own enumerator when it has one, and otherwise a single range covering the
+// whole member.
+func stackMapMemberRun(ownerCName string, memberName string, typ types.Type) string {
+	if isNoPointerType(typ) {
+		return ""
+	}
+	if isStructOrArrayRoot(typ) && hasEnumerablePointerMembers(typ) {
+		return fmt.Sprintf("\t%s(visit, base + offsetof(%s, %s), arg); // %s\n", getMemberOffsetRunsName(typ), ownerCName, memberName, typ)
+	}
+	return fmt.Sprintf("\tvisit(base + offsetof(%s, %s), sizeof(%s), arg); // %s\n", ownerCName, memberName, createTypeName(typ), typ)
+}
+
+// emitFrameStackMap emits the GC stack map of a generated stack frame together
+// with the TypeInfo that carries it. A frame layout is not a Go type, so its
+// descriptor is synthesized here from the very members the frame struct was
+// emitted with, composing the member enumerators of the types that have one.
+// Generated frames record their own descriptor on entry, which also covers the
+// indirect calls whose callee frame the caller cannot name.
+func (ctx *Context) emitFrameStackMap(function *ssa.Function, frameName string, signatureName string, members []frameMember) {
+	frameCName := fmt.Sprintf("StackFrame_%s", frameName)
+	offsetRunsName := getFrameOffsetRunsName(frameName)
+	// Only the frame itself refers to its descriptor, and always from the same
+	// translation unit, so both stay local.
+	storage := "static __attribute__((unused)) "
+
+	body := fmt.Sprintf("\tvisit(base + offsetof(%s, common), sizeof(StackFrameCommon), arg); // common\n", frameCName)
+	body += fmt.Sprintf("\t%s(visit, base + offsetof(%s, signature), arg); // signature\n", getSignatureOffsetRunsName(signatureName), frameCName)
+	for _, member := range members {
+		if member.typ == nil {
+			// A bare FunctionObject word: one word that always can hold a
+			// pointer to the object of a function value.
+			body += fmt.Sprintf("\tvisit(base + offsetof(%s, %s), sizeof(FunctionObject), arg); // pointer word\n", frameCName, member.name)
+			continue
+		}
+		body += stackMapMemberRun(frameCName, member.name, member.typ)
+	}
+	fmt.Fprintf(ctx.stream, "%svoid %s(TypeOffsetVisitor visit, uintptr_t base, void *arg) { // stack map of %s\n%s}\n\n",
+		storage, offsetRunsName, frameCName, stackMapFunctionBody(body))
+
+	fmt.Fprintf(ctx.stream, "%sconst TypeInfo %s = {\n", storage, createFrameTypeInfoName(frameName))
+	fmt.Fprintf(ctx.stream, "\t.name = (StringObject){.raw = \"%s\", .len = sizeof(\"%s\") - 1},\n", frameCName, frameCName)
+	fmt.Fprintf(ctx.stream, "\t.num_methods = 0,\n")
+	fmt.Fprintf(ctx.stream, "\t.interface_table = NULL,\n")
+	fmt.Fprintf(ctx.stream, "\t.is_equal = gox5_frame_type_is_equal,\n")
+	fmt.Fprintf(ctx.stream, "\t.hash = gox5_frame_type_hash,\n")
+	fmt.Fprintf(ctx.stream, "\t.size = sizeof(%s),\n", frameCName)
+	fmt.Fprintf(ctx.stream, "\t.no_pointers = 0,\n")
+	fmt.Fprintf(ctx.stream, "\t.is_interface = 0,\n")
+	fmt.Fprintf(ctx.stream, "\t.get_member_offset_runs = %s,\n", offsetRunsName)
+	fmt.Fprintf(ctx.stream, "};\n\n")
 }
 
 func hasFunctionValueMakeInterface(function *ssa.Function) bool {
@@ -177,7 +258,11 @@ func globalValueMakeInterfaces(function *ssa.Function) []*ssa.MakeInterface {
 	return result
 }
 
-func (ctx *Context) emitFunctionDefinitionPrologue(storage string, functionName string, frameName string, hasFreeVariables bool, hostBuffers []*ssa.Alloc) {
+// emitFunctionDefinitionPrologue emits the entry of one basic block. isEntry
+// marks the blocks a frame can be entered through, which is where the frame
+// installs its own GC descriptor: the caller may not know the callee frame at
+// all (indirect calls) and no allocation can happen in between.
+func (ctx *Context) emitFunctionDefinitionPrologue(storage string, functionName string, frameName string, hasFreeVariables bool, hostBuffers []*ssa.Alloc, isEntry bool) {
 	fmt.Fprintf(ctx.stream, "%sFunctionObject %s (LightWeightThreadContext* ctx){\n", storage, functionName)
 	freeVarsCompareOp := "=="
 	if hasFreeVariables {
@@ -187,6 +272,10 @@ func (ctx *Context) emitFunctionDefinitionPrologue(storage string, functionName 
 	StackFrame_%s* frame = (void*)ctx->stack_pointer;
 	assert(frame->common.free_vars %s NULL);
 `, frameName, freeVarsCompareOp)
+	if isEntry {
+		fmt.Fprintf(ctx.stream, "\tframe->common.frame_type = (TypeId){.info = &%s};\n", createFrameTypeInfoName(frameName))
+		fmt.Fprintf(ctx.stream, "\tframe->common.frame_size = sizeof(StackFrame_%s);\n", frameName)
+	}
 	for _, alloc := range hostBuffers {
 		id := fmt.Sprintf("%s_buf", createValueName(alloc))
 		fmt.Fprintf(ctx.stream, "\t%s %s;\n", createTypeName(alloc.Type().(*types.Pointer).Elem()), id)
@@ -253,7 +342,10 @@ func (ctx *Context) emitFunctionDefinition(function *ssa.Function) {
 	hasFreeVariables := len(function.FreeVars) != 0
 	hostBuffers := ctx.functionHostLocalBuffers(function)
 	for _, basicBlock := range function.Blocks {
-		ctx.emitFunctionDefinitionPrologue(storage, createBasicBlockName(basicBlock), frameName, hasFreeVariables, hostBuffers[createBasicBlockName(basicBlock)])
+		// Only the first block can be entered from outside, so only it has to
+		// install the frame descriptor.
+		isEntry := basicBlock == function.Blocks[0]
+		ctx.emitFunctionDefinitionPrologue(storage, createBasicBlockName(basicBlock), frameName, hasFreeVariables, hostBuffers[createBasicBlockName(basicBlock)], isEntry)
 
 		ctx.emitBlockPhis(basicBlock)
 
@@ -265,7 +357,7 @@ func (ctx *Context) emitFunctionDefinition(function *ssa.Function) {
 
 			if requireSwitchFunction(instr) {
 				ctx.emitFunctionDefinitionEpilogue()
-				ctx.emitFunctionDefinitionPrologue(storage, createInstructionName(instr), frameName, hasFreeVariables, hostBuffers[createInstructionName(instr)])
+				ctx.emitFunctionDefinitionPrologue(storage, createInstructionName(instr), frameName, hasFreeVariables, hostBuffers[createInstructionName(instr)], false)
 			}
 		}
 
@@ -287,7 +379,7 @@ func (ctx *Context) emitReceiverBoundThunkGlue(function *ssa.Function, storage s
 	origFuncName := createFunctionName(function)
 	boundFuncName := fmt.Sprintf("%s%s", origFuncName, encode("$bound"))
 	resumeFuncName := fmt.Sprintf("%s_return", boundFuncName)
-	ctx.emitFunctionDefinitionPrologue(storage, resumeFuncName, boundFuncName, true, nil)
+	ctx.emitFunctionDefinitionPrologue(storage, resumeFuncName, boundFuncName, true, nil, false)
 	fmt.Fprintf(ctx.stream, `
 	assert(ctx->marker == 0xdeadbeef);
 	ctx->stack_pointer = frame->common.prev_stack_pointer;
@@ -295,7 +387,7 @@ func (ctx *Context) emitReceiverBoundThunkGlue(function *ssa.Function, storage s
 `)
 	ctx.emitFunctionDefinitionEpilogue()
 
-	ctx.emitFunctionDefinitionPrologue(storage, boundFuncName, boundFuncName, true, nil)
+	ctx.emitFunctionDefinitionPrologue(storage, boundFuncName, boundFuncName, true, nil, true)
 	nextFuncName := wrapInFunctionObject(origFuncName)
 	signatureName := createSignatureName(signature, false, false)
 	result := "*frame->signature.result_ptr"
@@ -309,7 +401,7 @@ func (ctx *Context) emitReceiverBoundThunkGlue(function *ssa.Function, storage s
 
 	thunkFuncName := fmt.Sprintf("%s%s", origFuncName, encode("$thunk"))
 	thunkResumeFuncName := fmt.Sprintf("%s_return", thunkFuncName)
-	ctx.emitFunctionDefinitionPrologue(storage, thunkResumeFuncName, origFuncName, false, nil)
+	ctx.emitFunctionDefinitionPrologue(storage, thunkResumeFuncName, origFuncName, false, nil, false)
 	fmt.Fprintf(ctx.stream, `
 	assert(ctx->marker == 0xdeadbeef);
 	ctx->stack_pointer = frame->common.prev_stack_pointer;
@@ -317,7 +409,7 @@ func (ctx *Context) emitReceiverBoundThunkGlue(function *ssa.Function, storage s
 `)
 	ctx.emitFunctionDefinitionEpilogue()
 
-	ctx.emitFunctionDefinitionPrologue(storage, thunkFuncName, origFuncName, false, nil)
+	ctx.emitFunctionDefinitionPrologue(storage, thunkFuncName, origFuncName, false, nil, true)
 	nextFuncName = wrapInFunctionObject(origFuncName)
 	signatureName = createSignatureName(signature, false, false)
 	result = "*frame->signature.result_ptr"

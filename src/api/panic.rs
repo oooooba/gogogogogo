@@ -29,6 +29,11 @@ extern "C" fn panic_raise_body(ctx: &mut LightWeightThreadContext) -> FunctionOb
             };
             ctx.grow_stack(entry.result_size());
             ctx.push_frame(
+                LightWeightThreadContext::frame_extent(
+                    mem::size_of::<StackFramePanicRaise>(),
+                    entry.result_size(),
+                    entry.args().len(),
+                ),
                 prev_stack_pointer,
                 result_pointer,
                 entry.args(),
@@ -108,6 +113,11 @@ mod tests {
         let result_raw = ctx.stack_pointer() as *mut Interface;
         ctx.grow_stack(mem::size_of::<StackFramePanicRecover>());
         ctx.push_frame(
+            LightWeightThreadContext::frame_extent(
+                mem::size_of::<StackFramePanicRecover>(),
+                mem::size_of::<StackFramePanicRecover>(),
+                0,
+            ),
             prev_sp,
             Some(result_raw as *const ()),
             &[],
@@ -132,6 +142,11 @@ mod tests {
         let result_raw = ctx.stack_pointer() as *mut Interface;
         ctx.grow_stack(mem::size_of::<StackFramePanicRecover>());
         ctx.push_frame(
+            LightWeightThreadContext::frame_extent(
+                mem::size_of::<StackFramePanicRecover>(),
+                mem::size_of::<StackFramePanicRecover>(),
+                0,
+            ),
             prev_sp,
             Some(result_raw as *const ()),
             &[],
@@ -157,7 +172,13 @@ mod tests {
         let (mut ctx, _gc) = create_ctx();
         let prev_sp = ctx.stack_pointer();
         ctx.grow_stack(mem::size_of::<StackFramePanicRaise>());
-        ctx.push_frame(prev_sp, None, &[], FunctionObject::new_null());
+        ctx.push_frame(
+            mem::size_of::<StackFramePanicRaise>(),
+            prev_sp,
+            None,
+            &[],
+            FunctionObject::new_null(),
+        );
 
         let frame = ctx.stack_frame_mut::<StackFramePanicRaise>();
         frame.value = Interface::panic_nil_error();
@@ -172,7 +193,13 @@ mod tests {
         let (mut ctx, _gc) = create_ctx();
         let prev_sp = ctx.stack_pointer();
         ctx.grow_stack(mem::size_of::<StackFramePanicRaise>());
-        ctx.push_frame(prev_sp, None, &[], FunctionObject::new_null());
+        ctx.push_frame(
+            mem::size_of::<StackFramePanicRaise>(),
+            prev_sp,
+            None,
+            &[],
+            FunctionObject::new_null(),
+        );
 
         let frame = ctx.stack_frame_mut::<StackFramePanicRaise>();
         frame.value = Interface::nil();

@@ -31,6 +31,11 @@ extern "C" fn lwt_exit_body(ctx: &mut LightWeightThreadContext) -> FunctionObjec
             };
             ctx.grow_stack(entry.result_size());
             ctx.push_frame(
+                LightWeightThreadContext::frame_extent(
+                    mem::size_of::<StackFrameLwtExit>(),
+                    entry.result_size(),
+                    entry.args().len(),
+                ),
                 prev_stack_pointer,
                 result_pointer,
                 entry.args(),
@@ -74,10 +79,16 @@ where
             None
         };
         new_ctx.grow_stack(result_size);
+        let args = unsafe { WordChunk::as_slice_raw(args) };
         new_ctx.push_frame(
+            LightWeightThreadContext::frame_extent(
+                mem::size_of::<StackFrameCommon>(),
+                result_size,
+                args.len(),
+            ),
             prev_stack_pointer,
             result_pointer,
-            unsafe { WordChunk::as_slice_raw(args) },
+            args,
             FunctionObject::from_user_function(UserFunction::new(crate::terminate)),
         );
         new_ctx
@@ -172,7 +183,13 @@ mod tests {
         let prev_sp = ctx.stack_pointer();
         ctx.grow_stack(mem::size_of::<crate::StackFrameCommon>());
         let resume_func = FunctionObject::from_user_function(UserFunction::new(dummy_resume));
-        ctx.push_frame(prev_sp, None, &[], resume_func.clone());
+        ctx.push_frame(
+            mem::size_of::<crate::StackFrameCommon>(),
+            prev_sp,
+            None,
+            &[],
+            resume_func.clone(),
+        );
 
         assert!(!ctx.is_terminated());
         // gox5_lwt_exit starts unwinding the stack; the returned function object
@@ -206,6 +223,7 @@ mod tests {
         let sp_root = ctx.stack_pointer();
         ctx.grow_stack(mem::size_of::<crate::StackFrameCommon>());
         ctx.push_frame(
+            mem::size_of::<crate::StackFrameCommon>(),
             sp_root,
             None,
             &[],
@@ -232,6 +250,7 @@ mod tests {
         let sp_a = ctx.stack_pointer();
         ctx.grow_stack(mem::size_of::<StackFrameLwtExit>());
         ctx.push_frame(
+            mem::size_of::<StackFrameLwtExit>(),
             sp_a,
             None,
             &[],
@@ -258,7 +277,13 @@ mod tests {
         let prev_sp = ctx.stack_pointer();
         ctx.grow_stack(mem::size_of::<crate::StackFrameCommon>());
         let resume_func = FunctionObject::from_user_function(UserFunction::new(dummy_resume));
-        ctx.push_frame(prev_sp, None, &[], resume_func.clone());
+        ctx.push_frame(
+            mem::size_of::<crate::StackFrameCommon>(),
+            prev_sp,
+            None,
+            &[],
+            resume_func.clone(),
+        );
 
         assert!(!ctx.is_suspended());
         let result = gox5_lwt_yield(&mut ctx);
@@ -274,6 +299,7 @@ mod tests {
         // Push first frame (like the "main" frame)
         ctx.grow_stack(mem::size_of::<crate::StackFrameCommon>());
         ctx.push_frame(
+            mem::size_of::<crate::StackFrameCommon>(),
             initial_sp,
             None,
             &[],
@@ -284,7 +310,13 @@ mod tests {
         let sp1 = ctx.stack_pointer();
         ctx.grow_stack(mem::size_of::<crate::StackFrameCommon>());
         let resume = FunctionObject::from_user_function(UserFunction::new(dummy_resume));
-        ctx.push_frame(sp1, None, &[], resume.clone());
+        ctx.push_frame(
+            mem::size_of::<crate::StackFrameCommon>(),
+            sp1,
+            None,
+            &[],
+            resume.clone(),
+        );
 
         let result = gox5_lwt_yield(&mut ctx);
         assert!(ctx.is_suspended());

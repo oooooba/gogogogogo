@@ -53,8 +53,13 @@ impl LightWeightThreadContext {
         self.stack_pointer = unsafe { p.add(size) } as *mut StackFrame;
     }
 
+    /// Pushes a new frame at the current stack pointer. `frame_size` is the
+    /// total extent of that frame, trailing argument buffer included, and is
+    /// recorded so the GC can scan the frame conservatively when it carries no
+    /// stack map of its own.
     pub(crate) fn push_frame(
         &mut self,
+        frame_size: usize,
         prev_stack_pointer: *mut StackFrame,
         result_pointer: Option<*const ()>,
         args: &[*const ()],
@@ -67,6 +72,10 @@ impl LightWeightThreadContext {
         next_frame.common.prev_stack_pointer = prev_stack_pointer;
         next_frame.common.free_vars = ptr::null_mut();
         next_frame.common.defer_stack = DeferStack::new();
+        // Frames pushed here are runtime frames: they carry no stack map, so
+        // the GC scans them conservatively over `frame_size`.
+        next_frame.common.frame_type = TypeId::new_invalid();
+        next_frame.common.frame_size = frame_size;
 
         let params_offset = usize::from(result_pointer.is_some());
         let base =
@@ -83,6 +92,20 @@ impl LightWeightThreadContext {
         }
 
         self.stack_pointer = next_stack_pointer;
+    }
+
+    /// Total extent of a frame the runtime pushes itself: the fixed part, the
+    /// buffer for the result, and the argument words that follow the result
+    /// pointer. `result_size` is the size of the result buffer in bytes and may
+    /// be zero when the frame has no result.
+    pub(crate) fn frame_extent(fixed_size: usize, result_size: usize, args_len: usize) -> usize {
+        let word_size = mem::size_of::<*const ()>();
+        let args = word_size * args_len;
+        if result_size > 0 {
+            fixed_size + result_size.max(word_size + args)
+        } else {
+            fixed_size + args
+        }
     }
 
     pub(crate) fn pop_frame(&mut self) -> FunctionObject {
@@ -190,12 +213,19 @@ impl LightWeightThreadContext {
         self.initial_stack_pointer == self.stack_pointer
     }
 
-    pub(crate) fn stack_range(&self) -> (*mut u8, *mut u8) {
-        assert!(self.initial_stack_pointer <= self.stack_pointer);
-        (
-            self.initial_stack_pointer as *mut u8,
-            self.stack_pointer as *mut u8,
-        )
+    /// Address of the bottom of this goroutine's stack region, which is also
+    /// the start of the allocator object backing it.
+    pub(crate) fn stack_base(&self) -> usize {
+        self.initial_stack_pointer as usize
+    }
+
+    /// Iterates the live frames of this goroutine, innermost first.
+    pub(crate) fn stack_frames(&self) -> StackFrames {
+        StackFrames {
+            base: self.stack_base(),
+            next: self.stack_pointer as usize,
+            finished: false,
+        }
     }
 
     pub(crate) fn suspend(&mut self) {
@@ -242,6 +272,54 @@ impl LightWeightThreadContext {
     }
 }
 
+/// What the GC needs to know about one live stack frame.
+pub(crate) struct StackFrameDescriptor {
+    /// Address of the frame, i.e. of its StackFrameCommon.
+    pub(crate) address: usize,
+    /// Stack map source of the frame, invalid when the frame carries none.
+    pub(crate) frame_type: TypeId,
+    /// Total extent of the frame in bytes, 0 when unknown.
+    pub(crate) frame_size: usize,
+}
+
+/// Iterator over the frames of a goroutine stack, innermost first. The bottom
+/// frame links to itself, which terminates the walk.
+pub(crate) struct StackFrames {
+    base: usize,
+    next: usize,
+    finished: bool,
+}
+
+impl Iterator for StackFrames {
+    type Item = StackFrameDescriptor;
+
+    fn next(&mut self) -> Option<StackFrameDescriptor> {
+        if self.finished || self.next < self.base {
+            return None;
+        }
+        // Every frame starts with a StackFrameCommon, so reading it stays
+        // inside the frame.
+        let common = unsafe { &*(self.next as *const crate::StackFrameCommon) };
+        let descriptor = StackFrameDescriptor {
+            address: self.next,
+            frame_type: common.frame_type,
+            frame_size: common.frame_size,
+        };
+        // The bottom frame links to itself; anything else that does not point
+        // further down ends the walk as well. The bottom frame sits exactly at
+        // the stack base (a generated frame can occupy `base`, not `base + 8`),
+        // so a `prev` equal to the base is a valid pointer, not a stray word;
+        // only the `prev == self.next` self-link terminates the walk.
+        let prev = common.prev_stack_pointer as usize;
+        if prev >= self.base && prev != self.next {
+            self.next = prev;
+        } else {
+            self.finished = true;
+        }
+        Some(descriptor)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -281,7 +359,13 @@ mod tests {
         let prev_sp = ctx.stack_pointer();
         ctx.grow_stack(mem::size_of::<StackFrameCommon>() + 128);
         let resume = FunctionObject::new_null();
-        ctx.push_frame(prev_sp, None, &[], resume.clone());
+        ctx.push_frame(
+            mem::size_of::<StackFrameCommon>() + 128,
+            prev_sp,
+            None,
+            &[],
+            resume.clone(),
+        );
         let popped = ctx.pop_frame();
         assert_eq!(popped, resume);
         assert_eq!(ctx.stack_pointer(), prev_sp);
@@ -294,7 +378,13 @@ mod tests {
         ctx.grow_stack(mem::size_of::<StackFrameCommon>() + 128);
         let arg1 = 0xaaaa as *const ();
         let arg2 = 0xbbbb as *const ();
-        ctx.push_frame(prev_sp, None, &[arg1, arg2], FunctionObject::new_null());
+        ctx.push_frame(
+            mem::size_of::<StackFrameCommon>() + 128,
+            prev_sp,
+            None,
+            &[arg1, arg2],
+            FunctionObject::new_null(),
+        );
         let popped = ctx.pop_frame();
         assert_eq!(popped, FunctionObject::new_null());
         assert_eq!(ctx.stack_pointer(), prev_sp);
@@ -335,7 +425,13 @@ mod tests {
         let (mut ctx, _gc) = create_ctx();
         let prev_sp = ctx.stack_pointer();
         ctx.grow_stack(mem::size_of::<StackFrameCommon>() + 128);
-        ctx.push_frame(prev_sp, None, &[], FunctionObject::new_null());
+        ctx.push_frame(
+            mem::size_of::<StackFrameCommon>() + 128,
+            prev_sp,
+            None,
+            &[],
+            FunctionObject::new_null(),
+        );
         {
             let frame = ctx.stack_frame::<StackFrameCommon>();
             assert!(!frame.prev_stack_pointer.is_null() || prev_sp == frame.prev_stack_pointer);

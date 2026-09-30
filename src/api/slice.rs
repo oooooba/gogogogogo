@@ -648,6 +648,11 @@ mod tests {
         let result_raw = ctx.stack_pointer() as *mut isize;
         ctx.grow_stack(mem::size_of::<StackFrameSliceSize>());
         ctx.push_frame(
+            LightWeightThreadContext::frame_extent(
+                mem::size_of::<StackFrameSliceSize>(),
+                mem::size_of::<StackFrameSliceSize>(),
+                0,
+            ),
             prev_sp,
             Some(result_raw as *const ()),
             &[],
@@ -675,6 +680,11 @@ mod tests {
         let result_raw = ctx.stack_pointer() as *mut isize;
         ctx.grow_stack(mem::size_of::<StackFrameSliceCapacity>());
         ctx.push_frame(
+            LightWeightThreadContext::frame_extent(
+                mem::size_of::<StackFrameSliceCapacity>(),
+                mem::size_of::<StackFrameSliceCapacity>(),
+                0,
+            ),
             prev_sp,
             Some(result_raw as *const ()),
             &[],
@@ -705,6 +715,11 @@ mod tests {
         let result_raw = ctx.stack_pointer() as *mut isize;
         ctx.grow_stack(mem::size_of::<StackFrameSliceCompare>());
         ctx.push_frame(
+            LightWeightThreadContext::frame_extent(
+                mem::size_of::<StackFrameSliceCompare>(),
+                mem::size_of::<StackFrameSliceCompare>(),
+                0,
+            ),
             prev_sp,
             Some(result_raw as *const ()),
             &[],
@@ -726,6 +741,11 @@ mod tests {
         let result_raw = ctx.stack_pointer() as *mut isize;
         ctx.grow_stack(mem::size_of::<StackFrameSliceCount>());
         ctx.push_frame(
+            LightWeightThreadContext::frame_extent(
+                mem::size_of::<StackFrameSliceCount>(),
+                mem::size_of::<StackFrameSliceCount>(),
+                0,
+            ),
             prev_sp,
             Some(result_raw as *const ()),
             &[],
@@ -751,6 +771,11 @@ mod tests {
         let result_raw = ctx.stack_pointer() as *mut isize;
         ctx.grow_stack(mem::size_of::<StackFrameSliceSearchSlice>());
         ctx.push_frame(
+            LightWeightThreadContext::frame_extent(
+                mem::size_of::<StackFrameSliceSearchSlice>(),
+                mem::size_of::<StackFrameSliceSearchSlice>(),
+                0,
+            ),
             prev_sp,
             Some(result_raw as *const ()),
             &[],
@@ -772,6 +797,11 @@ mod tests {
         let result_raw = ctx.stack_pointer() as *mut isize;
         ctx.grow_stack(mem::size_of::<StackFrameSliceSearchByte>());
         ctx.push_frame(
+            LightWeightThreadContext::frame_extent(
+                mem::size_of::<StackFrameSliceSearchByte>(),
+                mem::size_of::<StackFrameSliceSearchByte>(),
+                0,
+            ),
             prev_sp,
             Some(result_raw as *const ()),
             &[],
@@ -793,6 +823,11 @@ mod tests {
         let result_raw = ctx.stack_pointer() as *mut SliceObject;
         ctx.grow_stack(mem::size_of::<StackFrameSliceNewUninitialized>());
         ctx.push_frame(
+            LightWeightThreadContext::frame_extent(
+                mem::size_of::<StackFrameSliceNewUninitialized>(),
+                mem::size_of::<StackFrameSliceNewUninitialized>(),
+                0,
+            ),
             prev_sp,
             Some(result_raw as *const ()),
             &[],
@@ -916,6 +951,11 @@ mod tests {
         let result_raw = ctx.stack_pointer() as *mut SliceObject;
         ctx.grow_stack(mem::size_of::<StackFrameSliceNew>());
         ctx.push_frame(
+            LightWeightThreadContext::frame_extent(
+                mem::size_of::<StackFrameSliceNew>(),
+                mem::size_of::<StackFrameSliceNew>(),
+                0,
+            ),
             prev_sp,
             Some(result_raw as *const ()),
             &[],
@@ -945,6 +985,11 @@ mod tests {
         let result_raw = ctx.stack_pointer() as *mut SliceObject;
         ctx.grow_stack(mem::size_of::<StackFrameSliceSub>());
         ctx.push_frame(
+            LightWeightThreadContext::frame_extent(
+                mem::size_of::<StackFrameSliceSub>(),
+                mem::size_of::<StackFrameSliceSub>(),
+                0,
+            ),
             prev_sp,
             Some(result_raw as *const ()),
             &[],

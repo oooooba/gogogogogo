@@ -38,6 +38,7 @@ pub extern "C" fn gox5_coro_new(ctx: &mut LightWeightThreadContext) -> FunctionO
     let mut new_ctx = create_light_weight_thread_context(global_context, entry_func);
     let prev_stack_pointer = new_ctx.stack_pointer();
     new_ctx.push_frame(
+        LightWeightThreadContext::frame_extent(mem::size_of::<StackFrameCommon>(), 0, 1),
         prev_stack_pointer,
         None,
         &[coro as *const ()],
@@ -107,7 +108,13 @@ mod tests {
         let prev_sp = ctx.stack_pointer();
         ctx.grow_stack(mem::size_of::<StackFrameCommon>());
         let resume_func = FunctionObject::from_user_function(UserFunction::new(dummy_resume));
-        ctx.push_frame(prev_sp, None, &[], resume_func);
+        ctx.push_frame(
+            mem::size_of::<StackFrameCommon>(),
+            prev_sp,
+            None,
+            &[],
+            resume_func,
+        );
 
         gc.process(|mut gc| {
             gc.park_coro(slot, ctx);

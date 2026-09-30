@@ -219,6 +219,14 @@ func (ctx *Context) emitSignature(pkg *ssa.Package) {
 		}
 
 		fmt.Fprintf(ctx.stream, "} %s;\n", signatureName)
+
+		// A signature is shared by every function that has one, so its stack map
+		// is emitted in each translation unit that needs it; the frames of this
+		// unit are its only users.
+		fmt.Fprintf(ctx.stream, "static __attribute__((unused)) void %s(TypeOffsetVisitor visit, uintptr_t base, void *arg) { // stack map of %s\n",
+			getSignatureOffsetRunsName(signatureName), signatureName)
+		fmt.Fprintf(ctx.stream, "%s", stackMapFunctionBody(signatureStackMapBody(signatureName, signature, makesReceiverBound, makesReceiverInterface)))
+		fmt.Fprintf(ctx.stream, "}\n")
 	}
 
 	ctx.traverseFunction(pkg, func(function *ssa.Function) {
@@ -257,6 +265,47 @@ func (ctx *Context) emitSignature(pkg *ssa.Package) {
 			tryEmitSignatureDefinition(signature, signatureName, false, false)
 		})
 	})
+}
+
+// getSignatureOffsetRunsName is the stack map of a generated Signature struct.
+// The frames embed the struct as their second member and delegate to it, so a
+// parameter of pointer-bearing type is scanned precisely while a scalar one is
+// skipped, just as the member enumerator of a struct type does.
+// stackMapFunctionBody silences the unused parameters of a stack map that has
+// nothing to report, e.g. the signature of a function taking only scalars.
+func stackMapFunctionBody(body string) string {
+	if body != "" {
+		return body
+	}
+	return "\t(void)visit;\n\t(void)base;\n\t(void)arg;\n"
+}
+
+func getSignatureOffsetRunsName(signatureName string) string {
+	return fmt.Sprintf("get_member_offset_runs_%s", signatureName)
+}
+
+func signatureStackMapBody(signatureName string, signature *types.Signature, makesReceiverBound bool, makesReceiverInterface bool) string {
+	var body string
+	if signature.Results().Len() > 0 {
+		// The result pointer refers to a slot of the caller's frame, but one
+		// word is cheap enough to keep the map a plain mirror of the struct.
+		body += "\tvisit(base, sizeof(uintptr_t), arg); // result_ptr\n"
+	}
+
+	base := 0
+	if signature.Recv() != nil && !makesReceiverBound {
+		if makesReceiverInterface {
+			// The receiver is copied through an untyped pointer.
+			body += fmt.Sprintf("\tvisit(base + offsetof(%s, param0), sizeof(uintptr_t), arg); // receiver\n", signatureName)
+		} else {
+			body += stackMapMemberRun(signatureName, "param0", signature.Recv().Type())
+		}
+		base++
+	}
+	for i := 0; i < signature.Params().Len(); i++ {
+		body += stackMapMemberRun(signatureName, fmt.Sprintf("param%d", base+i), signature.Params().At(i).Type())
+	}
+	return body
 }
 
 func (ctx *Context) emitTypeInfoDeclaration(typ types.Type) {

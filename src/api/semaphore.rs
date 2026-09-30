@@ -70,7 +70,13 @@ mod tests {
         let outer_sp = outer_buf as *mut crate::StackFrame;
 
         ctx.grow_stack(mem::size_of::<StackFrameSemaphoreAcquire>());
-        ctx.push_frame(outer_sp, None, &[], FunctionObject::new_null());
+        ctx.push_frame(
+            mem::size_of::<StackFrameSemaphoreAcquire>(),
+            outer_sp,
+            None,
+            &[],
+            FunctionObject::new_null(),
+        );
 
         {
             let frame = ctx.stack_frame_mut::<StackFrameSemaphoreAcquire>();
@@ -96,7 +102,13 @@ mod tests {
         let outer_sp = outer_buf as *mut crate::StackFrame;
 
         ctx.grow_stack(mem::size_of::<StackFrameSemaphoreAcquire>());
-        ctx.push_frame(outer_sp, None, &[], FunctionObject::new_null());
+        ctx.push_frame(
+            mem::size_of::<StackFrameSemaphoreAcquire>(),
+            outer_sp,
+            None,
+            &[],
+            FunctionObject::new_null(),
+        );
 
         {
             let frame = ctx.stack_frame_mut::<StackFrameSemaphoreAcquire>();
@@ -122,7 +134,13 @@ mod tests {
         let outer_sp = outer_buf as *mut crate::StackFrame;
 
         ctx.grow_stack(mem::size_of::<StackFrameSemaphoreAcquire>());
-        ctx.push_frame(outer_sp, None, &[], FunctionObject::new_null());
+        ctx.push_frame(
+            mem::size_of::<StackFrameSemaphoreAcquire>(),
+            outer_sp,
+            None,
+            &[],
+            FunctionObject::new_null(),
+        );
 
         {
             let frame = ctx.stack_frame_mut::<StackFrameSemaphoreAcquire>();
@@ -156,7 +174,13 @@ mod tests {
         let outer_sp = outer_buf as *mut crate::StackFrame;
 
         ctx.grow_stack(mem::size_of::<StackFrameSemaphoreRelease>());
-        ctx.push_frame(outer_sp, None, &[], FunctionObject::new_null());
+        ctx.push_frame(
+            mem::size_of::<StackFrameSemaphoreRelease>(),
+            outer_sp,
+            None,
+            &[],
+            FunctionObject::new_null(),
+        );
 
         {
             let frame = ctx.stack_frame_mut::<StackFrameSemaphoreRelease>();
@@ -182,7 +206,13 @@ mod tests {
         let outer_sp = outer_buf as *mut crate::StackFrame;
 
         ctx.grow_stack(mem::size_of::<StackFrameSemaphoreRelease>());
-        ctx.push_frame(outer_sp, None, &[], FunctionObject::new_null());
+        ctx.push_frame(
+            mem::size_of::<StackFrameSemaphoreRelease>(),
+            outer_sp,
+            None,
+            &[],
+            FunctionObject::new_null(),
+        );
 
         {
             let frame = ctx.stack_frame_mut::<StackFrameSemaphoreRelease>();

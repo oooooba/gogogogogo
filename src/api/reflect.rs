@@ -272,6 +272,11 @@ mod tests {
         let result_raw = ctx.stack_pointer() as *mut usize;
         ctx.grow_stack(mem::size_of::<StackFrameReflectTypeKind>());
         ctx.push_frame(
+            LightWeightThreadContext::frame_extent(
+                mem::size_of::<StackFrameReflectTypeKind>(),
+                mem::size_of::<StackFrameReflectTypeKind>(),
+                0,
+            ),
             prev_sp,
             Some(result_raw as *const ()),
             &[],
@@ -296,6 +301,11 @@ mod tests {
         let result_raw = ctx.stack_pointer() as *mut usize;
         ctx.grow_stack(mem::size_of::<StackFrameReflectTypeKind>());
         ctx.push_frame(
+            LightWeightThreadContext::frame_extent(
+                mem::size_of::<StackFrameReflectTypeKind>(),
+                mem::size_of::<StackFrameReflectTypeKind>(),
+                0,
+            ),
             prev_sp,
             Some(result_raw as *const ()),
             &[],
@@ -320,6 +330,11 @@ mod tests {
         let result_raw = ctx.stack_pointer() as *mut StringObject;
         ctx.grow_stack(mem::size_of::<StackFrameReflectTypeString>());
         ctx.push_frame(
+            LightWeightThreadContext::frame_extent(
+                mem::size_of::<StackFrameReflectTypeString>(),
+                mem::size_of::<StackFrameReflectTypeString>(),
+                0,
+            ),
             prev_sp,
             Some(result_raw as *const ()),
             &[],
@@ -345,6 +360,11 @@ mod tests {
         let result_raw = ctx.stack_pointer() as *mut usize;
         ctx.grow_stack(mem::size_of::<StackFrameReflectTypeKind>());
         ctx.push_frame(
+            LightWeightThreadContext::frame_extent(
+                mem::size_of::<StackFrameReflectTypeKind>(),
+                mem::size_of::<StackFrameReflectTypeKind>(),
+                0,
+            ),
             prev_sp,
             Some(result_raw as *const ()),
             &[],

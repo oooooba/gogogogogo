@@ -79,11 +79,22 @@ typedef struct {
     uintptr_t count;
 } IterObject;
 
+// Stack map of a stack frame: it reports every pointer-bearing slot of the
+// frame by calling visit with frame-relative (offset, size) ranges, exactly
+// like the get_member_offset_runs function of a TypeInfo. A frame that has no
+// such map (the runtime frames) is scanned conservatively over frame_size.
+typedef void (*TypeOffsetVisitor)(uintptr_t offset, uintptr_t size, void *arg);
+
 typedef struct StackFrameCommon {
     FunctionObject resume_func;
     struct StackFrameCommon *prev_stack_pointer;
     void *free_vars;
     const void *deferred_list;
+    // TypeInfo describing this frame's layout, installed by the callee before
+    // it can allocate anything. Left invalid for the runtime frames.
+    TypeId frame_type;
+    // Total size of the frame in bytes, trailing argument buffer included.
+    uintptr_t frame_size;
 } StackFrameCommon;
 
 typedef struct {
@@ -98,8 +109,6 @@ typedef struct {
     StringObject method_signature;
 } InterfaceTableEntry;
 
-typedef void (*TypeOffsetVisitor)(uintptr_t offset, uintptr_t size, void *arg);
-
 typedef struct TypeInfo {
     StringObject name;
     uintptr_t num_methods;
@@ -112,6 +121,20 @@ typedef struct TypeInfo {
     void (*get_member_offset_runs)(TypeOffsetVisitor visit, uintptr_t base,
                                    void *arg);
 } TypeInfo;
+
+// A stack frame is never compared or hashed as an object; the GC only reads
+// the member offset enumerator of its TypeInfo. These stubs just satisfy the
+// two required fields of every TypeInfo_StackFrame_* descriptor.
+static inline bool gox5_frame_type_is_equal(void *lhs, void *rhs) {
+    (void)lhs;
+    (void)rhs;
+    return false;
+}
+
+static inline uintptr_t gox5_frame_type_hash(void *object) {
+    (void)object;
+    return 0;
+}
 
 typedef struct {
     void *receiver;

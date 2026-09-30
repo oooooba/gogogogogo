@@ -248,10 +248,45 @@ impl ObjectAllocatorInner {
         }
         self.global_spans = global_spans;
         for context in contexts {
-            let (start, end) = context.stack_range();
-            self.mark_range(start as usize, end as usize);
+            self.mark_stack(context);
         }
         self.sweep();
+    }
+
+    /// Marks everything reachable from one goroutine's stack. The live frames
+    /// are walked from the innermost one down to the bottom frame and each one
+    /// is scanned through its own stack map, so only the slots that can hold a
+    /// heap pointer are looked at.
+    fn mark_stack(&mut self, context: &LightWeightThreadContext) {
+        // The stack object is reachable from the prev_stack_pointer of every
+        // frame, but mark it explicitly so that it survives even a frame
+        // without a stack map.
+        if let Some(object_address) = self.containing_object(context.stack_base()) {
+            self.mark_object(object_address);
+        }
+        for frame in context.stack_frames() {
+            if let Some(get_member_offset_runs) = frame.frame_type.get_member_offset_runs() {
+                let inner = self as *mut ObjectAllocatorInner as *mut ffi::c_void;
+                get_member_offset_runs(mark_range_visitor, frame.address, inner);
+                continue;
+            }
+            // No stack map: fall back to a conservative scan of the frame.
+            let end = if frame.frame_size > 0 {
+                frame.address + frame.frame_size
+            } else {
+                // Unknown extent: scan the remainder of the stack region so
+                // that nothing reachable is missed.
+                self.object_end(context.stack_base())
+                    .unwrap_or(frame.address)
+            };
+            self.mark_range(frame.address, end);
+        }
+    }
+
+    fn object_end(&self, object_address: usize) -> Option<usize> {
+        self.allocated_objects
+            .get(&object_address)
+            .map(|object| object.span.ptr as usize + object.span.size)
     }
 
     fn mark_range(&mut self, start: usize, end: usize) {
@@ -469,6 +504,7 @@ unsafe impl Allocator for ObjectAllocatorPtr {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::StackFrameCommon;
 
     fn data_ptr(slice: NonNull<[u8]>) -> NonNull<u8> {
         unsafe { NonNull::new_unchecked(slice.as_ptr() as *mut u8) }
@@ -622,21 +658,91 @@ mod tests {
         }
     }
 
+    fn new_test_context() -> LightWeightThreadContext {
+        let gc = crate::global_context::create_global_context(crate::ObjectAllocator::new());
+        crate::create_light_weight_thread_context(
+            gc.dupulicate(),
+            crate::FunctionObject::new_null(),
+        )
+    }
+
+    // Pushes a frame of `size` bytes and returns its address. The bottom frame
+    // links to itself, exactly like the one the runtime bootstrap pushes, so
+    // that the frame walk has a frame to stop at.
+    fn push_test_frame(ctx: &mut LightWeightThreadContext, size: usize) -> usize {
+        if ctx.is_stack_empty() {
+            ctx.grow_stack(mem::size_of::<usize>());
+            let address = ctx.stack_pointer();
+            ctx.push_frame(size, address, None, &[], crate::FunctionObject::new_null());
+            return address as usize;
+        }
+        let prev_stack_pointer = ctx.stack_pointer();
+        ctx.grow_stack(size);
+        ctx.push_frame(
+            size,
+            prev_stack_pointer,
+            None,
+            &[],
+            crate::FunctionObject::new_null(),
+        );
+        ctx.stack_pointer() as usize
+    }
+
+    // A stack map that reports the single word at offset 64 of a frame, which
+    // is past the StackFrameCommon header.
+    extern "C" fn test_frame_generator(
+        visit: crate::type_id::TypeOffsetVisitor,
+        base: usize,
+        arg: *mut ffi::c_void,
+    ) {
+        visit(base + 64, 8, arg);
+    }
+
     #[test]
-    fn test_mark_scans_context_stack_range() {
+    fn test_mark_scans_every_live_stack_frame() {
+        let mut inner = ObjectAllocatorInner::new();
+        let kept_by_inner = inner.allocate(64, TypeId::new_invalid());
+        let kept_by_outer = inner.allocate(64, TypeId::new_invalid());
+        let garbage = inner.allocate(64, TypeId::new_invalid());
+        let mut ctx = new_test_context();
+        let outer = push_test_frame(&mut ctx, 64);
+        let inner_frame = push_test_frame(&mut ctx, 64);
+        unsafe {
+            ptr::write(outer as *mut usize, kept_by_outer as usize);
+            ptr::write(inner_frame as *mut usize, kept_by_inner as usize);
+        }
+        inner.run_gc(&[&ctx]);
+        assert!(
+            inner
+                .allocated_objects
+                .contains_key(&(kept_by_inner as usize))
+        );
+        assert!(
+            inner
+                .allocated_objects
+                .contains_key(&(kept_by_outer as usize))
+        );
+        assert!(!inner.allocated_objects.contains_key(&(garbage as usize)));
+        inner.free_all_allocated_objects();
+    }
+
+    #[test]
+    fn test_mark_scans_a_frame_only_where_its_stack_map_says() {
         let mut inner = ObjectAllocatorInner::new();
         let kept = inner.allocate(64, TypeId::new_invalid());
         let garbage = inner.allocate(64, TypeId::new_invalid());
-        let gc = crate::global_context::create_global_context(crate::ObjectAllocator::new());
-        let mut ctx = crate::create_light_weight_thread_context(
-            gc.dupulicate(),
-            crate::FunctionObject::new_null(),
+        let fake = crate::type_id::FakeTypeInfo::new_with_get_member_offset_runs(
+            false,
+            Some(test_frame_generator),
         );
-        let (start, _end) = ctx.stack_range();
-        ctx.grow_stack(mem::size_of::<usize>());
-        let address = start as *mut usize;
+        let mut ctx = new_test_context();
+        let frame = push_test_frame(&mut ctx, 128);
+        ctx.stack_frame_mut::<StackFrameCommon>().frame_type = fake.tid();
         unsafe {
-            ptr::write(address, kept as usize);
+            // The stack map of the frame reports the word at offset 64 only, so
+            // the one at offset 0 has to be ignored.
+            ptr::write((frame + 64) as *mut usize, kept as usize);
+            ptr::write(frame as *mut usize, garbage as usize);
         }
         inner.run_gc(&[&ctx]);
         assert!(inner.allocated_objects.contains_key(&(kept as usize)));
