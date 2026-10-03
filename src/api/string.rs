@@ -5,7 +5,6 @@ use crate::LightWeightThreadContext;
 use crate::StackFrameCommon;
 use crate::object::slice::SliceObject;
 use crate::object::string::StringObject;
-use crate::type_id::TypeId;
 
 #[repr(C)]
 struct StackFrameStringNewFromByteSlice<'a> {
@@ -23,8 +22,7 @@ pub extern "C" fn gox5_string_new_from_byte_slice(
         (frame.byte_slice.size(), frame.byte_slice)
     };
 
-    let mut builder =
-        StringObject::builder(len, ctx.allocate(len + 1, TypeId::new_invalid()) as *mut u8);
+    let mut builder = StringObject::builder(len, ctx.allocate(len + 1) as *mut u8);
 
     let src_bytes = byte_slice.as_bytes(mem::size_of::<u8>());
     builder.append_bytes(&src_bytes[..len]);
@@ -53,8 +51,7 @@ pub extern "C" fn gox5_string_new_from_rune(ctx: &mut LightWeightThreadContext) 
     let ch = char::from_u32(rune as u32).unwrap();
     let len = ch.len_utf8();
 
-    let mut builder =
-        StringObject::builder(len, ctx.allocate(len + 1, TypeId::new_invalid()) as *mut u8);
+    let mut builder = StringObject::builder(len, ctx.allocate(len + 1) as *mut u8);
 
     builder.append_char(ch);
 
@@ -92,8 +89,7 @@ pub extern "C" fn gox5_string_new_from_rune_slice(
             })
     };
 
-    let mut builder =
-        StringObject::builder(len, ctx.allocate(len + 1, TypeId::new_invalid()) as *mut u8);
+    let mut builder = StringObject::builder(len, ctx.allocate(len + 1) as *mut u8);
 
     let elem_size = mem::size_of::<u32>();
     let src_bytes = rune_slice.as_bytes(elem_size);
@@ -127,8 +123,7 @@ pub extern "C" fn gox5_string_append(ctx: &mut LightWeightThreadContext) -> Func
     };
     let len = lhs.len_in_bytes() + rhs.len_in_bytes();
 
-    let mut builder =
-        StringObject::builder(len, ctx.allocate(len + 1, TypeId::new_invalid()) as *mut u8);
+    let mut builder = StringObject::builder(len, ctx.allocate(len + 1) as *mut u8);
 
     builder.append_bytes(lhs.as_bytes());
     builder.append_bytes(rhs.as_bytes());
@@ -308,8 +303,7 @@ pub extern "C" fn gox5_string_substr(ctx: &mut LightWeightThreadContext) -> Func
     assert!(low <= high);
     let len = high - low;
 
-    let mut builder =
-        StringObject::builder(len, ctx.allocate(len + 1, TypeId::new_invalid()) as *mut u8);
+    let mut builder = StringObject::builder(len, ctx.allocate(len + 1) as *mut u8);
 
     builder.append_bytes(&base.as_bytes()[low..high]);
 
@@ -386,9 +380,7 @@ mod tests {
     fn test_builder(len_in_bytes: usize, allocator: &ObjectAllocator) -> StringObjectBuilder {
         StringObject::builder(
             len_in_bytes,
-            allocator
-                .ptr()
-                .allocate(len_in_bytes + 1, TypeId::new_invalid()) as *mut u8,
+            allocator.ptr().allocate(len_in_bytes + 1) as *mut u8,
         )
     }
 
@@ -639,9 +631,7 @@ mod tests {
 
     fn make_string(ctx: &mut LightWeightThreadContext, bytes: &[u8]) -> StringObject {
         let buffer = ctx.global_context().process(|mut global_context| {
-            global_context
-                .allocator()
-                .allocate(bytes.len() + 1, TypeId::new_invalid()) as *mut u8
+            global_context.allocator().allocate(bytes.len() + 1) as *mut u8
         });
         let mut builder = StringObject::builder(bytes.len(), buffer);
         builder.append_bytes(bytes);

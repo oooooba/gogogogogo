@@ -58,6 +58,16 @@ func createValueName(value ssa.Value) string {
 	}
 }
 
+// freeVarFieldName is the member of the FreeVars struct that holds a free
+// variable. A bound method wrapper stores its single capture, the receiver,
+// under the name of the role it plays.
+func freeVarFieldName(freeVar *ssa.FreeVar) string {
+	if isBoundMethodWrapper(freeVar.Parent()) {
+		return "receiver"
+	}
+	return createValueName(freeVar)
+}
+
 func createValueRelName(value ssa.Value) string {
 	if _, ok := value.(*ssa.Const); ok {
 		return createValueName(value)
@@ -65,9 +75,9 @@ func createValueRelName(value ssa.Value) string {
 		return createValueName(value)
 	} else if _, ok := value.(*ssa.Parameter); ok {
 		return fmt.Sprintf("frame->signature.%s", createValueName(value))
-	} else if _, ok := value.(*ssa.FreeVar); ok {
+	} else if freeVar, ok := value.(*ssa.FreeVar); ok {
 		return fmt.Sprintf("((FreeVars_%s*)frame->common.free_vars)->%s",
-			createFunctionName(value.Parent()), createValueName(value))
+			createFunctionName(value.Parent()), freeVarFieldName(freeVar))
 	} else if _, ok := value.(*ssa.Global); ok {
 		return wrapInObject(fmt.Sprintf("&%s", createValueName(value)), value.Type())
 	} else {

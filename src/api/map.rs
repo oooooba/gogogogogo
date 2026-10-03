@@ -1,5 +1,4 @@
 use std::mem;
-use std::ptr;
 
 use crate::FunctionObject;
 use crate::LightWeightThreadContext;
@@ -17,27 +16,28 @@ struct StackFrameMapNew<'a> {
     value_type: TypeId,
 }
 
-fn allocate_map(ctx: &mut LightWeightThreadContext, map: MapObject) -> *mut MapObject {
+/// Allocates and registers a map allocation. The caller constructs it in place
+/// with `MapObject::construct_in` or `MapObject::construct_clone_in`, which is
+/// why the map must not be filled by moving a `MapObject` value in.
+fn allocate_map(ctx: &mut LightWeightThreadContext) -> *mut MapObject {
     let object_size = mem::size_of::<MapObject>();
-    let ptr = ctx.allocate(object_size, TypeId::new_invalid()) as *mut MapObject;
-
-    unsafe {
-        ptr::write(ptr, map);
-    }
+    let ptr = ctx.allocate(object_size) as *mut MapObject;
+    ctx.register_map(ptr as usize);
     ptr
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn gox5_map_new(ctx: &mut LightWeightThreadContext) -> FunctionObject {
-    let frame = ctx.stack_frame::<StackFrameMapNew>();
-
+    let (key_type, value_type) = {
+        let frame = ctx.stack_frame::<StackFrameMapNew>();
+        (frame.key_type, frame.value_type)
+    };
     let allocator = ctx
         .global_context()
         .process(|mut global_context| global_context.allocator());
-    let ptr = allocate_map(
-        ctx,
-        MapObject::new(frame.key_type, frame.value_type, allocator),
-    );
+
+    let ptr = allocate_map(ctx);
+    MapObject::construct_in(ptr, key_type, value_type, allocator);
     let ptr = ObjectPtr(ptr as *mut ());
 
     let frame = ctx.stack_frame_mut::<StackFrameMapNew>();
@@ -86,11 +86,11 @@ pub extern "C" fn gox5_map_clone(ctx: &mut LightWeightThreadContext) -> Function
     let receiver = frame.map.receiver();
     let map_ptr = unsafe { *(receiver.0 as *const *mut ()) };
     let map = unsafe { &*(map_ptr as *const MapObject) };
-    let cloned = map.clone();
 
-    let ptr = allocate_map(ctx, cloned);
+    let ptr = allocate_map(ctx);
+    MapObject::construct_clone_in(ptr, map);
     let slot_size = mem::size_of::<*mut ()>();
-    let slot = ctx.allocate(slot_size, TypeId::new_invalid());
+    let slot = ctx.allocate(slot_size);
     unsafe {
         *(slot as *mut *mut ()) = ptr as *mut ();
     }
@@ -248,7 +248,7 @@ mod tests {
     use crate::global_context;
     use crate::light_weight_thread::LightWeightThreadContext;
     use crate::object::string::StringObject;
-    use crate::type_id::{TypeId, TypeInfo};
+    use crate::type_id::{TYPE_INFO_MAGIC, TypeId, TypeInfo, TypeKind};
     use std::mem;
     use std::ptr;
     use std::sync::OnceLock;
@@ -267,14 +267,15 @@ mod tests {
             static TEST_NAME: [u8; 5] = *b"test\0";
             let name = StringObject::new(TEST_NAME.as_ptr(), 4);
             TypeInfo {
+                gc_magic: TYPE_INFO_MAGIC,
                 name,
                 num_methods: 0,
                 interface_table: ptr::null(),
                 is_equal: test_is_equal,
                 hash: test_hash,
                 size: mem::size_of::<isize>(),
-                no_pointers: false,
-                is_interface: false,
+                kind: TypeKind::NoPointer as i32,
+                pointed_to: TypeId::new_invalid(),
                 get_member_offset_runs: None,
             }
         })
@@ -294,17 +295,15 @@ mod tests {
         (ctx, gc)
     }
 
-    fn make_map_ptr(allocator: &ObjectAllocatorPtr, map: MapObject) -> ObjectPtr {
+    fn make_map_ptr(allocator: &ObjectAllocatorPtr) -> ObjectPtr {
         let size = mem::size_of::<MapObject>();
-        let ptr = allocator.allocate(size, TypeId::new_invalid()) as *mut MapObject;
-        unsafe {
-            ptr::write(ptr, map);
-        }
+        let ptr = allocator.allocate(size) as *mut MapObject;
+        MapObject::construct_in(ptr, test_type_id(), test_type_id(), allocator.clone());
         ObjectPtr(ptr as *mut ())
     }
 
     fn make_isize_ptr(allocator: &ObjectAllocatorPtr, value: isize) -> ObjectPtr {
-        let ptr = allocator.allocate(mem::size_of::<isize>(), TypeId::new_invalid()) as *mut isize;
+        let ptr = allocator.allocate(mem::size_of::<isize>()) as *mut isize;
         unsafe { *ptr = value };
         ObjectPtr(ptr as *mut ())
     }
@@ -344,8 +343,7 @@ mod tests {
     #[test]
     fn test_gox5_map_set_and_len() {
         let allocator = ObjectAllocator::new();
-        let map = MapObject::new(test_type_id(), test_type_id(), allocator.ptr());
-        let map_ptr = make_map_ptr(&allocator.ptr(), map);
+        let map_ptr = make_map_ptr(&allocator.ptr());
 
         let key = make_isize_ptr(&allocator.ptr(), 42);
         let value = make_isize_ptr(&allocator.ptr(), 100);
@@ -373,8 +371,7 @@ mod tests {
     #[test]
     fn test_gox5_map_len_empty() {
         let allocator = ObjectAllocator::new();
-        let map = MapObject::new(test_type_id(), test_type_id(), allocator.ptr());
-        let map_ptr = make_map_ptr(&allocator.ptr(), map);
+        let map_ptr = make_map_ptr(&allocator.ptr());
 
         let (mut ctx, _gc) = create_ctx();
         let prev_sp = ctx.stack_pointer();
@@ -456,8 +453,7 @@ mod tests {
     #[test]
     fn test_gox5_map_clear() {
         let allocator = ObjectAllocator::new();
-        let map = MapObject::new(test_type_id(), test_type_id(), allocator.ptr());
-        let map_ptr = make_map_ptr(&allocator.ptr(), map);
+        let map_ptr = make_map_ptr(&allocator.ptr());
 
         let (mut ctx, _gc) = create_ctx();
 

@@ -25,6 +25,11 @@ pub struct FunctionObject(*const ());
 
 #[repr(C)]
 struct ClosureLayout {
+    /// Type of the captured values (the FreeVars struct of the surrounding
+    /// function), placed before the payload so the object's capture region
+    /// always starts at sizeof(ClosureLayout). The GC uses it to trace the
+    /// captured values precisely; TypeId 0 falls back to a raw scan.
+    capture_type: TypeId,
     func: UserFunction,
     object_ptrs: word_chunk::WordChunk,
 }

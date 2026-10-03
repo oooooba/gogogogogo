@@ -681,6 +681,12 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 		ctx.switchFunctionToCallRuntimeApi("gox5_closure_new", "StackFrameClosureNew", createInstructionName(instr), &result,
 			func() {
 				fnName := createFunctionName(fn)
+				// The captured values are traced through the descriptor of the
+				// FreeVars struct, so the closure carries the type of what it
+				// captured and the GC never has to guess it. The descriptor is
+				// defined above this function, by
+				// emitClosureCaptureDescriptors.
+				fmt.Fprintf(ctx.stream, "next_frame->capture_type = (TypeId){.info = &TypeInfo_FreeVars_%s};\n", fnName)
 				fmt.Fprintf(ctx.stream, "FreeVars_%s* free_vars = (FreeVars_%s*)&next_frame->object_ptrs;\n", fnName, fnName)
 				if strings.HasSuffix(fn.Name(), "$bound") {
 					if len(fn.FreeVars) != 1 {

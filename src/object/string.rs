@@ -93,14 +93,11 @@ impl StringObjectBuilder {
 mod tests {
     use super::*;
     use crate::ObjectAllocator;
-    use crate::type_id::TypeId;
 
     fn test_builder(len_in_bytes: usize, allocator: &ObjectAllocator) -> StringObjectBuilder {
         StringObjectBuilder::new(
             len_in_bytes,
-            allocator
-                .ptr()
-                .allocate(len_in_bytes + 1, TypeId::new_invalid()) as *mut u8,
+            allocator.ptr().allocate(len_in_bytes + 1) as *mut u8,
         )
     }
 

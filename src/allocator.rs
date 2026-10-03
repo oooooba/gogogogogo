@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::ffi;
 use std::mem;
 use std::ptr;
@@ -6,9 +6,22 @@ use std::ptr::NonNull;
 
 use allocator_api2::alloc::{AllocError, Allocator, Layout};
 
+use crate::ClosureLayout;
 use crate::FUNCTION_OBJECT_CLOSURE_FLAG;
 use crate::light_weight_thread::LightWeightThreadContext;
+use crate::object::channel::ChannelObject;
+use crate::object::interface::Interface;
+use crate::object::map::MapObject;
+use crate::type_id::GC_SLOT_DEFER_STACK;
+use crate::type_id::GC_SLOT_FUNCTION;
+use crate::type_id::GC_SLOT_INTERFACE;
+use crate::type_id::GC_SLOT_POINTER;
+use crate::type_id::GC_SLOT_RAW;
+use crate::type_id::GC_SLOT_SLICE;
+use crate::type_id::GC_SLOT_STRING;
 use crate::type_id::TypeId;
+use crate::type_id::TypeKind;
+use crate::type_id::TypeOffsetVisitor;
 
 pub(crate) struct ObjectAllocator(ObjectAllocatorPtr);
 
@@ -37,9 +50,18 @@ struct ObjectAllocatorInner {
     /// Closure allocations live apart from ordinary objects: a closure is
     /// referenced through a `FunctionObject` whose address has the most
     /// significant bit set, so the GC must distinguish tagged words from plain
-    /// pointers. Membership in this map is what makes that call.
+    /// pointers. Membership in this map is what makes that call, and the
+    /// closure object's own capture descriptor (stored in ClosureLayout)
+    /// tells the collector how to trace the captured variables.
     allocated_closures: BTreeMap<usize, AllocatedObject>,
-    global_spans: Vec<Span>,
+    /// Channel objects self-describe through their element type, which is
+    /// registered here when the channel is created.
+    allocated_channels: BTreeMap<usize, TypeId>,
+    /// Map objects are ordinary allocations whose entries are boxed with the
+    /// map's key/value types; membership makes the collector dispatch to the
+    /// entry scan instead of the plain-object conservative scan.
+    allocated_maps: BTreeSet<usize>,
+    global_spans: Vec<GlobalSpan>,
     total_size: usize,
 }
 
@@ -49,16 +71,20 @@ struct Span {
     size: usize,
 }
 
+/// A root that is not an object on the heap: usually a package-level Go
+/// variable. It is scanned as a value of `type_id`, or conservatively over
+/// its span when the type is unknown (TypeId 0).
+#[derive(Clone, Copy)]
+struct GlobalSpan {
+    ptr: *mut (),
+    size: usize,
+    type_id: TypeId,
+}
+
 struct AllocatedObject {
     span: Span,
     kind: AllocationKind,
     marked: bool,
-    type_id: TypeId,
-    /// True when the allocation backs a Go slice and must be scanned only up to
-    /// (a high-water mark of) the accessible prefix instead of the full span.
-    is_slice_buffer: bool,
-    /// Number of bytes from `span.ptr` that may be scanned (<= span.size).
-    slice_scan_end: usize,
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -67,57 +93,55 @@ enum AllocationKind {
     GuardedPages,
 }
 
+/// What `mark_object` has to do with an object that is not a plain heap
+/// allocation when it is first reached: closures, channels and maps carry
+/// their own trace description.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum SpecialObject {
+    None,
+    Closure,
+    Channel,
+    Map,
+}
+
 const ALLOCATION_ALIGNMENT: usize = mem::size_of::<u128>();
+/// A slice header is three words (data, len, cap) in the C and Rust layouts.
+const SLICE_HEADER_SIZE: usize = 3 * mem::size_of::<usize>();
+
+/// A string value is two words (data pointer, length).
+const STRING_SIZE: usize = 2 * mem::size_of::<usize>();
 pub(crate) const MAX_TOTAL_ALLOCATED_SIZE: usize = 1 << 20;
+
+/// The number of bytes a value of type `typ` occupies, so a collector can
+/// check that the storage it is about to read really holds the whole value.
+fn value_size(typ: TypeId) -> usize {
+    match typ.kind() {
+        TypeKind::None => 0,
+        TypeKind::String => STRING_SIZE,
+        TypeKind::Slice => SLICE_HEADER_SIZE,
+        TypeKind::Interface => mem::size_of::<Interface>(),
+        _ => typ.size(),
+    }
+}
 
 impl ObjectAllocatorInner {
     fn new() -> Self {
         ObjectAllocatorInner {
             allocated_objects: BTreeMap::new(),
             allocated_closures: BTreeMap::new(),
+            allocated_channels: BTreeMap::new(),
+            allocated_maps: BTreeSet::new(),
             global_spans: Vec::new(),
             total_size: 0,
         }
     }
 
-    fn allocate(&mut self, size: usize, type_id: TypeId) -> *mut () {
-        Self::allocate_span(
-            &mut self.total_size,
-            size,
-            type_id,
-            false,
-            size,
-            &mut self.allocated_objects,
-        )
+    fn allocate(&mut self, size: usize) -> *mut () {
+        Self::allocate_span(&mut self.total_size, size, &mut self.allocated_objects)
     }
 
     fn allocate_closure(&mut self, size: usize) -> *mut () {
-        Self::allocate_span(
-            &mut self.total_size,
-            size,
-            TypeId::new_invalid(),
-            false,
-            size,
-            &mut self.allocated_closures,
-        )
-    }
-
-    fn allocate_slice_buffer(
-        &mut self,
-        size: usize,
-        type_id: TypeId,
-        accessible_bytes: usize,
-    ) -> *mut () {
-        let target_size = size.div_ceil(ALLOCATION_ALIGNMENT) * ALLOCATION_ALIGNMENT;
-        let accessible_bytes = accessible_bytes.min(target_size);
-        Self::allocate_span(
-            &mut self.total_size,
-            size,
-            type_id,
-            true,
-            accessible_bytes,
-            &mut self.allocated_objects,
-        )
+        Self::allocate_span(&mut self.total_size, size, &mut self.allocated_closures)
     }
 
     /// Allocates a zero-initialized, 16-byte-aligned heap span and records it
@@ -125,9 +149,6 @@ impl ObjectAllocatorInner {
     fn allocate_span(
         total_size: &mut usize,
         size: usize,
-        type_id: TypeId,
-        is_slice_buffer: bool,
-        slice_scan_end: usize,
         destinations: &mut BTreeMap<usize, AllocatedObject>,
     ) -> *mut () {
         let size = size.div_ceil(ALLOCATION_ALIGNMENT) * ALLOCATION_ALIGNMENT;
@@ -146,16 +167,13 @@ impl ObjectAllocatorInner {
                 span: Span { ptr, size },
                 kind: AllocationKind::Heap,
                 marked: false,
-                type_id,
-                is_slice_buffer,
-                slice_scan_end,
             },
         );
         *total_size += size;
         ptr
     }
 
-    fn allocate_guarded_pages(&mut self, num_pages: usize, type_id: TypeId) -> *mut () {
+    fn allocate_guarded_pages(&mut self, num_pages: usize) -> *mut () {
         unsafe {
             #[cfg(miri)]
             let protection = libc::PROT_READ | libc::PROT_WRITE;
@@ -199,9 +217,6 @@ impl ObjectAllocatorInner {
                     },
                     kind: AllocationKind::GuardedPages,
                     marked: false,
-                    type_id,
-                    is_slice_buffer: false,
-                    slice_scan_end: 4096 * num_pages,
                 },
             );
             ptr
@@ -234,7 +249,7 @@ impl ObjectAllocatorInner {
 
     fn sweep(&mut self) {
         let objects = mem::take(&mut self.allocated_objects);
-        let kept = objects
+        let kept: BTreeMap<usize, AllocatedObject> = objects
             .into_iter()
             .filter_map(|(address, object)| {
                 if object.marked {
@@ -247,7 +262,7 @@ impl ObjectAllocatorInner {
             .collect();
         self.allocated_objects = kept;
         let closures = mem::take(&mut self.allocated_closures);
-        let kept = closures
+        let kept_closures: BTreeMap<usize, AllocatedObject> = closures
             .into_iter()
             .filter_map(|(address, object)| {
                 if object.marked {
@@ -258,11 +273,33 @@ impl ObjectAllocatorInner {
                 }
             })
             .collect();
-        self.allocated_closures = kept;
+        self.allocated_closures = kept_closures;
+
+        // The self-describing registries only make sense while the object that
+        // owns the descriptor is still alive.
+        self.allocated_channels
+            .retain(|address, _| self.allocated_objects.contains_key(address));
+        self.allocated_maps
+            .retain(|address| self.allocated_objects.contains_key(address));
     }
 
-    fn register_global_object(&mut self, address: *mut (), size: usize) {
-        self.global_spans.push(Span { ptr: address, size });
+    fn register_global_object(&mut self, address: *mut (), size: usize, type_id: TypeId) {
+        self.global_spans.push(GlobalSpan {
+            ptr: address,
+            size,
+            type_id,
+        });
+    }
+
+    /// Records that the object at `address` is a channel that buffers/moves
+    /// values of type `elem_type`. Called once at channel creation.
+    fn register_channel(&mut self, address: usize, elem_type: TypeId) {
+        self.allocated_channels.insert(address, elem_type);
+    }
+
+    /// Records that the object at `address` is a MapObject.
+    fn register_map(&mut self, address: usize) {
+        self.allocated_maps.insert(address);
     }
 
     fn free_all_allocated_objects(&mut self) {
@@ -289,7 +326,11 @@ impl ObjectAllocatorInner {
         }
         let global_spans = mem::take(&mut self.global_spans);
         for span in &global_spans {
-            self.mark_range(span.ptr as usize, span.ptr as usize + span.size);
+            if span.type_id != TypeId::new_invalid() {
+                self.mark_value(span.type_id, span.ptr as usize);
+            } else {
+                self.mark_range_raw(span.ptr as usize, span.ptr as usize + span.size);
+            }
         }
         self.global_spans = global_spans;
         for context in contexts {
@@ -312,7 +353,7 @@ impl ObjectAllocatorInner {
         for frame in context.stack_frames() {
             if let Some(get_member_offset_runs) = frame.frame_type.get_member_offset_runs() {
                 let inner = self as *mut ObjectAllocatorInner as *mut ffi::c_void;
-                get_member_offset_runs(mark_range_visitor, frame.address, inner);
+                get_member_offset_runs(mark_typed_visitor, frame.address, inner);
                 continue;
             }
             // No stack map: fall back to a conservative scan of the frame.
@@ -324,7 +365,7 @@ impl ObjectAllocatorInner {
                 self.object_end(context.stack_base())
                     .unwrap_or(frame.address)
             };
-            self.mark_range(frame.address, end);
+            self.mark_range_raw(frame.address, end);
         }
     }
 
@@ -334,59 +375,416 @@ impl ObjectAllocatorInner {
             .map(|object| object.span.ptr as usize + object.span.size)
     }
 
-    fn mark_range(&mut self, start: usize, end: usize) {
+    /// Marks every object directly reachable through the raw words of
+    /// [start, end) and traces them conservatively: a plain heap object is
+    /// rescanned word by word, while closures/channels/maps/defer entries use
+    /// their own descriptor. This is the keep-alive path used for frame
+    /// fallbacks (runtime frames) and untyped contexts.
+    fn mark_range_raw(&mut self, start: usize, end: usize) {
         let word_size = mem::size_of::<usize>();
         let mut address = start;
         while address + word_size <= end {
             let word = unsafe { ptr::read_unaligned(address as *const usize) };
-            if let Some(object_address) = self.containing_object(word) {
-                self.mark_object(object_address);
-            }
             if (word & FUNCTION_OBJECT_CLOSURE_FLAG) != 0 {
                 let cleared_address = word & !FUNCTION_OBJECT_CLOSURE_FLAG;
                 if let Some(closure_address) = self.containing_closure(cleared_address) {
                     self.mark_object(closure_address);
                 }
+            } else if let Some(object_address) = self.containing_object(word) {
+                self.mark_object(object_address);
+            } else if let Some(closure_address) = self.containing_closure(word) {
+                // An interior pointer into a closure's capture region.
+                self.mark_object(closure_address);
             }
             address += word_size;
         }
     }
 
-    fn mark_object(&mut self, object_address: usize) {
-        let (span, kind, marked, type_id, is_slice_buffer, slice_scan_end) =
-            match self.lookup_object(object_address) {
-                Some(record) => record,
-                None => return,
-            };
-        if marked {
+    /// Marks a single raw word and everything it resolves to.
+    fn mark_raw_word(&mut self, address: usize) {
+        let word = unsafe { ptr::read_unaligned(address as *const usize) };
+        if (word & FUNCTION_OBJECT_CLOSURE_FLAG) != 0 {
+            if let Some(closure_address) =
+                self.containing_closure(word & !FUNCTION_OBJECT_CLOSURE_FLAG)
+            {
+                self.mark_object(closure_address);
+            }
+        } else if let Some(object_address) = self.resolve_any(word) {
+            self.mark_object(object_address);
+        }
+    }
+
+    /// Marks the object a heap word points at, if any. `containing_object`
+    /// covers ordinary allocations and `containing_closure` covers interiors
+    /// of closure objects (a frame's `free_vars` and interface receivers).
+    fn resolve_any(&self, address: usize) -> Option<usize> {
+        self.containing_object(address)
+            .or_else(|| self.containing_closure(address))
+    }
+
+    /// Traces a value of Go type `typ` stored at `addr`. This is the typed
+    /// path of the root-driven scan: the type is handed down from stack maps,
+    /// globals, slice headers, map entries and interfaces.
+    fn mark_value(&mut self, typ: TypeId, addr: usize) {
+        match typ.kind() {
+            TypeKind::None | TypeKind::NoPointer => {}
+            TypeKind::String => self.mark_raw_word(addr),
+            TypeKind::Pointer => {
+                let pointed_to = typ.pointed_to();
+                self.mark_pointer_field(addr, pointed_to);
+            }
+            TypeKind::Slice => self.mark_slice_header(addr, typ.pointed_to()),
+            TypeKind::Interface => self.mark_interface_value(addr),
+            TypeKind::Function => self.mark_function_field(addr),
+            TypeKind::Map => self.mark_map_slot(addr),
+            TypeKind::StructArray => self.mark_struct_array(addr, typ),
+        }
+    }
+
+    fn mark_pointer_field(&mut self, addr: usize, pointed_to: TypeId) {
+        let word = unsafe { ptr::read_unaligned(addr as *const usize) };
+        if word == 0 {
             return;
         }
-        self.mark_object_as_marked(object_address);
-        if kind == AllocationKind::Heap && !type_id.is_no_pointer() {
-            if type_id.is_interface_type() {
-                self.mark_interface_object(span.ptr as usize);
-            } else if is_slice_buffer {
-                // A slice buffer is scanned only up to the accessible-prefix
-                // high-water mark; out-of-range tail entries are not scanned.
-                // Scanning the buffer as a raw word range (not via the element
-                // type's generator) keeps every element within the prefix alive.
-                let start = span.ptr as usize;
-                let end = start + slice_scan_end;
-                self.mark_range(start, end);
-            } else if let Some(get_member_offset_runs) = type_id.get_member_offset_runs() {
-                let base = span.ptr as usize;
-                let inner = self as *mut ObjectAllocatorInner as *mut ffi::c_void;
-                get_member_offset_runs(mark_range_visitor, base, inner);
-            } else {
-                self.mark_range(span.ptr as usize, span.ptr as usize + span.size);
+        if (word & FUNCTION_OBJECT_CLOSURE_FLAG) != 0 {
+            if let Some(closure_address) =
+                self.containing_closure(word & !FUNCTION_OBJECT_CLOSURE_FLAG)
+            {
+                self.mark_object(closure_address);
+            }
+            return;
+        }
+        if let Some(object_address) = self.resolve_any(word) {
+            self.mark_object(object_address);
+            if pointed_to != TypeId::new_invalid() {
+                self.mark_value_at(word, pointed_to);
             }
         }
     }
 
-    fn mark_interface_object(&mut self, base: usize) {
-        let receiver = unsafe { ptr::read_unaligned(base as *const usize) };
-        if let Some(object_address) = self.containing_object(receiver) {
+    /// Marks the value of type `typ` whose storage starts at `address`.
+    ///
+    /// `address` is the target of a pointer, so it is usually but not always
+    /// the base of the allocation holding it: it can also be an interior
+    /// address (`&s.field`, `&a[i]`) or a goroutine stack address. The value
+    /// is therefore only read when it fits inside the allocation it lives in,
+    /// and the rest of that allocation is scanned conservatively otherwise.
+    fn mark_value_at(&mut self, address: usize, typ: TypeId) {
+        let size = value_size(typ);
+        if size == 0 {
+            return;
+        }
+        match self.allocation_end(address) {
+            Some(end) if address + size <= end => self.mark_value(typ, address),
+            Some(end) => self.mark_range_raw(address, end),
+            None => {}
+        }
+    }
+
+    /// The end of the allocation (heap object, closure, or goroutine stack)
+    /// that contains `address`, if any.
+    fn allocation_end(&self, address: usize) -> Option<usize> {
+        if let Some(base) = self.containing_object(address) {
+            return self.object_end(base);
+        }
+        if let Some(base) = self.containing_closure(address) {
+            return self
+                .allocated_closures
+                .get(&base)
+                .map(|object| object.span.ptr as usize + object.span.size);
+        }
+        None
+    }
+
+    /// Marks the backing buffer of a slice whose header is at `addr` and
+    /// scans the accessible prefix [data, data + len * size(elem)) element by
+    /// element with the element type. Elements beyond `len` are never looked
+    /// at, which is what bounds the scan by the length known at trace time.
+    fn mark_slice_header(&mut self, addr: usize, elem_type: TypeId) {
+        let word_size = mem::size_of::<usize>();
+        let data = unsafe { ptr::read_unaligned(addr as *const usize) };
+        let len = unsafe { ptr::read_unaligned((addr + word_size) as *const usize) };
+        if data == 0 || len == 0 {
+            return;
+        }
+        // Only a buffer that is an allocation of its own is traced from here.
+        // A buffer inside the goroutine stack is already reached through the
+        // frame slot of the `*[N]T` temporary that made it, a buffer in static
+        // data holds no pointers at all, and a buffer that is no allocation is
+        // a frame slot that was never written (frames are reused), which must
+        // not be interpreted as a slice.
+        let Some(object_address) = self.containing_object(data) else {
+            return;
+        };
+        // Keep the buffer itself alive; its interior is scanned precisely
+        // below, so it does not get a full-span rescan as well.
+        self.mark_object_without_interior(object_address);
+        let elem_size = if elem_type == TypeId::new_invalid() {
+            word_size
+        } else {
+            elem_type.size()
+        };
+        if elem_size == 0 {
+            return;
+        }
+        let span = len.saturating_mul(elem_size);
+        let mut end = data.saturating_add(span);
+        // The buffer never holds more than its own allocation, so the
+        // accessible prefix is clamped to it.
+        if let Some(allocation_end) = self.object_end(object_address) {
+            end = end.min(allocation_end);
+        }
+        if end <= data {
+            return;
+        }
+        self.scan_value_range(elem_type, data, end);
+    }
+
+    /// Scans [start, end) as a run of values of type `elem`.
+    fn scan_value_range(&mut self, elem: TypeId, start: usize, end: usize) {
+        match elem.kind() {
+            TypeKind::None | TypeKind::NoPointer => {}
+            TypeKind::String => {
+                let mut addr = start;
+                while addr < end {
+                    self.mark_raw_word(addr);
+                    addr += STRING_SIZE;
+                }
+            }
+            TypeKind::Pointer => {
+                let pointed_to = elem.pointed_to();
+                let mut addr = start;
+                while addr < end {
+                    self.mark_pointer_field(addr, pointed_to);
+                    addr += mem::size_of::<usize>();
+                }
+            }
+            TypeKind::Slice => {
+                let elem_of_elem = elem.pointed_to();
+                let mut addr = start;
+                while addr < end {
+                    self.mark_slice_header(addr, elem_of_elem);
+                    addr += SLICE_HEADER_SIZE;
+                }
+            }
+            TypeKind::Interface => {
+                let mut addr = start;
+                while addr < end {
+                    self.mark_interface_value(addr);
+                    addr += mem::size_of::<Interface>();
+                }
+            }
+            TypeKind::Function => {
+                let mut addr = start;
+                while addr < end {
+                    self.mark_function_field(addr);
+                    addr += mem::size_of::<usize>();
+                }
+            }
+            TypeKind::Map => {
+                let mut addr = start;
+                while addr < end {
+                    self.mark_map_slot(addr);
+                    addr += mem::size_of::<usize>();
+                }
+            }
+            TypeKind::StructArray => {
+                if let Some(get_member_offset_runs) = elem.get_member_offset_runs() {
+                    let step = elem.size();
+                    let mut addr = start;
+                    while addr < end {
+                        let inner = self as *mut ObjectAllocatorInner as *mut ffi::c_void;
+                        get_member_offset_runs(mark_typed_visitor, addr, inner);
+                        addr = addr.saturating_add(step);
+                    }
+                } else {
+                    self.mark_range_raw(start, end);
+                }
+            }
+        }
+    }
+
+    fn mark_interface_value(&mut self, addr: usize) {
+        let word_size = mem::size_of::<usize>();
+        let receiver = unsafe { ptr::read_unaligned(addr as *const usize) };
+        if receiver == 0 {
+            return;
+        }
+        if (receiver & FUNCTION_OBJECT_CLOSURE_FLAG) != 0 {
+            if let Some(closure_address) =
+                self.containing_closure(receiver & !FUNCTION_OBJECT_CLOSURE_FLAG)
+            {
+                self.mark_object(closure_address);
+            }
+            return;
+        }
+        let Some(object_address) = self.resolve_any(receiver) else {
+            return;
+        };
+        self.mark_object(object_address);
+        let type_word = unsafe { ptr::read_unaligned((addr + word_size) as *const usize) };
+        // The type word is only a type word if the value really is an
+        // interface; a slot the collector was told holds one can still be
+        // read before it was written, so it is validated before use.
+        let concrete = TypeId::from_raw(type_word);
+        if concrete.is_valid() {
+            self.mark_value_at(receiver, concrete);
+        }
+    }
+
+    fn mark_function_field(&mut self, addr: usize) {
+        let word = unsafe { ptr::read_unaligned(addr as *const usize) };
+        if (word & FUNCTION_OBJECT_CLOSURE_FLAG) != 0
+            && let Some(closure_address) =
+                self.containing_closure(word & !FUNCTION_OBJECT_CLOSURE_FLAG)
+        {
+            self.mark_object(closure_address);
+        }
+    }
+
+    /// Marks the MapObject referenced by a `map[..]` value at `addr`.
+    fn mark_map_slot(&mut self, addr: usize) {
+        let word = unsafe { ptr::read_unaligned(addr as *const usize) };
+        if word == 0 {
+            return;
+        }
+        if let Some(object_address) = self.containing_object(word) {
             self.mark_object(object_address);
+        }
+    }
+
+    fn mark_struct_array(&mut self, addr: usize, typ: TypeId) {
+        if let Some(get_member_offset_runs) = typ.get_member_offset_runs() {
+            let inner = self as *mut ObjectAllocatorInner as *mut ffi::c_void;
+            get_member_offset_runs(mark_typed_visitor, addr, inner);
+        } else {
+            let end = addr.saturating_add(typ.size());
+            self.mark_range_raw(addr, end);
+        }
+    }
+
+    fn mark_object(&mut self, object_address: usize) {
+        let record = match self.lookup_record(object_address) {
+            Some(record) => record,
+            None => return,
+        };
+        if record.marked {
+            return;
+        }
+        self.mark_object_as_marked(object_address);
+        if record.kind != AllocationKind::Heap {
+            return;
+        }
+        match record.special {
+            SpecialObject::None => {
+                self.mark_range_raw(
+                    record.span.ptr as usize,
+                    record.span.ptr as usize + record.span.size,
+                );
+            }
+            SpecialObject::Closure => self.mark_closure_scan(record.span.ptr as usize),
+            SpecialObject::Channel => self.mark_channel_scan(record.span.ptr as usize),
+            SpecialObject::Map => self.mark_map_scan(record.span.ptr as usize),
+        }
+    }
+
+    /// Marks an object without scanning its interior, used when the referrer
+    /// (a slice header) has already traced the exact accessible region.
+    fn mark_object_without_interior(&mut self, object_address: usize) {
+        let record = match self.lookup_record(object_address) {
+            Some(record) => record,
+            None => return,
+        };
+        if record.marked {
+            return;
+        }
+        self.mark_object_as_marked(object_address);
+        // The interior is deliberately not scanned: the caller (a slice
+        // header) has already traced the exact accessible prefix.
+        let _ = record;
+    }
+
+    fn mark_closure_scan(&mut self, base: usize) {
+        // ClosureLayout { capture_type: TypeId, func: UserFunction, object_ptrs: WordChunk }
+        // The captured values are copied right after the layout, starting at
+        // base + sizeof(ClosureLayout).
+        let word_size = mem::size_of::<usize>();
+        let capture_type_word = unsafe {
+            ptr::read_unaligned(
+                (base + mem::offset_of!(ClosureLayout, capture_type)) as *const usize,
+            )
+        };
+        let capture_start = base + mem::size_of::<ClosureLayout>();
+        let capture_type = TypeId::from_raw(capture_type_word);
+        if capture_type != TypeId::new_invalid()
+            && let Some(get_member_offset_runs) = capture_type.get_member_offset_runs()
+        {
+            let inner = self as *mut ObjectAllocatorInner as *mut ffi::c_void;
+            get_member_offset_runs(mark_typed_visitor, capture_start, inner);
+            return;
+        }
+        // Untyped captures: the extent is the WordChunk count at object_ptrs.
+        let count = unsafe {
+            ptr::read_unaligned(
+                (base + mem::offset_of!(ClosureLayout, object_ptrs)) as *const usize,
+            )
+        };
+        let end = capture_start.saturating_add(count.saturating_mul(word_size));
+        self.mark_range_raw(capture_start, end);
+    }
+
+    fn mark_channel_scan(&mut self, base: usize) {
+        let elem_type = self
+            .allocated_channels
+            .get(&base)
+            .copied()
+            .unwrap_or(TypeId::new_invalid());
+        let channel = unsafe { &*(base as *const ChannelObject) };
+        // A channel object holds exactly one pointer of its own, the ring array
+        // of a buffered channel; scanning the object's words instead would read
+        // the padding behind `is_closed`.
+        if let Some(buffer) = channel.buffer()
+            && let Some(object_address) = self.containing_object(buffer)
+        {
+            self.mark_object(object_address);
+        }
+        channel.gc_keep(|object_ptr| {
+            let address = object_ptr.0 as usize;
+            if let Some(object_address) = self.containing_object(address) {
+                self.mark_object(object_address);
+                if elem_type != TypeId::new_invalid() {
+                    self.mark_value_at(address, elem_type);
+                }
+            }
+        });
+    }
+
+    fn mark_map_scan(&mut self, base: usize) {
+        // Keep the table the map owns: it is allocated through this allocator
+        // and no other word leads to it. The map records an address inside it,
+        // because the hash table header has bytes that are never written and
+        // scanning the struct itself would read them.
+        let map = unsafe { &*(base as *const MapObject) };
+        if let Some(address) = map.table_address()
+            && let Some(object_address) = self.containing_object(address)
+        {
+            self.mark_object(object_address);
+        }
+        // The boxed keys and values live in their own allocations, so they are
+        // reached through the entries rather than through the table itself.
+        map.gc_keep(|key_type, key_address, value_type, value_address| {
+            self.mark_box_with_type(key_address, key_type);
+            self.mark_box_with_type(value_address, value_type);
+        });
+    }
+
+    /// Marks a boxed value of type `typ` (resolving `address` to the box).
+    fn mark_box_with_type(&mut self, address: usize, typ: TypeId) {
+        if let Some(object_address) = self.containing_object(address) {
+            self.mark_object(object_address);
+            if typ != TypeId::new_invalid() {
+                self.mark_value_at(address, typ);
+            }
         }
     }
 
@@ -410,29 +808,31 @@ impl ObjectAllocatorInner {
         }
     }
 
-    fn lookup_object(
-        &self,
-        object_address: usize,
-    ) -> Option<(Span, AllocationKind, bool, TypeId, bool, usize)> {
+    fn lookup_record(&self, object_address: usize) -> Option<MarkRecord> {
         if let Some(object) = self.allocated_objects.get(&object_address) {
-            return Some((
-                object.span,
-                object.kind,
-                object.marked,
-                object.type_id,
-                object.is_slice_buffer,
-                object.slice_scan_end,
-            ));
+            let special = if self.allocated_channels.contains_key(&object_address) {
+                SpecialObject::Channel
+            } else if self.allocated_maps.contains(&object_address) {
+                SpecialObject::Map
+            } else {
+                SpecialObject::None
+            };
+            return Some(MarkRecord {
+                span: object.span,
+                kind: object.kind,
+                marked: object.marked,
+                special,
+            });
         }
-        let object = self.allocated_closures.get(&object_address)?;
-        Some((
-            object.span,
-            object.kind,
-            object.marked,
-            object.type_id,
-            object.is_slice_buffer,
-            object.slice_scan_end,
-        ))
+        if let Some(object) = self.allocated_closures.get(&object_address) {
+            return Some(MarkRecord {
+                span: object.span,
+                kind: object.kind,
+                marked: object.marked,
+                special: SpecialObject::Closure,
+            });
+        }
+        None
     }
 
     fn mark_object_as_marked(&mut self, object_address: usize) {
@@ -442,87 +842,123 @@ impl ObjectAllocatorInner {
             object.marked = true;
         }
     }
+}
 
-    #[cfg(test)]
-    fn slice_scan_end_of(&self, address: usize) -> usize {
-        self.allocated_objects
-            .get(&address)
-            .map(|object| object.slice_scan_end)
-            .expect("object not found")
-    }
+/// Placeholder so the compiler and readers keep the strided sizes consistent
+/// with the C lay-out: a slice header is 3 words, a string is 2 words.
+/// A snapshot of an allocation taken before it is marked, so that the mark
+/// can continue without holding a borrow of the allocation map.
+#[derive(Clone, Copy)]
+struct MarkRecord {
+    span: Span,
+    kind: AllocationKind,
+    marked: bool,
+    special: SpecialObject,
+}
 
-    /// Records that the slice view ending at `absolute_end` (absolute address
-    /// into the heap) has become accessible. `interior_addr` is any live
-    /// pointer into the buffer (typically the descriptor's `addr`), which is
-    /// resolved to the buffer's base object. The stored scan end is a monotone
-    /// high-water mark clamped to the allocation size: it never shrinks, so any
-    /// still-live sub-slice that extended the buffer keeps its coverage.
-    fn set_slice_scan_end(&mut self, interior_addr: usize, absolute_end: usize) {
-        let Some(base) = self.containing_object(interior_addr) else {
-            return;
-        };
-        let object = self
-            .allocated_objects
-            .get_mut(&base)
-            .expect("containing_object returned an address that is not in the map");
-        if !object.is_slice_buffer || object.kind != AllocationKind::Heap {
-            return;
-        }
-        let new_end = absolute_end.saturating_sub(base).min(object.span.size);
-        if new_end > object.slice_scan_end {
-            object.slice_scan_end = new_end;
+impl ObjectAllocatorInner {
+    fn mark_typed_offset(&mut self, offset: usize, size: usize, typ: TypeId, kind: i32) {
+        let word_size = mem::size_of::<usize>();
+        match kind {
+            GC_SLOT_POINTER => {
+                let pointed_to = typ;
+                let mut address = offset;
+                let end = offset.saturating_add(size);
+                while address + word_size <= end {
+                    self.mark_pointer_field(address, pointed_to);
+                    address += word_size;
+                }
+            }
+            GC_SLOT_SLICE => {
+                let mut address = offset;
+                let end = offset.saturating_add(size);
+                while address + SLICE_HEADER_SIZE <= end {
+                    self.mark_slice_header(address, typ);
+                    address += SLICE_HEADER_SIZE;
+                }
+            }
+            GC_SLOT_INTERFACE => {
+                let mut address = offset;
+                let end = offset.saturating_add(size);
+                while address + mem::size_of::<Interface>() <= end {
+                    self.mark_interface_value(address);
+                    address += mem::size_of::<Interface>();
+                }
+            }
+            GC_SLOT_STRING => {
+                let mut address = offset;
+                let end = offset.saturating_add(size);
+                while address + STRING_SIZE <= end {
+                    self.mark_raw_word(address);
+                    address += STRING_SIZE;
+                }
+            }
+            GC_SLOT_FUNCTION => {
+                let mut address = offset;
+                let end = offset.saturating_add(size);
+                while address + word_size <= end {
+                    self.mark_function_field(address);
+                    address += word_size;
+                }
+            }
+            GC_SLOT_DEFER_STACK => {
+                let word = unsafe { ptr::read_unaligned(offset as *const usize) };
+                if let Some(object_address) = self.resolve_any(word) {
+                    self.mark_object(object_address);
+                }
+            }
+            GC_SLOT_RAW => self.mark_range_raw(offset, offset + size),
+            // An unknown slot kind is scanned conservatively rather than
+            // skipped: the whole point of a raw run is that nothing is known.
+            _ => self.mark_range_raw(offset, offset + size),
         }
     }
 }
 
-/// Visitor passed to a generated get_member_offset_runs function: marks every
-/// (offset, size) member range it is handed.
-extern "C" fn mark_range_visitor(offset: usize, size: usize, arg: *mut ffi::c_void) {
+/// Visitor passed to a generated get_member_offset_runs function: it marks the
+/// reported typed slot. `kind` is a GCSlotKind and `typ` its accompanying
+/// TypeId (the pointee for pointer runs, the element type for slice runs).
+extern "C" fn mark_typed_visitor(
+    offset: usize,
+    size: usize,
+    typ: TypeId,
+    kind: i32,
+    arg: *mut ffi::c_void,
+) {
     let inner = unsafe { &mut *(arg as *mut ObjectAllocatorInner) };
-    inner.mark_range(offset, offset + size);
+    inner.mark_typed_offset(offset, size, typ, kind);
 }
+
+// Keep the compiler honest about the visitor signature (a null fn item). The
+// real signature is declared in type_id.rs and mirrored in predefined.h.
+const _: TypeOffsetVisitor = mark_typed_visitor;
 
 #[derive(Clone)]
 pub(crate) struct ObjectAllocatorPtr(*mut ObjectAllocatorInner);
 
 impl ObjectAllocatorPtr {
-    pub(crate) fn allocate(&self, size: usize, type_id: TypeId) -> *mut () {
-        unsafe { &mut *self.0 }.allocate(size, type_id)
+    pub(crate) fn allocate(&self, size: usize) -> *mut () {
+        unsafe { &mut *self.0 }.allocate(size)
     }
 
     pub(crate) fn allocate_closure(&self, size: usize) -> *mut () {
         unsafe { &mut *self.0 }.allocate_closure(size)
     }
 
-    pub(crate) fn allocate_slice_buffer(
-        &self,
-        size: usize,
-        type_id: TypeId,
-        accessible_bytes: usize,
-    ) -> *mut () {
-        unsafe { &mut *self.0 }.allocate_slice_buffer(size, type_id, accessible_bytes)
-    }
-
-    pub(crate) fn set_slice_scan_end(&self, interior_addr: usize, absolute_end: usize) {
-        unsafe { &mut *self.0 }.set_slice_scan_end(interior_addr, absolute_end);
-    }
-
-    /// Test-only: scan_end recorded for the object at `object_address`.
-    #[cfg(test)]
-    pub(crate) fn slice_scan_end(&self, object_address: usize) -> usize {
-        unsafe { &mut *self.0 }
-            .allocated_objects
-            .get(&object_address)
-            .map(|object| object.slice_scan_end)
-            .expect("object not found")
-    }
-
     pub(crate) fn allocate_guarded_pages(&self, num_pages: usize) -> *mut () {
-        unsafe { &mut *self.0 }.allocate_guarded_pages(num_pages, TypeId::new_invalid())
+        unsafe { &mut *self.0 }.allocate_guarded_pages(num_pages)
     }
 
-    pub(crate) fn register_global_object(&self, address: *mut (), size: usize) {
-        unsafe { &mut *self.0 }.register_global_object(address, size);
+    pub(crate) fn register_global_object(&self, address: *mut (), size: usize, type_id: TypeId) {
+        unsafe { &mut *self.0 }.register_global_object(address, size, type_id);
+    }
+
+    pub(crate) fn register_channel(&self, address: usize, elem_type: TypeId) {
+        unsafe { &mut *self.0 }.register_channel(address, elem_type);
+    }
+
+    pub(crate) fn register_map(&self, address: usize) {
+        unsafe { &mut *self.0 }.register_map(address);
     }
 
     pub(crate) fn run_gc(&self, contexts: &[&LightWeightThreadContext]) {
@@ -545,19 +981,36 @@ impl ObjectAllocatorPtr {
             .allocated_objects
             .contains_key(&(ptr as usize))
     }
+
+    #[cfg(test)]
+    pub(crate) fn contains_closure(&self, ptr: *mut ()) -> bool {
+        unsafe { &*self.0 }
+            .allocated_closures
+            .contains_key(&(ptr as usize))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn registered_channels_len(&self) -> usize {
+        unsafe { &*self.0 }.allocated_channels.len()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn registered_maps_len(&self) -> usize {
+        unsafe { &*self.0 }.allocated_maps.len()
+    }
 }
 
 unsafe impl Allocator for ObjectAllocatorPtr {
     fn allocate(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
         let ptr = if layout.align() <= ALLOCATION_ALIGNMENT {
-            let ptr = self.allocate(layout.size(), TypeId::new_invalid());
+            let ptr = self.allocate(layout.size());
             if ptr.is_null() {
                 return Err(AllocError);
             }
             ptr
         } else {
             let total = layout.size() + layout.align();
-            let base = self.allocate(total, TypeId::new_invalid());
+            let base = self.allocate(total);
             if base.is_null() {
                 return Err(AllocError);
             }
@@ -576,727 +1029,752 @@ unsafe impl Allocator for ObjectAllocatorPtr {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::FunctionObject;
+    use crate::ObjectAllocator;
+    use crate::ObjectPtr;
     use crate::StackFrameCommon;
 
-    fn data_ptr(slice: NonNull<[u8]>) -> NonNull<u8> {
-        unsafe { NonNull::new_unchecked(slice.as_ptr() as *mut u8) }
+    /// Where a generated frame keeps its first local: just past the header
+    /// every frame starts with. The stack map generators below list their
+    /// member there, so a test that fills a listed member must not scribble on
+    /// the header, whose words the frame walk itself reads.
+    const FRAME_LOCAL_OFFSET: usize = mem::size_of::<StackFrameCommon>();
+    const FRAME_LOCAL_WORD: usize = FRAME_LOCAL_OFFSET / mem::size_of::<usize>();
+    use crate::UserFunction;
+    use crate::global_context;
+    use crate::light_weight_thread::LightWeightThreadContext;
+    use crate::object::channel::ChannelObject;
+    use crate::object::map::MapObject;
+    use crate::object::string::StringObject;
+    use crate::type_id::FakeTypeInfo;
+    use crate::type_id::TYPE_INFO_MAGIC;
+    use crate::type_id::TypeInfo;
+    use crate::type_id::TypeKind;
+    use std::sync::OnceLock;
+
+    /// The pointee type of a `*Node` slot, needed by the generators below
+    /// (which cannot capture anything).
+    static NODE_TID: OnceLock<TypeId> = OnceLock::new();
+
+    extern "C" fn node_generator(visit: TypeOffsetVisitor, base: usize, arg: *mut ffi::c_void) {
+        let node = *NODE_TID.get().unwrap();
+        visit(base, mem::size_of::<usize>(), node, GC_SLOT_POINTER, arg);
     }
 
-    #[test]
-    fn test_allocation_backing_store_is_16_aligned() {
-        assert_eq!(mem::align_of::<u128>(), ALLOCATION_ALIGNMENT);
-    }
-
-    #[test]
-    fn test_allocate_returns_allocation_aligned() {
-        let mut _object_allocator = ObjectAllocator::new();
-        let allocator = _object_allocator.ptr();
-        let layout = Layout::from_size_align(24, 8).unwrap();
-        let ptr = Allocator::allocate(&allocator, layout).unwrap();
-        assert_eq!(ptr.len(), 24);
-        assert_eq!(data_ptr(ptr).as_ptr() as usize % ALLOCATION_ALIGNMENT, 0);
-    }
-
-    #[test]
-    fn test_allocate_within_allocation_alignment() {
-        let mut _object_allocator = ObjectAllocator::new();
-        let allocator = _object_allocator.ptr();
-        let layout = Layout::from_size_align(32, 16).unwrap();
-        let ptr = Allocator::allocate(&allocator, layout).unwrap();
-        assert_eq!(ptr.len(), 32);
-        assert_eq!(data_ptr(ptr).as_ptr() as usize % ALLOCATION_ALIGNMENT, 0);
-    }
-
-    #[test]
-    fn test_allocate_above_allocation_alignment() {
-        let mut _object_allocator = ObjectAllocator::new();
-        let allocator = _object_allocator.ptr();
-        let layout = Layout::from_size_align(64, 32).unwrap();
-        let ptr = Allocator::allocate(&allocator, layout).unwrap();
-        assert_eq!(ptr.len(), 64);
-        assert_eq!(data_ptr(ptr).as_ptr() as usize % 32, 0);
-    }
-
-    #[test]
-    fn test_deallocate_does_nothing() {
-        let mut _object_allocator = ObjectAllocator::new();
-        let allocator = _object_allocator.ptr();
-        let layout = Layout::from_size_align(16, 8).unwrap();
-        let ptr = Allocator::allocate(&allocator, layout).unwrap();
-        unsafe {
-            Allocator::deallocate(&allocator, data_ptr(ptr), layout);
-        }
-    }
-
-    #[test]
-    fn test_register_global_object() {
-        let mut inner = ObjectAllocatorInner::new();
-        let mut data = [0u8; 24];
-        let address = data.as_mut_ptr() as *mut ();
-        inner.register_global_object(address, data.len());
-        assert_eq!(inner.global_spans.len(), 1);
-        let registered = &inner.global_spans[0];
-        assert_eq!(registered.ptr, address);
-        assert_eq!(registered.size, data.len());
-        assert!(inner.allocated_objects.is_empty());
-    }
-
-    #[test]
-    fn test_sweep_frees_unmarked_objects() {
-        let mut inner = ObjectAllocatorInner::new();
-        let marked_ptr = inner.allocate(16, TypeId::new_invalid());
-        let unmarked_ptr = inner.allocate(16, TypeId::new_invalid());
-        assert!(!marked_ptr.is_null());
-        assert!(!unmarked_ptr.is_null());
-        inner
-            .allocated_objects
-            .get_mut(&(marked_ptr as usize))
-            .unwrap()
-            .marked = true;
-        inner.sweep();
-        assert!(inner.allocated_objects.contains_key(&(marked_ptr as usize)));
-        assert!(
-            !inner
-                .allocated_objects
-                .contains_key(&(unmarked_ptr as usize))
+    /// A struct whose only pointer-bearing member is the frame's first local.
+    extern "C" fn offset8_generator(visit: TypeOffsetVisitor, base: usize, arg: *mut ffi::c_void) {
+        let node = *NODE_TID.get().unwrap();
+        visit(
+            base + FRAME_LOCAL_OFFSET,
+            mem::size_of::<usize>(),
+            node,
+            GC_SLOT_POINTER,
+            arg,
         );
-        inner.free_all_allocated_objects();
     }
 
-    #[test]
-    fn test_free_all_allocated_objects_clears_marks() {
-        let mut inner = ObjectAllocatorInner::new();
-        let ptr = inner.allocate(16, TypeId::new_invalid());
-        inner
-            .allocated_objects
-            .get_mut(&(ptr as usize))
-            .unwrap()
-            .marked = true;
-        inner.free_all_allocated_objects();
-        assert!(inner.allocated_objects.is_empty());
-    }
-
-    #[test]
-    fn test_total_size_tracks_allocate_and_free() {
-        let mut inner = ObjectAllocatorInner::new();
-        let a = inner.allocate(16, TypeId::new_invalid());
-        let b = inner.allocate(32, TypeId::new_invalid());
-        assert!(!a.is_null());
-        assert!(!b.is_null());
-        assert_eq!(inner.total_size, 16 + 32);
-        inner
-            .allocated_objects
-            .get_mut(&(a as usize))
-            .unwrap()
-            .marked = true;
-        inner.sweep();
-        assert_eq!(inner.total_size, 16);
-        inner.free_all_allocated_objects();
-        assert_eq!(inner.total_size, 0);
-    }
-
-    #[test]
-    fn test_allocate_returns_null_above_limit() {
-        let mut inner = ObjectAllocatorInner::new();
-        while !inner.allocate(65536, TypeId::new_invalid()).is_null() {}
-        assert!(inner.total_size <= MAX_TOTAL_ALLOCATED_SIZE);
-        assert!(inner.allocate(65536, TypeId::new_invalid()).is_null());
-        inner.free_all_allocated_objects();
-        assert_eq!(inner.total_size, 0);
-    }
-
-    #[test]
-    fn test_mark_marks_reachable_digraph() {
-        let mut inner = ObjectAllocatorInner::new();
-        let root = Box::into_raw(Box::new(0usize));
-        inner.register_global_object(root as *mut (), mem::size_of::<usize>());
-        let a = inner.allocate(64, TypeId::new_invalid());
-        let b = inner.allocate(64, TypeId::new_invalid());
-        let c = inner.allocate(64, TypeId::new_invalid());
-        let garbage = inner.allocate(64, TypeId::new_invalid());
-        unsafe {
-            root.write(a as usize);
-            ptr::write(a as *mut usize, b as usize);
-            ptr::write(b as *mut usize, c as usize);
-        }
-        inner.run_gc(&[]);
-        assert!(inner.allocated_objects.contains_key(&(a as usize)));
-        assert!(inner.allocated_objects.contains_key(&(b as usize)));
-        assert!(inner.allocated_objects.contains_key(&(c as usize)));
-        assert!(!inner.allocated_objects.contains_key(&(garbage as usize)));
-        inner.free_all_allocated_objects();
-        unsafe {
-            let _ = Box::from_raw(root);
-        }
-    }
-
-    fn new_test_context() -> LightWeightThreadContext {
-        let gc = crate::global_context::create_global_context(crate::ObjectAllocator::new());
-        crate::create_light_weight_thread_context(
-            gc.dupulicate(),
-            crate::FunctionObject::new_null(),
-        )
-    }
-
-    // Pushes a frame of `size` bytes and returns its address. The bottom frame
-    // links to itself, exactly like the one the runtime bootstrap pushes, so
-    // that the frame walk has a frame to stop at.
-    fn push_test_frame(ctx: &mut LightWeightThreadContext, size: usize) -> usize {
-        if ctx.is_stack_empty() {
-            ctx.grow_stack(mem::size_of::<usize>());
-            let address = ctx.stack_pointer();
-            ctx.push_frame(size, address, None, &[], crate::FunctionObject::new_null());
-            return address as usize;
-        }
-        let prev_stack_pointer = ctx.stack_pointer();
-        ctx.grow_stack(size);
-        ctx.push_frame(
-            size,
-            prev_stack_pointer,
-            None,
-            &[],
-            crate::FunctionObject::new_null(),
-        );
-        ctx.stack_pointer() as usize
-    }
-
-    // A stack map that reports the single word at offset 64 of a frame, which
-    // is past the StackFrameCommon header.
-    extern "C" fn test_frame_generator(
-        visit: crate::type_id::TypeOffsetVisitor,
+    /// A frame-shaped type whose only member is an interface value.
+    extern "C" fn interface_frame_generator(
+        visit: TypeOffsetVisitor,
         base: usize,
         arg: *mut ffi::c_void,
     ) {
-        visit(base + 64, 8, arg);
-    }
-
-    #[test]
-    fn test_mark_scans_every_live_stack_frame() {
-        let mut inner = ObjectAllocatorInner::new();
-        let kept_by_inner = inner.allocate(64, TypeId::new_invalid());
-        let kept_by_outer = inner.allocate(64, TypeId::new_invalid());
-        let garbage = inner.allocate(64, TypeId::new_invalid());
-        let mut ctx = new_test_context();
-        let outer = push_test_frame(&mut ctx, 64);
-        let inner_frame = push_test_frame(&mut ctx, 64);
-        unsafe {
-            ptr::write(outer as *mut usize, kept_by_outer as usize);
-            ptr::write(inner_frame as *mut usize, kept_by_inner as usize);
-        }
-        inner.run_gc(&[&ctx]);
-        assert!(
-            inner
-                .allocated_objects
-                .contains_key(&(kept_by_inner as usize))
-        );
-        assert!(
-            inner
-                .allocated_objects
-                .contains_key(&(kept_by_outer as usize))
-        );
-        assert!(!inner.allocated_objects.contains_key(&(garbage as usize)));
-        inner.free_all_allocated_objects();
-    }
-
-    #[test]
-    fn test_mark_scans_a_frame_only_where_its_stack_map_says() {
-        let mut inner = ObjectAllocatorInner::new();
-        let kept = inner.allocate(64, TypeId::new_invalid());
-        let garbage = inner.allocate(64, TypeId::new_invalid());
-        let fake = crate::type_id::FakeTypeInfo::new_with_get_member_offset_runs(
-            false,
-            Some(test_frame_generator),
-        );
-        let mut ctx = new_test_context();
-        let frame = push_test_frame(&mut ctx, 128);
-        ctx.stack_frame_mut::<StackFrameCommon>().frame_type = fake.tid();
-        unsafe {
-            // The stack map of the frame reports the word at offset 64 only, so
-            // the one at offset 0 has to be ignored.
-            ptr::write((frame + 64) as *mut usize, kept as usize);
-            ptr::write(frame as *mut usize, garbage as usize);
-        }
-        inner.run_gc(&[&ctx]);
-        assert!(inner.allocated_objects.contains_key(&(kept as usize)));
-        assert!(!inner.allocated_objects.contains_key(&(garbage as usize)));
-        inner.free_all_allocated_objects();
-    }
-
-    #[test]
-    fn test_mark_ignores_one_past_the_end_pointer() {
-        let mut inner = ObjectAllocatorInner::new();
-        let a = inner.allocate(16, TypeId::new_invalid());
-        let root_holding = Box::into_raw(Box::new(a as usize + 16));
-        inner.register_global_object(root_holding as *mut (), mem::size_of::<usize>());
-        inner.run_gc(&[]);
-        assert!(!inner.allocated_objects.contains_key(&(a as usize)));
-        inner.free_all_allocated_objects();
-        unsafe {
-            let _ = Box::from_raw(root_holding);
-        }
-    }
-
-    #[test]
-    fn test_mark_skips_no_pointer_object_interior() {
-        let mut inner = ObjectAllocatorInner::new();
-        let root = Box::into_raw(Box::new(0usize));
-        inner.register_global_object(root as *mut (), mem::size_of::<usize>());
-        let fake = crate::type_id::FakeTypeInfo::new(true);
-        let held_object = inner.allocate(64, fake.tid());
-        let garbage = inner.allocate(64, TypeId::new_invalid());
-        unsafe {
-            root.write(held_object as usize);
-            ptr::write(held_object as *mut usize, garbage as usize);
-        }
-        inner.run_gc(&[]);
-        assert!(
-            inner
-                .allocated_objects
-                .contains_key(&(held_object as usize))
-        );
-        assert!(!inner.allocated_objects.contains_key(&(garbage as usize)));
-        inner.free_all_allocated_objects();
-        unsafe {
-            let _ = Box::from_raw(root);
-        }
-    }
-
-    #[test]
-    fn test_mark_scans_pointer_bearing_object_interior() {
-        let mut inner = ObjectAllocatorInner::new();
-        let root = Box::into_raw(Box::new(0usize));
-        inner.register_global_object(root as *mut (), mem::size_of::<usize>());
-        let fake = crate::type_id::FakeTypeInfo::new(false);
-        let held_object = inner.allocate(64, fake.tid());
-        let garbage = inner.allocate(64, TypeId::new_invalid());
-        unsafe {
-            root.write(held_object as usize);
-            ptr::write(held_object as *mut usize, garbage as usize);
-        }
-        inner.run_gc(&[]);
-        assert!(
-            inner
-                .allocated_objects
-                .contains_key(&(held_object as usize))
-        );
-        assert!(inner.allocated_objects.contains_key(&(garbage as usize)));
-        inner.free_all_allocated_objects();
-        unsafe {
-            let _ = Box::from_raw(root);
-        }
-    }
-
-    extern "C" fn test_generator_offset_32(
-        visit: crate::type_id::TypeOffsetVisitor,
-        base: usize,
-        arg: *mut ffi::c_void,
-    ) {
-        visit(base + 32, 8, arg);
-    }
-
-    #[test]
-    fn test_mark_scans_only_listed_member_offsets() {
-        let mut inner = ObjectAllocatorInner::new();
-        let root = Box::into_raw(Box::new(0usize));
-        inner.register_global_object(root as *mut (), mem::size_of::<usize>());
-        let fake = crate::type_id::FakeTypeInfo::new_with_get_member_offset_runs(
-            false,
-            Some(test_generator_offset_32),
-        );
-        let held_object = inner.allocate(64, fake.tid());
-        let at_listed_offset = inner.allocate(64, TypeId::new_invalid());
-        let at_unlisted_offset = inner.allocate(64, TypeId::new_invalid());
-        unsafe {
-            root.write(held_object as usize);
-            ptr::write(
-                (held_object as usize + 32) as *mut usize,
-                at_listed_offset as usize,
-            );
-            ptr::write(held_object as *mut usize, at_unlisted_offset as usize);
-        }
-        inner.run_gc(&[]);
-        assert!(
-            inner
-                .allocated_objects
-                .contains_key(&(held_object as usize))
-        );
-        assert!(
-            inner
-                .allocated_objects
-                .contains_key(&(at_listed_offset as usize))
-        );
-        assert!(
-            !inner
-                .allocated_objects
-                .contains_key(&(at_unlisted_offset as usize))
-        );
-        inner.free_all_allocated_objects();
-        unsafe {
-            let _ = Box::from_raw(root);
-        }
-    }
-
-    extern "C" fn test_generator_offset_16(
-        visit: crate::type_id::TypeOffsetVisitor,
-        base: usize,
-        arg: *mut ffi::c_void,
-    ) {
-        visit(base + 16, 8, arg);
-    }
-
-    #[test]
-    fn test_mark_member_offsets_keep_transitive_targets() {
-        let mut inner = ObjectAllocatorInner::new();
-        let root = Box::into_raw(Box::new(0usize));
-        inner.register_global_object(root as *mut (), mem::size_of::<usize>());
-        let fake = crate::type_id::FakeTypeInfo::new_with_get_member_offset_runs(
-            false,
-            Some(test_generator_offset_16),
-        );
-        let held_object = inner.allocate(64, fake.tid());
-        let middle = inner.allocate(64, TypeId::new_invalid());
-        let leaf = inner.allocate(64, TypeId::new_invalid());
-        let garbage = inner.allocate(64, TypeId::new_invalid());
-        unsafe {
-            root.write(held_object as usize);
-            ptr::write((held_object as usize + 16) as *mut usize, middle as usize);
-            ptr::write(middle as *mut usize, leaf as usize);
-        }
-        inner.run_gc(&[]);
-        assert!(
-            inner
-                .allocated_objects
-                .contains_key(&(held_object as usize))
-        );
-        assert!(inner.allocated_objects.contains_key(&(middle as usize)));
-        assert!(inner.allocated_objects.contains_key(&(leaf as usize)));
-        assert!(!inner.allocated_objects.contains_key(&(garbage as usize)));
-        inner.free_all_allocated_objects();
-        unsafe {
-            let _ = Box::from_raw(root);
-        }
-    }
-
-    #[test]
-    fn test_mark_interface_object_marks_receiver_box() {
-        let mut inner = ObjectAllocatorInner::new();
-        let root = Box::into_raw(Box::new(0usize));
-        inner.register_global_object(root as *mut (), mem::size_of::<usize>());
-        let interface_type = crate::type_id::FakeTypeInfo::new_interface(false);
-        let receiver_box = inner.allocate(
-            mem::size_of::<crate::object::interface::Interface>(),
+        visit(
+            base + FRAME_LOCAL_OFFSET,
+            2 * mem::size_of::<usize>(),
             TypeId::new_invalid(),
+            GC_SLOT_INTERFACE,
+            arg,
         );
-        let garbage = inner.allocate(16, TypeId::new_invalid());
-        let interface_object = inner.allocate(
-            mem::size_of::<crate::object::interface::Interface>(),
-            interface_type.tid(),
+    }
+
+    /// A frame-shaped type whose only member is a slice header.
+    extern "C" fn slice_frame_generator(
+        visit: TypeOffsetVisitor,
+        base: usize,
+        arg: *mut ffi::c_void,
+    ) {
+        visit(
+            base + FRAME_LOCAL_OFFSET,
+            SLICE_HEADER_SIZE,
+            *NODE_TID.get().unwrap(),
+            GC_SLOT_SLICE,
+            arg,
         );
-        unsafe {
-            root.write(interface_object as usize);
-            ptr::write(interface_object as *mut usize, receiver_box as usize);
-        }
-        inner.run_gc(&[]);
-        assert!(
-            inner
-                .allocated_objects
-                .contains_key(&(interface_object as usize))
+    }
+
+    /// A frame-shaped type whose pointer-bearing member is the defer stack.
+    extern "C" fn defer_stack_generator(
+        visit: TypeOffsetVisitor,
+        base: usize,
+        arg: *mut ffi::c_void,
+    ) {
+        // The defer stack is a member of the frame, wherever it sits in it.
+        visit(
+            base + mem::offset_of!(crate::StackFrameCommon, defer_stack),
+            mem::size_of::<crate::DeferStack>(),
+            TypeId::new_invalid(),
+            GC_SLOT_DEFER_STACK,
+            arg,
         );
-        assert!(
-            inner
-                .allocated_objects
-                .contains_key(&(receiver_box as usize))
-        );
-        assert!(!inner.allocated_objects.contains_key(&(garbage as usize)));
-        inner.free_all_allocated_objects();
-        unsafe {
-            let _ = Box::from_raw(root);
+    }
+
+    struct TestTypes {
+        /// struct { p *Node }, one word.
+        node: FakeTypeInfo,
+        /// *struct { p *Node }
+        node_ptr: FakeTypeInfo,
+        /// An opaque pointer (a channel value, or a pointer to something whose
+        /// interior must not be traced).
+        opaque_ptr: FakeTypeInfo,
+        string: FakeTypeInfo,
+        interface: FakeTypeInfo,
+        function: FakeTypeInfo,
+        slice_of_node: FakeTypeInfo,
+        /// []*struct { p *Node }
+        slice_of_node_ptr: FakeTypeInfo,
+        /// struct { opaque, p *Node }: the pointer sits at offset 8.
+        offset8: FakeTypeInfo,
+        /// A defer-stack frame shape.
+        defer_frame: FakeTypeInfo,
+        /// A frame shape whose only member is a slice header.
+        slice_frame: FakeTypeInfo,
+        /// A frame shape whose only member is an interface value.
+        interface_frame: FakeTypeInfo,
+        /// 16 bytes without any pointer.
+        opaque_16: FakeTypeInfo,
+        /// *[]*Node, the type of a pointer to a slice header.
+        slice_of_node_ptr_ptr: FakeTypeInfo,
+    }
+
+    fn types() -> &'static TestTypes {
+        static TYPES: OnceLock<TestTypes> = OnceLock::new();
+        TYPES.get_or_init(|| {
+            let node = FakeTypeInfo::new_with(
+                TypeKind::StructArray,
+                TypeId::new_invalid(),
+                Some(node_generator),
+                16,
+            );
+            let node_tid = node.tid();
+            let _ = NODE_TID.set(node_tid);
+            let node_ptr = FakeTypeInfo::pointer(node_tid);
+            let opaque_ptr = FakeTypeInfo::pointer(TypeId::new_invalid());
+            let string = FakeTypeInfo::string();
+            let interface = FakeTypeInfo::interface_();
+            let function = FakeTypeInfo::function();
+            let slice_of_node = FakeTypeInfo::slice_of(node_tid);
+            let slice_of_node_ptr = FakeTypeInfo::slice_of(node_ptr.tid());
+            let offset8 = FakeTypeInfo::new_with(
+                TypeKind::StructArray,
+                TypeId::new_invalid(),
+                Some(offset8_generator),
+                16,
+            );
+            let defer_frame = FakeTypeInfo::new_with(
+                TypeKind::StructArray,
+                TypeId::new_invalid(),
+                Some(defer_stack_generator),
+                16,
+            );
+            let opaque_16 =
+                FakeTypeInfo::new_with(TypeKind::NoPointer, TypeId::new_invalid(), None, 16);
+            let slice_of_node_ptr_ptr = FakeTypeInfo::pointer(slice_of_node_ptr.tid());
+            let interface_frame = FakeTypeInfo::new_with(
+                TypeKind::StructArray,
+                TypeId::new_invalid(),
+                Some(interface_frame_generator),
+                2 * mem::size_of::<usize>(),
+            );
+            let slice_frame = FakeTypeInfo::new_with(
+                TypeKind::StructArray,
+                TypeId::new_invalid(),
+                Some(slice_frame_generator),
+                SLICE_HEADER_SIZE,
+            );
+            TestTypes {
+                node,
+                node_ptr,
+                opaque_ptr,
+                string,
+                interface,
+                function,
+                slice_of_node,
+                slice_of_node_ptr,
+                offset8,
+                defer_frame,
+                opaque_16,
+                slice_of_node_ptr_ptr,
+                slice_frame,
+                interface_frame,
+            }
+        })
+    }
+
+    unsafe extern "C" fn dummy_func(_ctx: &mut LightWeightThreadContext) -> FunctionObject {
+        FunctionObject::new_null()
+    }
+
+    fn create_ctx() -> (
+        LightWeightThreadContext,
+        crate::global_context::GlobalContextPtr,
+    ) {
+        let gc = global_context::create_global_context(ObjectAllocator::new());
+        let func = FunctionObject::new_null();
+        let ctx = crate::create_light_weight_thread_context(gc.dupulicate(), func);
+        (ctx, gc)
+    }
+
+    static TEST_KEY_NAME: [u8; 4] = *b"key\0";
+
+    extern "C" fn test_is_equal(a: ObjectPtr, b: ObjectPtr) -> bool {
+        unsafe { *(a.0 as *const u64) == *(b.0 as *const u64) }
+    }
+
+    extern "C" fn test_hash(a: ObjectPtr) -> usize {
+        unsafe { *(a.0 as *const u64) as usize }
+    }
+
+    /// A pointer-free 16-byte map key type with working hash/equal functions,
+    /// which a map needs in order to look an entry up.
+    fn map_key_type() -> TypeId {
+        static INSTANCE: OnceLock<TypeInfo> = OnceLock::new();
+        let info = INSTANCE.get_or_init(|| TypeInfo {
+            gc_magic: TYPE_INFO_MAGIC,
+            name: StringObject::new(TEST_KEY_NAME.as_ptr(), 3),
+            num_methods: 0,
+            interface_table: ptr::null(),
+            is_equal: test_is_equal,
+            hash: test_hash,
+            size: 16,
+            kind: TypeKind::NoPointer as i32,
+            pointed_to: TypeId::new_invalid(),
+            get_member_offset_runs: None,
+        });
+        TypeId::from_raw(info as *const TypeInfo as usize)
+    }
+
+    /// The little-endian bytes of a pointer, as a root slot.
+    fn word<T>(value: *const T) -> [u8; 8] {
+        (value as usize).to_le_bytes()
+    }
+
+    /// The little-endian bytes of an already raw word.
+    fn raw_word(value: usize) -> [u8; 8] {
+        value.to_le_bytes()
+    }
+
+    /// A `struct { p *Node }` object whose first word is `child`.
+    fn alloc_node(allocator: &ObjectAllocatorPtr, child: *mut ()) -> *mut () {
+        let node = allocator.allocate(16);
+        unsafe { (node as *mut usize).write(child as usize) };
+        node
+    }
+
+    /// The size of every global root slot used by these tests.
+    const ROOT_SLOT_SIZE: usize = 32;
+
+    /// Gives the storage of a global root back when it goes out of scope.
+    struct RootGuard(*mut [u8; ROOT_SLOT_SIZE]);
+
+    impl Drop for RootGuard {
+        fn drop(&mut self) {
+            unsafe {
+                drop(Box::from_raw(self.0));
+            }
         }
     }
 
-    #[test]
-    fn test_mark_interface_object_with_nil_receiver() {
-        let mut inner = ObjectAllocatorInner::new();
-        let root = Box::into_raw(Box::new(0usize));
-        inner.register_global_object(root as *mut (), mem::size_of::<usize>());
-        let interface_type = crate::type_id::FakeTypeInfo::new_interface(false);
-        let garbage = inner.allocate(16, TypeId::new_invalid());
-        let interface_object = inner.allocate(
-            mem::size_of::<crate::object::interface::Interface>(),
-            interface_type.tid(),
-        );
-        unsafe {
-            root.write(interface_object as usize);
-            ptr::write(interface_object as *mut usize, 0usize);
-        }
-        inner.run_gc(&[]);
-        assert!(
-            inner
-                .allocated_objects
-                .contains_key(&(interface_object as usize))
-        );
-        assert!(!inner.allocated_objects.contains_key(&(garbage as usize)));
-        inner.free_all_allocated_objects();
-        unsafe {
-            let _ = Box::from_raw(root);
-        }
+    /// Registers a value of type `typ` as a global root. The first word of
+    /// `bytes` is the root word (a pointer, a tagged function, ...).
+    ///
+    /// The storage has to outlive the collection, which the box does; keep the
+    /// returned guard alive until the test is done with the root.
+    fn register_root(allocator: &ObjectAllocatorPtr, typ: TypeId, bytes: &[u8]) -> RootGuard {
+        assert!(bytes.len() <= ROOT_SLOT_SIZE);
+        let mut storage = [0u8; ROOT_SLOT_SIZE];
+        storage[..bytes.len()].copy_from_slice(bytes);
+        let address = Box::leak(Box::new(storage));
+        allocator.register_global_object(address.as_mut_ptr() as *mut (), ROOT_SLOT_SIZE, typ);
+        RootGuard(address)
     }
 
     #[test]
-    fn test_mark_interface_object_receiver_no_pointer_interior_not_scanned() {
-        let mut inner = ObjectAllocatorInner::new();
-        let root = Box::into_raw(Box::new(0usize));
-        inner.register_global_object(root as *mut (), mem::size_of::<usize>());
-        let interface_type = crate::type_id::FakeTypeInfo::new_interface(false);
-        let no_pointer_type = crate::type_id::FakeTypeInfo::new(true);
-        let receiver_box = inner.allocate(16, no_pointer_type.tid());
-        let garbage = inner.allocate(16, TypeId::new_invalid());
-        let interface_object = inner.allocate(
-            mem::size_of::<crate::object::interface::Interface>(),
-            interface_type.tid(),
-        );
-        unsafe {
-            root.write(interface_object as usize);
-            ptr::write(interface_object as *mut usize, receiver_box as usize);
-            ptr::write(receiver_box as *mut usize, garbage as usize);
-        }
-        inner.run_gc(&[]);
-        assert!(
-            inner
-                .allocated_objects
-                .contains_key(&(interface_object as usize))
-        );
-        assert!(
-            inner
-                .allocated_objects
-                .contains_key(&(receiver_box as usize))
-        );
-        assert!(!inner.allocated_objects.contains_key(&(garbage as usize)));
-        inner.free_all_allocated_objects();
-        unsafe {
-            let _ = Box::from_raw(root);
-        }
+    fn test_allocate_rounds_size_up_and_registers_object() {
+        let allocator = ObjectAllocator::new();
+        let ptr = allocator.ptr().allocate(1);
+        assert!(!ptr.is_null());
+        assert!(allocator.ptr().contains(ptr));
+        assert!(!allocator.ptr().contains_closure(ptr));
     }
 
     #[test]
-    fn test_mark_interface_object_receiver_pointer_interior_scanned() {
-        let mut inner = ObjectAllocatorInner::new();
-        let root = Box::into_raw(Box::new(0usize));
-        inner.register_global_object(root as *mut (), mem::size_of::<usize>());
-        let interface_type = crate::type_id::FakeTypeInfo::new_interface(false);
-        let pointer_type = crate::type_id::FakeTypeInfo::new(false);
-        let receiver_box = inner.allocate(16, pointer_type.tid());
-        let garbage = inner.allocate(16, TypeId::new_invalid());
-        let interface_object = inner.allocate(
-            mem::size_of::<crate::object::interface::Interface>(),
-            interface_type.tid(),
-        );
-        unsafe {
-            root.write(interface_object as usize);
-            ptr::write(interface_object as *mut usize, receiver_box as usize);
-            ptr::write(receiver_box as *mut usize, garbage as usize);
-        }
-        inner.run_gc(&[]);
-        assert!(
-            inner
-                .allocated_objects
-                .contains_key(&(interface_object as usize))
-        );
-        assert!(
-            inner
-                .allocated_objects
-                .contains_key(&(receiver_box as usize))
-        );
-        assert!(inner.allocated_objects.contains_key(&(garbage as usize)));
-        inner.free_all_allocated_objects();
-        unsafe {
-            let _ = Box::from_raw(root);
-        }
+    fn test_allocate_returns_null_when_heap_is_exhausted() {
+        let allocator = ObjectAllocator::new();
+        while !allocator.ptr().allocate(65536).is_null() {}
+        assert!(allocator.ptr().allocate(65536).is_null());
     }
 
     #[test]
     fn test_allocate_closure_is_registered_apart_from_ordinary_objects() {
-        let mut inner = ObjectAllocatorInner::new();
-        let ptr = inner.allocate_closure(32);
-        assert!(!ptr.is_null());
-        // A closure is recorded in allocated_closures, not allocated_objects:
-        // its address (with the MSB set in FunctionObject form) must not be
-        // treated as an ordinary heap pointer.
-        let object = inner.allocated_closures.get(&(ptr as usize)).unwrap();
-        assert_eq!(object.kind, AllocationKind::Heap);
-        assert!(!inner.allocated_objects.contains_key(&(ptr as usize)));
-        let ordinary = inner.allocate(32, TypeId::new_invalid());
-        assert!(!inner.allocated_closures.contains_key(&(ordinary as usize)));
-        inner.free_all_allocated_objects();
+        let allocator = ObjectAllocator::new();
+        let closure = allocator.ptr().allocate_closure(32);
+        assert!(!closure.is_null());
+        assert!(!allocator.ptr().contains(closure));
+        assert!(allocator.ptr().contains_closure(closure));
+
+        let ordinary = allocator.ptr().allocate(32);
+        assert!(allocator.ptr().contains(ordinary));
+        assert!(!allocator.ptr().contains_closure(ordinary));
     }
 
     #[test]
-    fn test_mark_slice_buffer_scans_only_accessible_prefix() {
-        let mut inner = ObjectAllocatorInner::new();
-        let root = Box::into_raw(Box::new(0usize));
-        inner.register_global_object(root as *mut (), mem::size_of::<usize>());
-        let fake = crate::type_id::FakeTypeInfo::new(false);
-        let buffer = inner.allocate_slice_buffer(64, fake.tid(), 3 * 8);
-        let within = inner.allocate(64, TypeId::new_invalid());
-        let beyond = inner.allocate(64, TypeId::new_invalid());
-        unsafe {
-            root.write(buffer as usize);
-            ptr::write(buffer as *mut usize, within as usize);
-            ptr::write((buffer as usize + 3 * 8) as *mut usize, beyond as usize);
-        }
-        inner.run_gc(&[]);
-        assert!(inner.allocated_objects.contains_key(&(buffer as usize)));
-        assert!(inner.allocated_objects.contains_key(&(within as usize)));
-        // The tail entry (out of range: beyond the accessible prefix) is swept.
-        assert!(!inner.allocated_objects.contains_key(&(beyond as usize)));
-        inner.free_all_allocated_objects();
-        unsafe {
-            let _ = Box::from_raw(root);
-        }
-    }
-
-    extern "C" fn test_generator_offset_0(
-        visit: crate::type_id::TypeOffsetVisitor,
-        base: usize,
-        arg: *mut ffi::c_void,
-    ) {
-        visit(base, 8, arg);
-    }
-
-    #[test]
-    fn test_mark_slice_buffer_bypasses_element_generator() {
-        // A slice buffer must be scanned as a raw word range over the whole
-        // accessible prefix, NOT as a single element via the element type's
-        // get_member_offset_runs (which would scan just the first element).
-        let mut inner = ObjectAllocatorInner::new();
-        let root = Box::into_raw(Box::new(0usize));
-        inner.register_global_object(root as *mut (), mem::size_of::<usize>());
-        let gen_fake = crate::type_id::FakeTypeInfo::new_with_get_member_offset_runs(
-            false,
-            Some(test_generator_offset_0),
+    fn test_untyped_frame_is_scanned_conservatively() {
+        let (mut ctx, _gc) = create_ctx();
+        let allocator = ObjectAllocator::new();
+        let target = alloc_node(&allocator.ptr(), ptr::null_mut());
+        let frame_size = FRAME_LOCAL_OFFSET + 2 * mem::size_of::<usize>();
+        ctx.push_frame(
+            frame_size,
+            ctx.stack_pointer(),
+            None,
+            &[],
+            FunctionObject::new_null(),
         );
-        let buffer = inner.allocate_slice_buffer(64, gen_fake.tid(), 64);
-        let second_elem_target = inner.allocate(64, TypeId::new_invalid());
         unsafe {
-            root.write(buffer as usize);
-            ptr::write(
-                (buffer as usize + 16) as *mut usize,
-                second_elem_target as usize,
-            );
-        }
-        inner.run_gc(&[]);
-        assert!(
-            inner
-                .allocated_objects
-                .contains_key(&(second_elem_target as usize))
+            (ctx.stack_pointer() as *mut usize).write(target as usize);
+        };
+
+        allocator.ptr().run_gc(&[&ctx]);
+        assert!(allocator.ptr().contains(target));
+    }
+
+    #[test]
+    fn test_typed_global_pointer_traces_transitively() {
+        let allocator = ObjectAllocator::new();
+        let leaf = alloc_node(&allocator.ptr(), ptr::null_mut());
+        let child = alloc_node(&allocator.ptr(), leaf);
+        let root = alloc_node(&allocator.ptr(), child);
+        let _root = register_root(&allocator.ptr(), types().node_ptr.tid(), &word(root));
+
+        allocator.ptr().run_gc(&[]);
+        assert!(allocator.ptr().contains(root));
+        assert!(allocator.ptr().contains(child));
+        assert!(allocator.ptr().contains(leaf));
+    }
+
+    #[test]
+    fn test_no_pointer_global_interior_is_not_scanned() {
+        let allocator = ObjectAllocator::new();
+        let target = alloc_node(&allocator.ptr(), ptr::null_mut());
+        let _root = register_root(&allocator.ptr(), types().opaque_16.tid(), &word(target));
+
+        allocator.ptr().run_gc(&[]);
+        assert!(!allocator.ptr().contains(target));
+    }
+
+    #[test]
+    fn test_string_global_keeps_its_buffer() {
+        let allocator = ObjectAllocator::new();
+        let buffer = allocator.ptr().allocate(8);
+        unsafe { (buffer as *mut u8).write(0) };
+        let mut value = [0u8; 16];
+        value[..8].copy_from_slice(&word(buffer));
+        value[8..16].copy_from_slice(&4usize.to_le_bytes());
+        let _root = register_root(&allocator.ptr(), types().string.tid(), &value);
+
+        allocator.ptr().run_gc(&[]);
+        assert!(allocator.ptr().contains(buffer));
+    }
+
+    #[test]
+    fn test_slice_global_scans_only_the_accessible_prefix() {
+        let allocator = ObjectAllocator::new();
+        let len: usize = 2;
+        let cap: usize = 4;
+        let buffer = allocator.ptr().allocate(cap * mem::size_of::<usize>());
+        let alive = alloc_node(&allocator.ptr(), ptr::null_mut());
+        let beyond_len = alloc_node(&allocator.ptr(), ptr::null_mut());
+        unsafe {
+            (buffer as *mut usize).write(alive as usize);
+            ((buffer as *mut usize).add(2)).write(beyond_len as usize);
+        };
+
+        let mut header = [0u8; 24];
+        header[..8].copy_from_slice(&word(buffer));
+        header[8..16].copy_from_slice(&len.to_le_bytes());
+        header[16..24].copy_from_slice(&cap.to_le_bytes());
+        let _root = register_root(&allocator.ptr(), types().slice_of_node_ptr.tid(), &header);
+
+        allocator.ptr().run_gc(&[]);
+        // The buffer and the elements below len stay alive ...
+        assert!(allocator.ptr().contains(buffer));
+        assert!(allocator.ptr().contains(alive));
+        // ... while the element above len is not reachable through the slice.
+        assert!(!allocator.ptr().contains(beyond_len));
+    }
+
+    #[test]
+    fn test_slice_of_struct_elements_traces_their_members() {
+        let allocator = ObjectAllocator::new();
+        let leaf = alloc_node(&allocator.ptr(), ptr::null_mut());
+        let buffer = allocator.ptr().allocate(16);
+        unsafe { (buffer as *mut usize).write(leaf as usize) };
+
+        let mut header = [0u8; 24];
+        header[..8].copy_from_slice(&word(buffer));
+        header[8..16].copy_from_slice(&1usize.to_le_bytes());
+        header[16..24].copy_from_slice(&1usize.to_le_bytes());
+        let _root = register_root(&allocator.ptr(), types().slice_of_node.tid(), &header);
+
+        allocator.ptr().run_gc(&[]);
+        assert!(allocator.ptr().contains(buffer));
+        assert!(allocator.ptr().contains(leaf));
+    }
+
+    #[test]
+    fn test_interface_global_marks_receiver_and_its_members() {
+        let allocator = ObjectAllocator::new();
+        let leaf = alloc_node(&allocator.ptr(), ptr::null_mut());
+        let box_ptr = alloc_node(&allocator.ptr(), leaf);
+        let mut value = [0u8; 16];
+        value[..8].copy_from_slice(&word(box_ptr));
+        value[8..16].copy_from_slice(&raw_word(types().node.tid().to_raw()));
+        let _root = register_root(&allocator.ptr(), types().interface.tid(), &value);
+
+        allocator.ptr().run_gc(&[]);
+        assert!(allocator.ptr().contains(box_ptr));
+        assert!(allocator.ptr().contains(leaf));
+    }
+
+    #[test]
+    fn test_interface_global_with_pointer_free_receiver() {
+        let allocator = ObjectAllocator::new();
+        let box_ptr = allocator.ptr().allocate(8);
+        let mut value = [0u8; 16];
+        value[..8].copy_from_slice(&word(box_ptr));
+        value[8..16].copy_from_slice(&raw_word(types().opaque_16.tid().to_raw()));
+        let _root = register_root(&allocator.ptr(), types().interface.tid(), &value);
+
+        allocator.ptr().run_gc(&[]);
+        assert!(allocator.ptr().contains(box_ptr));
+    }
+
+    #[test]
+    fn test_function_global_marks_closure_with_typed_captures() {
+        let allocator = ObjectAllocator::new();
+        let leaf = alloc_node(&allocator.ptr(), ptr::null_mut());
+        let captured = alloc_node(&allocator.ptr(), leaf);
+        let layout = allocator
+            .ptr()
+            .allocate_closure(mem::size_of::<ClosureLayout>() + mem::size_of::<usize>())
+            as *mut ClosureLayout;
+        unsafe {
+            ptr::addr_of_mut!((*layout).capture_type).write(types().node.tid());
+            ptr::addr_of_mut!((*layout).func).write(UserFunction::new(dummy_func));
+            ptr::addr_of_mut!((*layout).object_ptrs)
+                .cast::<usize>()
+                .write(1);
+            let capture_data = (layout as *mut u8).add(mem::size_of::<ClosureLayout>());
+            (capture_data as *mut usize).write(captured as usize);
+        };
+
+        let function = FunctionObject::from_closure_layout_ptr(layout as *const ());
+        let _root = register_root(
+            &allocator.ptr(),
+            types().function.tid(),
+            &raw_word(function.0 as usize),
         );
-        inner.free_all_allocated_objects();
-        unsafe {
-            let _ = Box::from_raw(root);
-        }
+
+        allocator.ptr().run_gc(&[]);
+        assert!(allocator.ptr().contains_closure(layout as *mut ()));
+        assert!(allocator.ptr().contains(captured));
+        // The captured value is a *Node, so its own member is traced too.
+        assert!(allocator.ptr().contains(leaf));
     }
 
     #[test]
-    fn test_set_slice_scan_end_is_monotone_and_clamped() {
-        let mut inner = ObjectAllocatorInner::new();
-        let ptr = inner.allocate_slice_buffer(64, TypeId::new_invalid(), 16);
-        let base = ptr as usize;
-        assert_eq!(inner.slice_scan_end_of(base), 16);
-        // bump via an interior pointer within the buffer
-        inner.set_slice_scan_end(base + 8, base + 32);
-        assert_eq!(inner.slice_scan_end_of(base), 32);
-        // shrinking (a shorter sub-slice) never reduces the high-water mark
-        inner.set_slice_scan_end(base, base + 8);
-        assert_eq!(inner.slice_scan_end_of(base), 32);
-        // clamped to the allocation size
-        inner.set_slice_scan_end(base, base + 80);
-        assert_eq!(inner.slice_scan_end_of(base), 64);
-        // a non-slice allocation ignores bumps and keeps its full span
-        let other = inner.allocate(64, TypeId::new_invalid());
-        inner.set_slice_scan_end(other as usize, other as usize);
-        let other_obj = inner.allocated_objects.get(&(other as usize)).unwrap();
-        assert!(!other_obj.is_slice_buffer);
-        assert_eq!(other_obj.slice_scan_end, 64);
-        inner.free_all_allocated_objects();
+    fn test_channel_scan_keeps_buffered_values() {
+        let allocator = ObjectAllocator::new();
+        let ptr = allocator.ptr().allocate(mem::size_of::<ChannelObject>()) as *mut ChannelObject;
+        unsafe {
+            ptr::write(ptr, ChannelObject::new(2, &allocator.ptr()));
+        }
+        allocator
+            .ptr()
+            .register_channel(ptr as usize, types().node.tid());
+        let leaf = alloc_node(&allocator.ptr(), ptr::null_mut());
+        let data = alloc_node(&allocator.ptr(), leaf);
+        unsafe {
+            let channel = &mut *ptr;
+            assert_eq!(channel.send(1, ObjectPtr(data)), Some(()));
+        };
+
+        let _root = register_root(&allocator.ptr(), types().opaque_ptr.tid(), &word(ptr));
+
+        allocator.ptr().run_gc(&[]);
+        assert!(allocator.ptr().contains(data));
+        assert!(allocator.ptr().contains(leaf));
+        assert_eq!(allocator.ptr().registered_channels_len(), 1);
     }
 
     #[test]
-    fn test_mark_marks_tagged_closure_pointers() {
-        let mut inner = ObjectAllocatorInner::new();
-        let root = Box::into_raw(Box::new(0usize));
-        inner.register_global_object(root as *mut (), mem::size_of::<usize>());
-        let closure = inner.allocate_closure(64);
-        let garbage = inner.allocate(64, TypeId::new_invalid());
-        let base = closure as usize;
+    fn test_map_scan_keeps_entry_boxes() {
+        let allocator = ObjectAllocator::new();
+        let ptr = allocator.ptr().allocate(mem::size_of::<MapObject>()) as *mut MapObject;
+        MapObject::construct_in(ptr, map_key_type(), types().node.tid(), allocator.ptr());
+        allocator.ptr().register_map(ptr as usize);
+
+        let mut key = [0u64; 2];
+        key[0] = 7;
+        let leaf = alloc_node(&allocator.ptr(), ptr::null_mut());
+        let value = alloc_node(&allocator.ptr(), leaf);
         unsafe {
-            root.write(base | crate::FUNCTION_OBJECT_CLOSURE_FLAG);
-        }
-        inner.run_gc(&[]);
-        assert!(inner.allocated_closures.contains_key(&base));
-        assert!(!inner.allocated_objects.contains_key(&base));
-        assert!(!inner.allocated_objects.contains_key(&(garbage as usize)));
-        inner.free_all_allocated_objects();
-        unsafe {
-            let _ = Box::from_raw(root);
-        }
+            let map = &mut *ptr;
+            map.set(ObjectPtr(key.as_mut_ptr() as *mut ()), ObjectPtr(value));
+        };
+
+        let _root = register_root(&allocator.ptr(), types().opaque_ptr.tid(), &word(ptr));
+
+        allocator.ptr().run_gc(&[]);
+        assert_eq!(allocator.ptr().registered_maps_len(), 1);
+        assert!(allocator.ptr().contains(ptr as *mut ()));
+        // The value box copied by MapObject::set survived the collection, and
+        // because the map knows the value type, its member was traced too.
+        assert!(allocator.ptr().contains(leaf));
+
+        let mut out = [0u64; 2];
+        let map = unsafe { &*ptr };
+        assert!(map.get(
+            ObjectPtr(key.as_mut_ptr() as *mut ()),
+            ObjectPtr(out.as_mut_ptr() as *mut ()),
+        ));
+        assert_eq!(out[0] as usize, leaf as usize);
     }
 
     #[test]
-    fn test_mark_scans_tagged_closure_interior() {
-        let mut inner = ObjectAllocatorInner::new();
-        let root = Box::into_raw(Box::new(0usize));
-        inner.register_global_object(root as *mut (), mem::size_of::<usize>());
-        let closure = inner.allocate_closure(64);
-        let kept = inner.allocate(64, TypeId::new_invalid());
-        let garbage = inner.allocate(64, TypeId::new_invalid());
-        let base = closure as usize;
-        unsafe {
-            root.write(base | crate::FUNCTION_OBJECT_CLOSURE_FLAG);
-            ptr::write((base + 16) as *mut usize, kept as usize);
-        }
-        inner.run_gc(&[]);
-        assert!(inner.allocated_closures.contains_key(&base));
-        assert!(inner.allocated_objects.contains_key(&(kept as usize)));
-        assert!(!inner.allocated_objects.contains_key(&(garbage as usize)));
-        inner.free_all_allocated_objects();
-        unsafe {
-            let _ = Box::from_raw(root);
-        }
+    fn test_sweep_prunes_channel_and_map_registrations() {
+        let allocator = ObjectAllocator::new();
+        let channel = allocator.ptr().allocate(mem::size_of::<ChannelObject>());
+        allocator
+            .ptr()
+            .register_channel(channel as usize, types().node.tid());
+        let map = allocator.ptr().allocate(mem::size_of::<MapObject>());
+        allocator.ptr().register_map(map as usize);
+        assert_eq!(allocator.ptr().registered_channels_len(), 1);
+        assert_eq!(allocator.ptr().registered_maps_len(), 1);
+
+        allocator.ptr().run_gc(&[]);
+        assert_eq!(allocator.ptr().registered_channels_len(), 0);
+        assert_eq!(allocator.ptr().registered_maps_len(), 0);
+        assert!(!allocator.ptr().contains(channel));
+        assert!(!allocator.ptr().contains(map));
+    }
+
+    /// A pointer does not have to be the base of the allocation it points
+    /// into: it can be an interior address, which is how a `*[N]T` frame
+    /// temporary of a `make([]T, n)` ends up pointing into the goroutine
+    /// stack. Such a region is never scanned conservatively, so the pointee
+    /// has to be traced exactly where the pointer points. The first word of
+    /// the region is null, which makes a scan from the region's base find
+    /// nothing at all.
+    fn stack_region_with_value_at(allocator: &ObjectAllocatorPtr, offset: usize) -> *mut usize {
+        let region = allocator.allocate_guarded_pages(1);
+        unsafe { (region as *mut usize).write(0) };
+        unsafe { (region as *mut usize).add(offset) }
     }
 
     #[test]
-    fn test_mark_ignores_tagged_word_into_non_closure_object() {
-        let mut inner = ObjectAllocatorInner::new();
-        let root = Box::into_raw(Box::new(0usize));
-        inner.register_global_object(root as *mut (), mem::size_of::<usize>());
-        let object = inner.allocate(64, TypeId::new_invalid());
-        let garbage = inner.allocate(64, TypeId::new_invalid());
-        let base = object as usize;
+    fn test_pointer_to_interior_address_traces_the_value_there() {
+        let allocator = ObjectAllocator::new();
+        let leaf = alloc_node(&allocator.ptr(), ptr::null_mut());
+        let buffer = allocator.ptr().allocate(mem::size_of::<usize>());
+        unsafe { (buffer as *mut usize).write(leaf as usize) };
+        // A `[]*Node` header living inside the region instead of in an
+        // allocation of its own.
+        let header = stack_region_with_value_at(&allocator.ptr(), 256);
         unsafe {
-            root.write(base | crate::FUNCTION_OBJECT_CLOSURE_FLAG);
-        }
-        inner.run_gc(&[]);
-        assert!(!inner.allocated_objects.contains_key(&base));
-        assert!(!inner.allocated_objects.contains_key(&(garbage as usize)));
-        inner.free_all_allocated_objects();
-        unsafe {
-            let _ = Box::from_raw(root);
-        }
+            header.write(buffer as usize);
+            header.add(1).write(1);
+            header.add(2).write(1);
+        };
+        let _root = register_root(
+            &allocator.ptr(),
+            types().slice_of_node_ptr_ptr.tid(),
+            &word(header),
+        );
+
+        allocator.ptr().run_gc(&[]);
+        assert!(allocator.ptr().contains(buffer));
+        assert!(allocator.ptr().contains(leaf));
     }
 
     #[test]
-    fn test_grow() {
-        let mut _object_allocator = ObjectAllocator::new();
-        let allocator = _object_allocator.ptr();
-        let old_layout = Layout::from_size_align(16, 8).unwrap();
-        let new_layout = Layout::from_size_align(64, 8).unwrap();
-        let old = Allocator::allocate(&allocator, old_layout).unwrap();
+    fn test_pointer_to_interior_struct_field_traces_its_members() {
+        let allocator = ObjectAllocator::new();
+        let leaf = alloc_node(&allocator.ptr(), ptr::null_mut());
+        // A `*Node` pointing at a node that is embedded in the region: the
+        // node generator then finds the leaf at its own first word.
+        let inner = stack_region_with_value_at(&allocator.ptr(), 256);
+        unsafe { inner.write(leaf as usize) };
+        let _root = register_root(&allocator.ptr(), types().node_ptr.tid(), &word(inner));
+
+        allocator.ptr().run_gc(&[]);
+        assert!(allocator.ptr().contains(leaf));
+    }
+
+    /// Pushes a frame whose only listed member is a slice header, and fills
+    /// that header with `data` and `len`.
+    fn push_slice_frame(ctx: &mut LightWeightThreadContext, data: usize, len: usize) {
+        let frame_size = FRAME_LOCAL_OFFSET + SLICE_HEADER_SIZE;
+        ctx.push_frame(
+            frame_size,
+            ctx.stack_pointer(),
+            None,
+            &[],
+            FunctionObject::new_null(),
+        );
         unsafe {
-            data_ptr(old).as_ptr().write_bytes(0xab, old_layout.size());
-            let grown = Allocator::grow(&allocator, data_ptr(old), old_layout, new_layout).unwrap();
-            assert_eq!(grown.len(), 64);
-            let bytes = std::slice::from_raw_parts(data_ptr(grown).as_ptr(), old_layout.size());
-            assert!(bytes.iter().all(|&b| b == 0xab));
+            let frame = (ctx.stack_pointer() as *mut usize).add(FRAME_LOCAL_WORD);
+            frame.write(data);
+            frame.add(1).write(len);
+            frame.add(2).write(len);
         }
+        ctx.stack_frame_mut::<StackFrameCommon>().frame_type = types().slice_frame.tid();
+    }
+
+    /// Pushes a frame whose only listed member is an interface value, holding
+    /// `receiver` and `type_word`.
+    fn push_interface_frame(ctx: &mut LightWeightThreadContext, receiver: usize, type_word: usize) {
+        ctx.push_frame(
+            FRAME_LOCAL_OFFSET + 2 * mem::size_of::<usize>(),
+            ctx.stack_pointer(),
+            None,
+            &[],
+            FunctionObject::new_null(),
+        );
+        unsafe {
+            let frame = (ctx.stack_pointer() as *mut usize).add(FRAME_LOCAL_WORD);
+            frame.write(receiver);
+            frame.add(1).write(type_word);
+        }
+        ctx.stack_frame_mut::<StackFrameCommon>().frame_type = types().interface_frame.tid();
+    }
+
+    #[test]
+    fn test_interface_slot_with_a_garbage_type_word_keeps_the_receiver() {
+        let (mut ctx, _gc) = create_ctx();
+        let allocator = ObjectAllocator::new();
+        let receiver = alloc_node(&allocator.ptr(), ptr::null_mut());
+        // Frames are reused, so an interface-typed slot can still hold the
+        // words of an older call. The receiver is still a live object and has
+        // to be kept; the type word is not a TypeId and must not be used.
+        push_interface_frame(&mut ctx, receiver as usize, 0x5d64936eccaa);
+
+        allocator.ptr().run_gc(&[&ctx]);
+        assert!(allocator.ptr().contains(receiver));
+    }
+
+    #[test]
+    fn test_slice_slot_of_unwritten_frame_is_ignored() {
+        let (mut ctx, _gc) = create_ctx();
+        let allocator = ObjectAllocator::new();
+        // Frames are reused, so a slot can still hold the words of an older
+        // call. A length read from such a slot must not be believed.
+        push_slice_frame(&mut ctx, 0x1_0000_0000, 1 << 40);
+
+        allocator.ptr().run_gc(&[&ctx]);
+    }
+
+    #[test]
+    fn test_slice_scan_is_clamped_to_the_buffer_allocation() {
+        let (mut ctx, _gc) = create_ctx();
+        let allocator = ObjectAllocator::new();
+        let buffer = alloc_node(&allocator.ptr(), ptr::null_mut());
+        let beyond = alloc_node(&allocator.ptr(), ptr::null_mut());
+        // The length claims far more elements than the 16-byte allocation
+        // holds, so only the allocation itself may be scanned.
+        push_slice_frame(&mut ctx, buffer as usize, 512);
+
+        allocator.ptr().run_gc(&[&ctx]);
+        assert!(allocator.ptr().contains(buffer));
+        assert!(!allocator.ptr().contains(beyond));
+    }
+
+    #[test]
+    fn test_typed_stack_frame_scans_only_listed_slots() {
+        let (mut ctx, _gc) = create_ctx();
+        let allocator = ObjectAllocator::new();
+        let listed = alloc_node(&allocator.ptr(), ptr::null_mut());
+        let unlisted = alloc_node(&allocator.ptr(), ptr::null_mut());
+        let frame_size = 2 * mem::size_of::<usize>();
+        ctx.push_frame(
+            frame_size,
+            ctx.stack_pointer(),
+            None,
+            &[],
+            FunctionObject::new_null(),
+        );
+        unsafe {
+            let frame = (ctx.stack_pointer() as *mut usize).add(FRAME_LOCAL_WORD);
+            // The first local is the pointer-bearing member the frame type
+            // lists, the one after it is not listed.
+            frame.write(listed as usize);
+            frame.add(1).write(unlisted as usize);
+        }
+        ctx.stack_frame_mut::<StackFrameCommon>().frame_type = types().offset8.tid();
+
+        allocator.ptr().run_gc(&[&ctx]);
+        assert!(allocator.ptr().contains(listed));
+        assert!(!allocator.ptr().contains(unlisted));
+    }
+
+    #[test]
+    fn test_defer_stack_slot_keeps_the_entry_and_its_arguments() {
+        let (mut ctx, _gc) = create_ctx();
+        let allocator = ObjectAllocator::new();
+        let argument = alloc_node(&allocator.ptr(), ptr::null_mut());
+        // A defer stack entry: next link, function, and the argument words of
+        // the deferred call.
+        let entry = allocator.ptr().allocate(3 * mem::size_of::<usize>());
+        unsafe {
+            (entry as *mut usize).write(0);
+            ((entry as *mut usize).add(1)).write(0);
+            ((entry as *mut usize).add(2)).write(argument as usize);
+        };
+
+        // The bottom frame links to itself, so the walk ends on it, and the
+        // defer stack of the frame under test hangs its one entry off.
+        ctx.push_frame(
+            mem::size_of::<StackFrameCommon>(),
+            ctx.stack_pointer(),
+            None,
+            &[],
+            FunctionObject::new_null(),
+        );
+        ctx.stack_frame_mut::<StackFrameCommon>().frame_type = types().defer_frame.tid();
+        let defer_stack =
+            ctx.stack_pointer() as usize + mem::offset_of!(StackFrameCommon, defer_stack);
+        unsafe {
+            (defer_stack as *mut usize).write(entry as usize);
+        }
+
+        allocator.ptr().run_gc(&[&ctx]);
+        assert!(allocator.ptr().contains(entry));
+        assert!(allocator.ptr().contains(argument));
+    }
+
+    #[test]
+    fn test_run_gc_reclaims_unreferenced_objects() {
+        let allocator = ObjectAllocator::new();
+        let kept = alloc_node(&allocator.ptr(), ptr::null_mut());
+        let _root = register_root(&allocator.ptr(), types().node_ptr.tid(), &word(kept));
+        let garbage = alloc_node(&allocator.ptr(), kept);
+        let total_before = allocator.ptr().total_size();
+
+        allocator.ptr().run_gc(&[]);
+        assert!(allocator.ptr().contains(kept));
+        assert!(!allocator.ptr().contains(garbage));
+        assert!(allocator.ptr().total_size() < total_before);
     }
 }

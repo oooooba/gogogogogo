@@ -28,7 +28,8 @@ func (ctx *Context) emitGlobalVariableRegistration(function *ssa.Function) {
 			return
 		}
 		name := createValueName(global)
-		fmt.Fprintf(ctx.stream, "\tgox5_gc_register_global_object(ctx, &%s, sizeof(%s));\n", name, name)
+		typ := global.Type().(*types.Pointer).Elem()
+		fmt.Fprintf(ctx.stream, "\tgox5_gc_register_global_object(ctx, &%s, %s, sizeof(%s));\n", name, wrapInTypeId(typ), name)
 	})
 }
 

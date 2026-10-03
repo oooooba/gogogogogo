@@ -1,9 +1,9 @@
 use std::mem;
+use std::ptr;
 use std::slice;
 
 use crate::ObjectAllocatorPtr;
 use crate::ObjectPtr;
-use crate::type_id::TypeId;
 
 #[derive(Debug)]
 pub(crate) enum ReceiveStatus<T> {
@@ -23,7 +23,10 @@ impl BufferedChannel {
     pub fn new(capacity: usize, allocator: &ObjectAllocatorPtr) -> Self {
         assert!(capacity > 0);
         let size = mem::size_of::<ObjectPtr>() * capacity;
-        let buffer = allocator.allocate(size, TypeId::new_invalid()) as *mut ObjectPtr;
+        let buffer = allocator.allocate(size) as *mut ObjectPtr;
+        // The collector scans every slot of the ring, not just the filled
+        // ones, so the empty slots have to start out as null.
+        unsafe { ptr::write_bytes(buffer, 0, capacity) };
         Self {
             buffer,
             capacity,
@@ -192,6 +195,17 @@ impl ChannelObject {
         }
     }
 
+    /// The ring array a buffered channel owns, or `None` for a rendezvous
+    /// channel (which has no array of its own). The collector keeps this
+    /// allocation alive through it; the rest of a channel object holds no
+    /// pointers, so it does not have to be scanned word by word.
+    pub(crate) fn buffer(&self) -> Option<usize> {
+        match &self.channel_type {
+            ChannelType::Buffered(channel) => Some(channel.buffer as usize),
+            ChannelType::Rendezvous(_) => None,
+        }
+    }
+
     pub fn close(&mut self, _id: usize) {
         assert!(!self.is_closed);
         self.is_closed = true;
@@ -215,6 +229,28 @@ impl ChannelObject {
         match self.channel_type {
             ChannelType::Buffered(ref mut channel) => channel.send(data),
             ChannelType::Rendezvous(ref mut channel) => channel.send(id, data),
+        }
+    }
+
+    /// Visits every buffered value box and every rendezvous payload so the
+    /// collector can mark the channel's in-flight data. All capacity slots are
+    /// visited (the used prefix is not tracked at this level), and nil slots
+    /// are skipped by the collector.
+    pub(crate) fn gc_keep(&self, mut visit: impl FnMut(ObjectPtr)) {
+        match &self.channel_type {
+            ChannelType::Buffered(channel) => {
+                let buffer = unsafe { slice::from_raw_parts(channel.buffer, channel.capacity) };
+                for object in buffer {
+                    visit(object.clone());
+                }
+            }
+            ChannelType::Rendezvous(channel) => match &channel.state {
+                RendezvousState::SenderReached { data, .. }
+                | RendezvousState::ReceiverReachedSenderAccepted { data, .. } => {
+                    visit(data.clone());
+                }
+                _ => {}
+            },
         }
     }
 
@@ -256,10 +292,7 @@ mod tests {
         let allocator = ObjectAllocator::new();
         let channel = Rc::new(RefCell::new(ChannelObject::new(1, &allocator.ptr())));
         {
-            let data = allocator
-                .ptr()
-                .allocate(mem::size_of::<isize>(), TypeId::new_invalid())
-                as *mut isize;
+            let data = allocator.ptr().allocate(mem::size_of::<isize>()) as *mut isize;
             unsafe { *data = 42 };
             let data = ObjectPtr(data as *mut ());
             let result = channel.borrow_mut().send(1, data);
@@ -280,10 +313,7 @@ mod tests {
         let allocator = ObjectAllocator::new();
         let channel = Rc::new(RefCell::new(ChannelObject::new(capacity, &allocator.ptr())));
         for i in 0..capacity {
-            let data = allocator
-                .ptr()
-                .allocate(mem::size_of::<isize>(), TypeId::new_invalid())
-                as *mut isize;
+            let data = allocator.ptr().allocate(mem::size_of::<isize>()) as *mut isize;
             unsafe { *data = i as isize };
             let data = ObjectPtr(data as *mut ());
             let result = channel.borrow_mut().send(1, data);
@@ -305,10 +335,7 @@ mod tests {
         let first = channel.clone();
         let second = channel;
         {
-            let data = allocator
-                .ptr()
-                .allocate(mem::size_of::<isize>(), TypeId::new_invalid())
-                as *mut isize;
+            let data = allocator.ptr().allocate(mem::size_of::<isize>()) as *mut isize;
             unsafe { *data = 42 };
             let data = ObjectPtr(data as *mut ());
             let result = first.borrow_mut().send(1, data);
@@ -334,10 +361,7 @@ mod tests {
             assert_eq!(result, ReceiveStatus::Blocked);
         }
         {
-            let data = allocator
-                .ptr()
-                .allocate(mem::size_of::<isize>(), TypeId::new_invalid())
-                as *mut isize;
+            let data = allocator.ptr().allocate(mem::size_of::<isize>()) as *mut isize;
             unsafe { *data = 42 };
             let data = ObjectPtr(data as *mut ());
             let result = second.borrow_mut().send(2, data);
@@ -350,10 +374,7 @@ mod tests {
         let allocator = ObjectAllocator::new();
         let channel = Rc::new(RefCell::new(ChannelObject::new(1, &allocator.ptr())));
         {
-            let data = allocator
-                .ptr()
-                .allocate(mem::size_of::<isize>(), TypeId::new_invalid())
-                as *mut isize;
+            let data = allocator.ptr().allocate(mem::size_of::<isize>()) as *mut isize;
             unsafe { *data = 42 };
             let data = ObjectPtr(data as *mut ());
             let result = channel.borrow_mut().send(1, data);
@@ -382,10 +403,7 @@ mod tests {
         let first = channel.clone();
         let second = channel;
         {
-            let data = allocator
-                .ptr()
-                .allocate(mem::size_of::<isize>(), TypeId::new_invalid())
-                as *mut isize;
+            let data = allocator.ptr().allocate(mem::size_of::<isize>()) as *mut isize;
             unsafe { *data = 42 };
             let data = ObjectPtr(data as *mut ());
             let result = first.borrow_mut().send(1, data);
@@ -416,10 +434,7 @@ mod tests {
             assert_eq!(result, ReceiveStatus::Blocked);
         }
         {
-            let data = allocator
-                .ptr()
-                .allocate(mem::size_of::<isize>(), TypeId::new_invalid())
-                as *mut isize;
+            let data = allocator.ptr().allocate(mem::size_of::<isize>()) as *mut isize;
             unsafe { *data = 42 };
             let data = ObjectPtr(data as *mut ());
             let result = second.borrow_mut().send(2, data);
@@ -441,10 +456,7 @@ mod tests {
         let first = channel.clone();
         let second = channel;
         {
-            let data = allocator
-                .ptr()
-                .allocate(mem::size_of::<isize>(), TypeId::new_invalid())
-                as *mut isize;
+            let data = allocator.ptr().allocate(mem::size_of::<isize>()) as *mut isize;
             unsafe { *data = 42 };
             let data = ObjectPtr(data as *mut ());
             let result = first.borrow_mut().send(1, data);

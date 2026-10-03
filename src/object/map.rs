@@ -1,4 +1,7 @@
+use std::cell::Cell;
 use std::hash::{Hash, Hasher};
+use std::mem;
+use std::ptr;
 use std::slice;
 
 use hashbrown::HashMap;
@@ -41,15 +44,27 @@ pub(crate) struct MapObject {
     key_type: TypeId,
     value_type: TypeId,
     iteration_snapshot: Option<Vec<(ObjectPtr, ObjectPtr)>>,
+    /// An address inside the table this map owns, or 0 while it has none.
+    ///
+    /// The collector keeps the table alive through this word. It cannot scan
+    /// the struct word by word instead: the hash table header has bytes that
+    /// `MapObject::new` never writes, and reading uninitialized bytes is
+    /// undefined behaviour. An address inside the table is enough, because the
+    /// collector resolves an interior address to the allocation holding it.
+    table_base: Cell<usize>,
 }
 
 impl MapObject {
+    /// Builds a map as a plain value. Collector-owned maps are built in place
+    /// by `construct_in`, which is what keeps their bytes initialized.
+    #[cfg(test)]
     pub fn new(key_type: TypeId, value_type: TypeId, allocator: ObjectAllocatorPtr) -> Self {
         MapObject {
             map: HashMap::new_in(allocator),
             key_type,
             value_type,
             iteration_snapshot: None,
+            table_base: Cell::new(0),
         }
     }
 
@@ -78,7 +93,7 @@ impl MapObject {
     pub fn set(&mut self, key: ObjectPtr, value: ObjectPtr) {
         let allocator = self.map.allocator().clone();
         let key_object_size = self.key_type.size();
-        let key_ptr = allocator.allocate(key_object_size, self.key_type);
+        let key_ptr = allocator.allocate(key_object_size);
         if key_ptr.is_null() {
             unimplemented!();
         }
@@ -89,7 +104,7 @@ impl MapObject {
         let key = ObjectPtr(key_ptr as *mut ());
 
         let value_object_size = self.value_type.size();
-        let value_ptr = allocator.allocate(value_object_size, self.value_type);
+        let value_ptr = allocator.allocate(value_object_size);
         if value_ptr.is_null() {
             unimplemented!();
         }
@@ -104,16 +119,94 @@ impl MapObject {
             unimplemented!();
         }
         self.map.insert(key, value);
+        self.refresh_table_base();
     }
 
     pub fn delete(&mut self, key: ObjectPtr) {
         let key = Key::new(key, self.key_type);
         self.map.remove(&key);
+        // Removing an entry keeps the table itself, so the recorded address
+        // stays valid.
+        self.refresh_table_base();
     }
 
     pub fn clear(&mut self) {
         self.map.clear();
         self.iteration_snapshot = None;
+        // Clearing gives the table back, so there is nothing left to keep.
+        self.table_base.set(0);
+    }
+
+    /// Visits every key and value box (map entries plus the iteration
+    /// snapshot) with the types the map was created with, so the collector can
+    /// mark them precisely.
+    /// The address the collector uses to keep this map's table alive.
+    pub(crate) fn table_address(&self) -> Option<usize> {
+        match self.table_base.get() {
+            0 => None,
+            address => Some(address),
+        }
+    }
+
+    /// Remembers where the table lives. An empty map has no bucket to take an
+    /// address from, and an already recorded one still belongs to the table:
+    /// emptying a table does not move it, so the old address is kept.
+    fn refresh_table_base(&self) {
+        if let Some((key, _)) = self.map.iter().next() {
+            self.table_base.set(key as *const Key as usize);
+        }
+    }
+
+    /// Constructs an empty map directly in memory the collector scans.
+    pub(crate) fn construct_in(
+        ptr: *mut MapObject,
+        key_type: TypeId,
+        value_type: TypeId,
+        allocator: ObjectAllocatorPtr,
+    ) {
+        unsafe {
+            ptr::write_bytes(ptr as *mut u8, 0, mem::size_of::<MapObject>());
+            ptr::addr_of_mut!((*ptr).map).write(HashMap::new_in(allocator));
+            ptr::addr_of_mut!((*ptr).key_type).write(key_type);
+            ptr::addr_of_mut!((*ptr).value_type).write(value_type);
+            ptr::addr_of_mut!((*ptr).iteration_snapshot).write(None);
+            ptr::addr_of_mut!((*ptr).table_base).write(Cell::new(0));
+        }
+    }
+
+    /// Clones `source` directly in memory the collector scans.
+    pub(crate) fn construct_clone_in(ptr: *mut MapObject, source: &MapObject) {
+        unsafe {
+            ptr::write_bytes(ptr as *mut u8, 0, mem::size_of::<MapObject>());
+            ptr::addr_of_mut!((*ptr).map).write(source.map.clone());
+            ptr::addr_of_mut!((*ptr).key_type).write(source.key_type);
+            ptr::addr_of_mut!((*ptr).value_type).write(source.value_type);
+            ptr::addr_of_mut!((*ptr).iteration_snapshot).write(source.iteration_snapshot.clone());
+            ptr::addr_of_mut!((*ptr).table_base).write(Cell::new(0));
+        }
+        // The clone got a table of its own, so it needs its own address.
+        unsafe { (*ptr).refresh_table_base() };
+    }
+
+    pub(crate) fn gc_keep(&self, mut visit: impl FnMut(TypeId, usize, TypeId, usize)) {
+        for (key, value) in self.map.iter() {
+            visit(
+                self.key_type,
+                key.ptr.0 as usize,
+                self.value_type,
+                value.0 as usize,
+            );
+        }
+        if let Some(snapshot) = &self.iteration_snapshot {
+            for (key, value) in snapshot {
+                visit(
+                    self.key_type,
+                    key.0 as usize,
+                    self.value_type,
+                    value.0 as usize,
+                );
+            }
+        }
     }
 
     pub fn nth(&mut self, key: ObjectPtr, value: ObjectPtr, nth: usize) -> bool {
@@ -154,7 +247,7 @@ impl MapObject {
 mod tests {
     use super::*;
     use crate::ObjectAllocator;
-    use crate::type_id::TypeInfo;
+    use crate::type_id::{TYPE_INFO_MAGIC, TypeId, TypeInfo, TypeKind};
     use std::mem;
     use std::ptr;
     use std::sync::OnceLock;
@@ -174,14 +267,15 @@ mod tests {
             let name: crate::object::string::StringObject =
                 crate::object::string::StringObject::new(TEST_NAME.as_ptr(), 4);
             TypeInfo {
+                gc_magic: TYPE_INFO_MAGIC,
                 name,
                 num_methods: 0,
                 interface_table: ptr::null(),
                 is_equal: test_is_equal,
                 hash: test_hash,
                 size: mem::size_of::<isize>(),
-                no_pointers: false,
-                is_interface: false,
+                kind: TypeKind::NoPointer as i32,
+                pointed_to: TypeId::new_invalid(),
                 get_member_offset_runs: None,
             }
         })
@@ -192,13 +286,13 @@ mod tests {
     }
 
     fn make_isize_ptr(allocator: &ObjectAllocatorPtr, value: isize) -> ObjectPtr {
-        let ptr = allocator.allocate(mem::size_of::<isize>(), TypeId::new_invalid()) as *mut isize;
+        let ptr = allocator.allocate(mem::size_of::<isize>()) as *mut isize;
         unsafe { *ptr = value };
         ObjectPtr(ptr as *mut ())
     }
 
     fn make_result_ptr(allocator: &ObjectAllocatorPtr) -> ObjectPtr {
-        let ptr = allocator.allocate(mem::size_of::<isize>(), TypeId::new_invalid()) as *mut isize;
+        let ptr = allocator.allocate(mem::size_of::<isize>()) as *mut isize;
         ObjectPtr(ptr as *mut ())
     }
 

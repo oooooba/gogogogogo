@@ -8,7 +8,6 @@ use crate::UserFunction;
 use crate::defer_stack::DeferStackEntry;
 use crate::object::interface::Interface;
 use crate::object::string::StringObject;
-use crate::type_id::TypeId;
 use crate::word_chunk::WordChunk;
 
 fn register<F>(ctx: &mut LightWeightThreadContext, param: F) -> FunctionObject
@@ -26,10 +25,8 @@ where
     // is pushed onto the defer stack below.
     let count = unsafe { WordChunk::count_of_raw(args) };
     let entry_size = mem::size_of::<DeferStackEntry>();
-    let entry_ptr = ctx.allocate(
-        entry_size + WordChunk::size_for_count(count),
-        TypeId::new_invalid(),
-    ) as *mut DeferStackEntry;
+    let entry_ptr =
+        ctx.allocate(entry_size + WordChunk::size_for_count(count)) as *mut DeferStackEntry;
     let args_copy = unsafe { (entry_ptr as *mut u8).add(entry_size) as *mut WordChunk };
     let args = unsafe { WordChunk::copy_into_raw(args_copy, args) };
 
@@ -138,7 +135,6 @@ mod tests {
     use crate::allocator::MAX_TOTAL_ALLOCATED_SIZE;
     use crate::global_context;
     use crate::light_weight_thread::LightWeightThreadContext;
-    use crate::type_id::FakeTypeInfo;
     use std::mem;
     use std::ptr;
 
@@ -225,12 +221,11 @@ mod tests {
         // allocated after the garbage collector reclaimed the unreferenced
         // chunk. The fillers are declared pointer-free, which keeps the
         // collection from having to scan this megabyte of them word by word.
-        let filler_type = FakeTypeInfo::new(true);
         let collectible_size = 65536;
         let referenced_size =
             MAX_TOTAL_ALLOCATED_SIZE - mem::size_of::<DeferStackEntry>() - collectible_size;
 
-        let referenced = ctx.allocate(referenced_size, filler_type.tid());
+        let referenced = ctx.allocate(referenced_size);
         assert!(!referenced.is_null());
         // The GC scans the live frames one by one, so the big chunk is
         // referenced from a real frame rather than from the unused bottom of
@@ -251,7 +246,7 @@ mod tests {
                 referenced as usize,
             )
         };
-        let collectible = ctx.allocate(collectible_size, filler_type.tid());
+        let collectible = ctx.allocate(collectible_size);
         assert!(!collectible.is_null());
         let total_before = total_size(&gc);
 

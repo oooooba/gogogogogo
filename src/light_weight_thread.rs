@@ -145,30 +145,25 @@ impl LightWeightThreadContext {
         &self.global_context
     }
 
-    pub(crate) fn allocate(&mut self, size: usize, type_id: TypeId) -> *mut () {
-        self.allocate_with(size, move |allocator| allocator.allocate(size, type_id))
+    pub(crate) fn allocate(&mut self, size: usize) -> *mut () {
+        self.allocate_with(size, |allocator| allocator.allocate(size))
     }
 
     pub(crate) fn allocate_closure(&mut self, size: usize) -> *mut () {
         self.allocate_with(size, |allocator| allocator.allocate_closure(size))
     }
 
-    pub(crate) fn allocate_slice_buffer(
-        &mut self,
-        size: usize,
-        type_id: TypeId,
-        accessible_bytes: usize,
-    ) -> *mut () {
-        self.allocate_with(size, move |allocator| {
-            allocator.allocate_slice_buffer(size, type_id, accessible_bytes)
-        })
-    }
-
-    pub(crate) fn set_slice_scan_end(&mut self, interior_addr: usize, absolute_end: usize) {
+    pub(crate) fn register_channel(&mut self, address: usize, elem_type: TypeId) {
         self.global_context().process(|mut global_context| {
             global_context
                 .allocator()
-                .set_slice_scan_end(interior_addr, absolute_end);
+                .register_channel(address, elem_type);
+        });
+    }
+
+    pub(crate) fn register_map(&mut self, address: usize) {
+        self.global_context().process(|mut global_context| {
+            global_context.allocator().register_map(address);
         });
     }
 

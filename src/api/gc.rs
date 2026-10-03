@@ -1,15 +1,17 @@
 use crate::LightWeightThreadContext;
+use crate::type_id::TypeId;
 
 #[unsafe(no_mangle)]
 pub extern "C" fn gox5_gc_register_global_object(
     ctx: &mut LightWeightThreadContext,
     address: *mut (),
+    type_id: TypeId,
     size: usize,
 ) {
     ctx.global_context().process(|mut global_context| {
         global_context
             .allocator()
-            .register_global_object(address, size);
+            .register_global_object(address, size, type_id);
     });
 }
 
@@ -36,7 +38,7 @@ mod tests {
         let (mut ctx, _gc) = create_ctx();
         let mut data = [0u8; 24];
         let address = data.as_mut_ptr() as *mut ();
-        gox5_gc_register_global_object(&mut ctx, address, data.len());
+        gox5_gc_register_global_object(&mut ctx, address, TypeId::new_invalid(), data.len());
         let len = ctx
             .global_context()
             .process(|mut global_context| global_context.allocator().global_spans_len());

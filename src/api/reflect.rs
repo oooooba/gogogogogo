@@ -198,10 +198,8 @@ pub extern "C" fn gox5_reflect_type_string(ctx: &mut LightWeightThreadContext) -
             // Composite/named types need dynamic storage (the C name differs
             // from the Go name), so build a heap-backed string.
             let go_name = mapping_for_name(&cname).1;
-            let mut builder = StringObject::builder(
-                go_name.len(),
-                ctx.allocate(go_name.len() + 1, TypeId::new_invalid()) as *mut u8,
-            );
+            let mut builder =
+                StringObject::builder(go_name.len(), ctx.allocate(go_name.len() + 1) as *mut u8);
             builder.append_bytes(go_name.as_bytes());
             builder.build()
         }
@@ -252,7 +250,12 @@ mod tests {
             vec![0u64; crate::type_id::TYPE_INFO_SIZE.div_ceil(8)].into_boxed_slice();
         let s = StringObject::new(cname.as_ptr(), cname.len());
         unsafe {
-            (raw.as_mut_ptr() as *mut StringObject).write(s);
+            raw.as_mut_ptr().write(crate::type_id::TYPE_INFO_MAGIC);
+            raw.as_mut_ptr()
+                .cast::<u8>()
+                .add(mem::offset_of!(crate::type_id::TypeInfo, name))
+                .cast::<StringObject>()
+                .write(s);
         }
         // Box::leak exposes the allocation's provenance, which miri requires so
         // the runtime can re-derive a &TypeInfo from the raw type_id integer.

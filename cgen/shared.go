@@ -212,6 +212,9 @@ func handleSharedDefinition(program *ssa.Program, assertedInterfaceTypes map[str
 	ctx.visitedInterfaceNames = visitedInterfaceNames
 
 	ctx.emitTypeDeclarationAndDefinition(nil, sortedInstantiatedNamedTypes(ctx.instantiatedNamedTypes))
+	// The definitions of these helpers are spread over the files of the
+	// packages that need them, so the file that uses them all has to declare
+	// them first.
 	ctx.emitInterfaceDataDeclaration(nil)
 	ctx.traverseFunction(nil, func(function *ssa.Function) {
 		ctx.emitFunctionDeclarationHeader(function, ";")

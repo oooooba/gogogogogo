@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"strings"
 
 	"go/types"
 
@@ -47,14 +48,19 @@ func (ctx *Context) declarationStorageClass(function *ssa.Function) string {
 	return ""
 }
 
+// emitBoundFunctionFreeVarsDeclaration declares what a bound method wrapper
+// captures, the receiver, for a package that only names the wrapper.
 func (ctx *Context) emitBoundFunctionFreeVarsDeclaration(fn *ssa.Function) {
-	obj := fn.Object().(*types.Func)
-	recvType := obj.Type().(*types.Signature).Recv().Type()
-	fnName := createFunctionName(fn)
-	fmt.Fprintf(ctx.stream, "typedef struct {\n")
-	fmt.Fprintf(ctx.stream, "\t%s receiver; // %s\n", createTypeName(recvType), fn)
-	fmt.Fprintf(ctx.stream, "} FreeVars_%s;\n", fnName)
+	ctx.emitFreeVarsReceiverStruct(fn, fmt.Sprintf("FreeVars_%s", createFunctionName(fn)))
 }
+
+// freeVarsStorage keeps the descriptor of a FreeVars struct, and the enumerator
+// that walks it, private to the translation unit that creates the closure. The
+// descriptor is only ever read where the closure is built (to fill in
+// capture_type), so no file has to agree on a symbol: the file that declares a
+// closure function can come from the cache, written by an earlier cgen run,
+// while the program that creates the closure is written by this one.
+const freeVarsStorage = "static __attribute__((unused)) "
 
 func (ctx *Context) emitFunctionVariableStructure(function *ssa.Function) {
 	signature := function.Signature
@@ -62,9 +68,7 @@ func (ctx *Context) emitFunctionVariableStructure(function *ssa.Function) {
 		receiverBoundFuncName := fmt.Sprintf("%s%s", createFunctionName(function), encode("$bound"))
 		fmt.Fprintf(ctx.stream, "%sFunctionObject %s (LightWeightThreadContext* ctx);\n", functionStorageClass(function), receiverBoundFuncName)
 
-		fmt.Fprintf(ctx.stream, "typedef struct {\n")
-		fmt.Fprintf(ctx.stream, "\t%s receiver; // %s\n", createTypeName(signature.Recv().Type()), signature)
-		fmt.Fprintf(ctx.stream, "} FreeVars_%s;\n", receiverBoundFuncName)
+		ctx.emitFreeVarsReceiverStruct(function, fmt.Sprintf("FreeVars_%s", receiverBoundFuncName))
 
 		receiverBoundSignatureName := createSignatureName(signature, true, false)
 		fmt.Fprintf(ctx.stream, "typedef struct {\n")
@@ -77,13 +81,16 @@ func (ctx *Context) emitFunctionVariableStructure(function *ssa.Function) {
 		fmt.Fprintf(ctx.stream, "%sFunctionObject %s (LightWeightThreadContext* ctx);\n", functionStorageClass(function), receiverThunkFuncName)
 	}
 
-	fmt.Fprintf(ctx.stream, "typedef struct {\n")
-	for _, freeVar := range function.FreeVars {
-		fmt.Fprintf(ctx.stream, "\t// found %T: %s, %s\n", freeVar, createValueName(freeVar), freeVar.String())
-		id := fmt.Sprintf("%s", createValueName(freeVar))
-		fmt.Fprintf(ctx.stream, "\t%s %s; // %s : %s\n", createTypeName(freeVar.Type()), id, freeVar.String(), freeVar.Type())
+	// A bound method wrapper is named "<method>$bound", which is exactly the
+	// name of the struct declared just above for the method it wraps.
+	if !isBoundMethodWrapper(function) {
+		function := function
+		ctx.emitFreeVarsStruct(fmt.Sprintf("FreeVars_%s", createFunctionName(function)), func() {
+			for _, freeVar := range function.FreeVars {
+				fmt.Fprintf(ctx.stream, "\t%s %s; // %s : %s\n", createTypeName(freeVar.Type()), createValueName(freeVar), freeVar.String(), freeVar.Type())
+			}
+		})
 	}
-	fmt.Fprintf(ctx.stream, "} FreeVars_%s;\n", createFunctionName(function))
 
 	concreteSignatureName := createSignatureName(signature, false, false)
 	fmt.Fprintf(ctx.stream, "typedef struct {\n")
@@ -174,7 +181,7 @@ func getFrameOffsetRunsName(frameName string) string {
 
 // stackMapMemberRun returns the enumeration of one member: the member type's
 // own enumerator when it has one, and otherwise a single range covering the
-// whole member.
+// whole member, reported with the type the collector has to trace it with.
 func stackMapMemberRun(ownerCName string, memberName string, typ types.Type) string {
 	if isNoPointerType(typ) {
 		return ""
@@ -182,7 +189,7 @@ func stackMapMemberRun(ownerCName string, memberName string, typ types.Type) str
 	if isStructOrArrayRoot(typ) && hasEnumerablePointerMembers(typ) {
 		return fmt.Sprintf("\t%s(visit, base + offsetof(%s, %s), arg); // %s\n", getMemberOffsetRunsName(typ), ownerCName, memberName, typ)
 	}
-	return fmt.Sprintf("\tvisit(base + offsetof(%s, %s), sizeof(%s), arg); // %s\n", ownerCName, memberName, createTypeName(typ), typ)
+	return stackMapTypedVisit(fmt.Sprintf("base + offsetof(%s, %s)", ownerCName, memberName), createTypeName(typ), typ)
 }
 
 // emitFrameStackMap emits the GC stack map of a generated stack frame together
@@ -198,13 +205,16 @@ func (ctx *Context) emitFrameStackMap(function *ssa.Function, frameName string, 
 	// translation unit, so both stay local.
 	storage := "static __attribute__((unused)) "
 
-	body := fmt.Sprintf("\tvisit(base + offsetof(%s, common), sizeof(StackFrameCommon), arg); // common\n", frameCName)
+	// The common block holds no Go value: a resume function pointer, the link
+	// to the previous frame, the free vars and the defer list, none of which
+	// has a Go type, so it is scanned word by word.
+	body := stackMapRawVisit(fmt.Sprintf("base + offsetof(%s, common)", frameCName), "sizeof(StackFrameCommon)", "common")
 	body += fmt.Sprintf("\t%s(visit, base + offsetof(%s, signature), arg); // signature\n", getSignatureOffsetRunsName(signatureName), frameCName)
 	for _, member := range members {
 		if member.typ == nil {
 			// A bare FunctionObject word: one word that always can hold a
 			// pointer to the object of a function value.
-			body += fmt.Sprintf("\tvisit(base + offsetof(%s, %s), sizeof(FunctionObject), arg); // pointer word\n", frameCName, member.name)
+			body += fmt.Sprintf("\tvisit(base + offsetof(%s, %s), sizeof(FunctionObject), (TypeId){.id = 0}, GC_SLOT_FUNCTION, arg); // pointer word\n", frameCName, member.name)
 			continue
 		}
 		body += stackMapMemberRun(frameCName, member.name, member.typ)
@@ -213,15 +223,143 @@ func (ctx *Context) emitFrameStackMap(function *ssa.Function, frameName string, 
 		storage, offsetRunsName, frameCName, stackMapFunctionBody(body))
 
 	fmt.Fprintf(ctx.stream, "%sconst TypeInfo %s = {\n", storage, createFrameTypeInfoName(frameName))
+	fmt.Fprintf(ctx.stream, "\t.gc_magic = TYPE_INFO_MAGIC,\n")
 	fmt.Fprintf(ctx.stream, "\t.name = (StringObject){.raw = \"%s\", .len = sizeof(\"%s\") - 1},\n", frameCName, frameCName)
 	fmt.Fprintf(ctx.stream, "\t.num_methods = 0,\n")
 	fmt.Fprintf(ctx.stream, "\t.interface_table = NULL,\n")
 	fmt.Fprintf(ctx.stream, "\t.is_equal = gox5_frame_type_is_equal,\n")
 	fmt.Fprintf(ctx.stream, "\t.hash = gox5_frame_type_hash,\n")
 	fmt.Fprintf(ctx.stream, "\t.size = sizeof(%s),\n", frameCName)
-	fmt.Fprintf(ctx.stream, "\t.no_pointers = 0,\n")
-	fmt.Fprintf(ctx.stream, "\t.is_interface = 0,\n")
+	fmt.Fprintf(ctx.stream, "\t.kind = GC_TYPE_STRUCT_ARRAY,\n")
+	fmt.Fprintf(ctx.stream, "\t.pointed_to = (TypeId){.id = 0},\n")
 	fmt.Fprintf(ctx.stream, "\t.get_member_offset_runs = %s,\n", offsetRunsName)
+	fmt.Fprintf(ctx.stream, "};\n\n")
+}
+
+// isBoundMethodWrapper reports whether function is the "$bound" wrapper ssa
+// synthesizes for a method value: the receiver is the only thing it captures.
+func isBoundMethodWrapper(function *ssa.Function) bool {
+	return strings.HasSuffix(function.Name(), "$bound")
+}
+
+// emitFreeVarsStruct declares the struct holding what a closure captured, if
+// the file has not declared it yet.
+func (ctx *Context) emitFreeVarsStruct(freeVarsCName string, emitFields func()) {
+	if !ctx.markTypeDefinition("freevars-struct", freeVarsCName) {
+		return
+	}
+	fmt.Fprintf(ctx.stream, "typedef struct {\n")
+	emitFields()
+	fmt.Fprintf(ctx.stream, "} %s;\n", freeVarsCName)
+}
+
+// boundMethodReceiverType is the type a bound method wrapper captures, which is
+// the receiver of the method it wraps.
+func boundMethodReceiverType(function *ssa.Function) types.Type {
+	if recv := function.Signature.Recv(); recv != nil {
+		return recv.Type()
+	}
+	if obj, ok := function.Object().(*types.Func); ok {
+		if signature, ok := obj.Type().(*types.Signature); ok && signature.Recv() != nil {
+			return signature.Recv().Type()
+		}
+	}
+	return nil
+}
+
+// emitFreeVarsStructFor declares the struct of what a function captured.
+func (ctx *Context) emitFreeVarsStructFor(function *ssa.Function) {
+	if isBoundMethodWrapper(function) {
+		ctx.emitFreeVarsReceiverStruct(function, fmt.Sprintf("FreeVars_%s", createFunctionName(function)))
+		return
+	}
+	freeVars := function.FreeVars
+	ctx.emitFreeVarsStruct(fmt.Sprintf("FreeVars_%s", createFunctionName(function)), func() {
+		for _, freeVar := range freeVars {
+			fmt.Fprintf(ctx.stream, "\t%s %s; // %s : %s\n", createTypeName(freeVar.Type()), createValueName(freeVar), freeVar.String(), freeVar.Type())
+		}
+	})
+}
+
+// emitFreeVarsReceiverStruct declares the struct of a bound method wrapper,
+// which captures nothing but its receiver.
+func (ctx *Context) emitFreeVarsReceiverStruct(function *ssa.Function, freeVarsCName string) {
+	recvType := boundMethodReceiverType(function)
+	if recvType == nil {
+		return
+	}
+	ctx.emitFreeVarsStruct(freeVarsCName, func() {
+		fmt.Fprintf(ctx.stream, "\t%s receiver;\n", createTypeName(recvType))
+	})
+}
+
+// emitClosureCaptureDescriptors emits a private descriptor for every closure the
+// given function creates, which is where the collector is told what the closure
+// captured. Doing it here rather than where the closure function is declared
+// keeps the descriptor next to its only reader, the capture_type assignment.
+func (ctx *Context) emitClosureCaptureDescriptors(function *ssa.Function) {
+	if function.Blocks == nil {
+		return
+	}
+	for _, block := range function.Blocks {
+		for _, instr := range block.Instrs {
+			makeClosure, ok := instr.(*ssa.MakeClosure)
+			if !ok {
+				continue
+			}
+			fn, ok := makeClosure.Fn.(*ssa.Function)
+			if !ok {
+				continue
+			}
+			freeVarsCName := fmt.Sprintf("FreeVars_%s", createFunctionName(fn))
+			if !ctx.markTypeDefinition("freevars-descriptor", freeVarsCName) {
+				continue
+			}
+			if isBoundMethodWrapper(fn) {
+				ctx.emitFreeVarsReceiverStruct(fn, freeVarsCName)
+			} else {
+				fn := fn
+				ctx.emitFreeVarsStruct(freeVarsCName, func() {
+					for _, freeVar := range fn.FreeVars {
+						fmt.Fprintf(ctx.stream, "\t%s %s;\n", createTypeName(freeVar.Type()), createValueName(freeVar))
+					}
+				})
+			}
+			ctx.emitCapturedValuesTypeInfo(fn, freeVarsCName)
+		}
+	}
+}
+
+// emitCapturedValuesTypeInfo emits the descriptor the collector traces a
+// closure's captured values with: the enumerator walks exactly the members of
+// the FreeVars struct the closure creation code fills in, and the TypeInfo ties
+// the two together.
+func (ctx *Context) emitCapturedValuesTypeInfo(function *ssa.Function, freeVarsCName string) {
+	typeInfoName := fmt.Sprintf("TypeInfo_%s", freeVarsCName)
+
+	var body string
+	if recvType := boundMethodReceiverType(function); isBoundMethodWrapper(function) && recvType != nil {
+		body += stackMapMemberRun(freeVarsCName, "receiver", recvType)
+	}
+	if !isBoundMethodWrapper(function) {
+		for _, freeVar := range function.FreeVars {
+			body += stackMapMemberRun(freeVarsCName, createValueName(freeVar), freeVar.Type())
+		}
+	}
+	fmt.Fprintf(ctx.stream, "%svoid get_member_offset_runs_%s(TypeOffsetVisitor visit, uintptr_t base, void *arg) { // captured values of %s\n%s}\n\n",
+		freeVarsStorage, freeVarsCName, createFunctionName(function), stackMapFunctionBody(body))
+
+	fmt.Fprintf(ctx.stream, "%sconst TypeInfo %s = {\n", freeVarsStorage, typeInfoName)
+	fmt.Fprintf(ctx.stream, "\t.gc_magic = TYPE_INFO_MAGIC,\n")
+	fmt.Fprintf(ctx.stream, "\t.name = (StringObject){.raw = \"%s\", .len = sizeof(\"%s\") - 1},\n", freeVarsCName, freeVarsCName)
+	fmt.Fprintf(ctx.stream, "\t.num_methods = 0,\n")
+	fmt.Fprintf(ctx.stream, "\t.interface_table = NULL,\n")
+	fmt.Fprintf(ctx.stream, "\t.is_equal = gox5_frame_type_is_equal,\n")
+	fmt.Fprintf(ctx.stream, "\t.hash = gox5_frame_type_hash,\n")
+	fmt.Fprintf(ctx.stream, "\t.size = sizeof(%s),\n", freeVarsCName)
+	fmt.Fprintf(ctx.stream, "\t.kind = GC_TYPE_STRUCT_ARRAY,\n")
+	fmt.Fprintf(ctx.stream, "\t.pointed_to = (TypeId){.id = 0},\n")
+	fmt.Fprintf(ctx.stream, "\t.get_member_offset_runs = get_member_offset_runs_%s,\n", freeVarsCName)
 	fmt.Fprintf(ctx.stream, "};\n\n")
 }
 
@@ -322,6 +460,12 @@ func createPhiTempName(phi *ssa.Phi) string {
 }
 
 func (ctx *Context) emitFunctionDefinition(function *ssa.Function) {
+	// The body reads what it captured through the FreeVars struct, and an
+	// instance can be written to a file whose declaration pass never named it.
+	if len(function.FreeVars) > 0 {
+		ctx.emitFreeVarsStructFor(function)
+	}
+	ctx.emitClosureCaptureDescriptors(function)
 	if function.Pkg != nil && function.Pkg.Pkg.Name() == "runtime" && function.Name() == "init" { // ToDo
 		ctx.emitFunctionHeader(createFunctionName(function), "{")
 		fmt.Fprintf(ctx.stream, "\tassert(ctx->marker == 0xdeadbeef);\n")

@@ -289,14 +289,14 @@ func signatureStackMapBody(signatureName string, signature *types.Signature, mak
 	if signature.Results().Len() > 0 {
 		// The result pointer refers to a slot of the caller's frame, but one
 		// word is cheap enough to keep the map a plain mirror of the struct.
-		body += "\tvisit(base, sizeof(uintptr_t), arg); // result_ptr\n"
+		body += stackMapRawVisit("base", "sizeof(uintptr_t)", "result_ptr")
 	}
 
 	base := 0
 	if signature.Recv() != nil && !makesReceiverBound {
 		if makesReceiverInterface {
 			// The receiver is copied through an untyped pointer.
-			body += fmt.Sprintf("\tvisit(base + offsetof(%s, param0), sizeof(uintptr_t), arg); // receiver\n", signatureName)
+			body += stackMapRawVisit(fmt.Sprintf("base + offsetof(%s, param0)", signatureName), "sizeof(uintptr_t)", "receiver")
 		} else {
 			body += stackMapMemberRun(signatureName, "param0", signature.Recv().Type())
 		}
@@ -325,23 +325,26 @@ func (ctx *Context) emitTypeInfoDefinition(typ types.Type) {
 		ctx.emitGetMemberOffsetRunsFunctionDefinition(typ)
 	}
 
+	// The trace of a value of this type recurses into the pointee of a pointer
+	// or the element of a slice, whose descriptor has to be declared before the
+	// initializer below refers to it.
+	kind, element := gcTypeKindOf(typ)
+	pointedTo := "(TypeId){.id = 0}"
+	if element != nil {
+		ctx.emitTypeInfoDeclaration(element)
+		pointedTo = wrapInTypeId(element)
+	}
+
 	fmt.Fprintf(ctx.stream, "const TypeInfo %s = {\n", createTypeIdName(typ))
+	fmt.Fprintf(ctx.stream, ".gc_magic = TYPE_INFO_MAGIC,\n")
 	fmt.Fprintf(ctx.stream, ".name = (StringObject){.raw = \"%s\", .len = sizeof(\"%s\") - 1},\n", createTypeName(typ), createTypeName(typ))
 	fmt.Fprintf(ctx.stream, ".num_methods = %s,\n", numMethods)
 	fmt.Fprintf(ctx.stream, ".interface_table = %s,\n", interfaceTable)
 	fmt.Fprintf(ctx.stream, ".is_equal = equal_%s,\n", createTypeName(typ))
 	fmt.Fprintf(ctx.stream, ".hash = hash_%s,\n", createTypeName(typ))
 	fmt.Fprintf(ctx.stream, ".size = sizeof(%s),\n", createTypeName(typ))
-	noPointers := "0"
-	if isNoPointerType(typ) {
-		noPointers = "1"
-	}
-	fmt.Fprintf(ctx.stream, ".no_pointers = %s,\n", noPointers)
-	isInterface := "0"
-	if _, ok := typ.Underlying().(*types.Interface); ok {
-		isInterface = "1"
-	}
-	fmt.Fprintf(ctx.stream, ".is_interface = %s,\n", isInterface)
+	fmt.Fprintf(ctx.stream, ".kind = %s,\n", kind)
+	fmt.Fprintf(ctx.stream, ".pointed_to = %s,\n", pointedTo)
 	if hasGetMemberOffsetRuns {
 		fmt.Fprintf(ctx.stream, ".get_member_offset_runs = %s,\n", getMemberOffsetRunsName(typ))
 	}
@@ -419,7 +422,10 @@ func (ctx *Context) emitGetMemberOffsetRunsFunctionDefinition(typ types.Type) {
 		switch t := typ.(type) {
 		case *types.Array:
 			if !isNoPointerType(t.Elem()) {
-				body += fmt.Sprintf("\tvisit(base, sizeof(%s), arg); // whole array\n", typeName)
+				// One range covering the whole array, traced with the element
+				// type: an array has no header, so its elements are laid out
+				// back to back from the first one.
+				body += stackMapTypedVisit("base", typeName, t.Elem())
 			}
 		case *types.Struct:
 			for i := 0; i < t.NumFields(); i++ {
@@ -437,7 +443,7 @@ func (ctx *Context) emitGetMemberOffsetRunsFunctionDefinition(typ types.Type) {
 					// The field type has no enumerator of its own (e.g. it has
 					// blank pointer-bearing members); cover its whole span so
 					// those slots are still scanned.
-					body += fmt.Sprintf("\tvisit(base + offsetof(%s, %s), sizeof(%s), arg); // %s\n", typeName, name, createTypeName(field.Type()), field)
+					body += stackMapTypedVisit(fmt.Sprintf("base + offsetof(%s, %s)", typeName, name), createTypeName(field.Type()), field.Type())
 				}
 			}
 		}
@@ -448,6 +454,101 @@ func (ctx *Context) emitGetMemberOffsetRunsFunctionDefinition(typ types.Type) {
 	fmt.Fprintf(ctx.stream, "void %s(TypeOffsetVisitor visit, uintptr_t base, void *arg) { // %s\n", getMemberOffsetRunsName(typ), typ)
 	fmt.Fprintf(ctx.stream, "%s", body)
 	fmt.Fprintf(ctx.stream, "}\n")
+}
+
+// gcTypeKindOf returns the GC_TYPE_* constant describing how the collector
+// traces a value of typ, and the type such a trace recurses into: the pointee
+// of a pointer and the element of a slice are propagated, the scalar kinds
+// carry nothing. A named type is classified by its underlying type, which is
+// what a value of it actually holds.
+func gcTypeKindOf(typ types.Type) (kind string, element types.Type) {
+	switch t := typ.Underlying().(type) {
+	case *types.Basic:
+		switch t.Kind() {
+		case types.UnsafePointer:
+			// A raw address: pointing at something of no particular type.
+			return "GC_TYPE_POINTER", nil
+		case types.String, types.UntypedString:
+			return "GC_TYPE_STRING", nil
+		}
+	case *types.Pointer:
+		return "GC_TYPE_POINTER", t.Elem()
+	case *types.Slice:
+		return "GC_TYPE_SLICE", t.Elem()
+	case *types.Chan:
+		// A value of a channel type is the channel pointer; the elements it
+		// owns are traced through the element type the channel was registered
+		// with, so nothing is propagated here.
+		return "GC_TYPE_POINTER", nil
+	case *types.Map:
+		return "GC_TYPE_MAP", nil
+	case *types.Interface:
+		// The receiver and the concrete type are read from the value itself.
+		return "GC_TYPE_INTERFACE", nil
+	case *types.Signature:
+		return "GC_TYPE_FUNCTION", nil
+	case *types.Struct, *types.Array:
+		return "GC_TYPE_STRUCT_ARRAY", nil
+	}
+	return "GC_TYPE_NO_POINTER", nil
+}
+
+// gcStackSlotOf returns the GC_SLOT_* constant telling the collector how to
+// read the words of one reported range, and the type it has to be traced with:
+// the pointee for a pointer run, the element type for a slice run, nothing for
+// the slots whose words are traced on their own. Everything the type does not
+// describe (a map, a channel, an aggregate without an enumerator of its own)
+// becomes a raw run, which is sound because reaching the object is enough:
+// maps and channels are registered with the type of what they own.
+func gcStackSlotOf(typ types.Type) (slot string, traceType types.Type) {
+	kind, element := gcTypeKindOf(typ)
+	switch kind {
+	case "GC_TYPE_POINTER":
+		return "GC_SLOT_POINTER", gcTraceTypeOf(element)
+	case "GC_TYPE_SLICE":
+		return "GC_SLOT_SLICE", gcTraceTypeOf(element)
+	case "GC_TYPE_INTERFACE":
+		return "GC_SLOT_INTERFACE", nil
+	case "GC_TYPE_STRING":
+		return "GC_SLOT_STRING", nil
+	case "GC_TYPE_FUNCTION":
+		return "GC_SLOT_FUNCTION", nil
+	}
+	return "GC_SLOT_RAW", nil
+}
+
+// gcTraceTypeOf returns the descriptor a run of pointers or slice elements is
+// traced with. An interface value is traced through the concrete type word it
+// carries, so the descriptor is only read for its kind and size, which the
+// empty interface shares with every other one; using it keeps the reference to
+// a descriptor of an unnamed interface (a `*interface{ M() }` pointee, say) out
+// of the generated code, since only the empty interface's descriptor is
+// emitted for every program.
+func gcTraceTypeOf(typ types.Type) types.Type {
+	if typ == nil {
+		return nil
+	}
+	if _, ok := typ.Underlying().(*types.Interface); ok {
+		return types.NewInterfaceType(nil, nil)
+	}
+	return typ
+}
+
+// stackMapTypedVisit emits one visit call reporting the cTypeName-typed value
+// at offsetExpr, traced as a value of typ.
+func stackMapTypedVisit(offsetExpr string, cTypeName string, typ types.Type) string {
+	slot, traceType := gcStackSlotOf(typ)
+	traceId := "(TypeId){.id = 0}"
+	if traceType != nil {
+		traceId = wrapInTypeId(traceType)
+	}
+	return fmt.Sprintf("\tvisit(%s, sizeof(%s), %s, %s, arg); // %s\n", offsetExpr, cTypeName, traceId, slot, typ)
+}
+
+// stackMapRawVisit emits one visit call reporting a range that has to be
+// scanned word by word, because no type describes the words in it.
+func stackMapRawVisit(offsetExpr string, sizeExpr string, comment string) string {
+	return fmt.Sprintf("\tvisit(%s, %s, (TypeId){.id = 0}, GC_SLOT_RAW, arg); // %s\n", offsetExpr, sizeExpr, comment)
 }
 
 func isNoPointerType(typ types.Type) bool {
@@ -679,6 +780,9 @@ func (ctx *Context) emitInterfaceTableDefinition(typ types.Type, allowSet map[st
 	if !ctx.markTypeDefinition("itable", createInterfaceTypeSymbolName(typ)) {
 		return
 	}
+	// A struct tag is private to its translation unit, so the file that holds
+	// the table has to be the one that defines the struct of its entries.
+	ctx.emitInterfaceTableDeclaration(typ, allowSet)
 	entryIndexes := ctx.interfaceTableEntryIndexes(typ, allowSet)
 	methodSet := ctx.program.MethodSets.MethodSet(typ)
 	name := createInterfaceTypeSymbolName(typ)

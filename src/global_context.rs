@@ -130,7 +130,6 @@ mod tests {
     use crate::StackFrameCommon;
     use crate::allocator::MAX_TOTAL_ALLOCATED_SIZE;
     use crate::create_light_weight_thread_context;
-    use crate::type_id::TypeId;
     use std::mem;
     use std::ptr;
 
@@ -156,7 +155,7 @@ mod tests {
             &[],
             FunctionObject::new_null(),
         );
-        let kept = ctx.allocate(64, TypeId::new_invalid());
+        let kept = ctx.allocate(64);
         assert!(!kept.is_null());
         unsafe {
             ptr::write(
@@ -166,7 +165,7 @@ mod tests {
             ptr::write(kept as *mut u8, 0xAB);
         }
         for _ in 0..10 {
-            let ptr = ctx.allocate(65536, TypeId::new_invalid());
+            let ptr = ctx.allocate(65536);
             assert!(!ptr.is_null());
         }
         let alive = gc.process(|mut gc| gc.allocator().contains(kept));
@@ -197,7 +196,7 @@ mod tests {
             &[],
             FunctionObject::new_null(),
         );
-        ctx.allocate(MAX_TOTAL_ALLOCATED_SIZE + 1, TypeId::new_invalid());
+        ctx.allocate(MAX_TOTAL_ALLOCATED_SIZE + 1);
     }
 
     #[test]

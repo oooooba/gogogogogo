@@ -79,11 +79,41 @@ typedef struct {
     uintptr_t count;
 } IterObject;
 
+// How the collector traces a value of a type, mirroring the TypeKind of
+// type_id.rs. A pointer carries the type it points at, a slice the type of its
+// elements, so a trace propagates types instead of guessing.
+typedef enum {
+    GC_TYPE_NO_POINTER = 1,
+    GC_TYPE_STRING = 2,
+    GC_TYPE_POINTER = 3,
+    GC_TYPE_MAP = 4,
+    GC_TYPE_INTERFACE = 5,
+    GC_TYPE_STRUCT_ARRAY = 6,
+    GC_TYPE_SLICE = 7,
+    GC_TYPE_FUNCTION = 8,
+} GcTypeKind;
+
+// How the collector scans one range a stack map or a member offset enumerator
+// reported. It refines GcTypeKind for the ranges whose words have to be read
+// apart (a pointer, a slice header, ...); GC_SLOT_RAW covers everything the
+// enumerator knows nothing about, which is scanned word by word.
+typedef enum {
+    GC_SLOT_POINTER = 0,
+    GC_SLOT_SLICE = 1,
+    GC_SLOT_INTERFACE = 2,
+    GC_SLOT_STRING = 3,
+    GC_SLOT_FUNCTION = 4,
+    GC_SLOT_DEFER_STACK = 5,
+    GC_SLOT_RAW = 6,
+} GcStackSlotKind;
+
 // Stack map of a stack frame: it reports every pointer-bearing slot of the
 // frame by calling visit with frame-relative (offset, size) ranges, exactly
-// like the get_member_offset_runs function of a TypeInfo. A frame that has no
+// like the get_member_offset_runs function of a TypeInfo, together with the
+// type and the slot kind the range has to be traced with. A frame that has no
 // such map (the runtime frames) is scanned conservatively over frame_size.
-typedef void (*TypeOffsetVisitor)(uintptr_t offset, uintptr_t size, void *arg);
+typedef void (*TypeOffsetVisitor)(uintptr_t offset, uintptr_t size, TypeId typ,
+                                  GcStackSlotKind kind, void *arg);
 
 typedef struct StackFrameCommon {
     FunctionObject resume_func;
@@ -109,15 +139,23 @@ typedef struct {
     StringObject method_signature;
 } InterfaceTableEntry;
 
+// Every TypeInfo starts with this word, so that the collector can tell a real
+// type descriptor from an arbitrary word it read out of a value that turned
+// out not to be an interface after all.
+#define TYPE_INFO_MAGIC 0x67676f676f676700ULL
+
 typedef struct TypeInfo {
+    uint64_t gc_magic;
     StringObject name;
     uintptr_t num_methods;
     const InterfaceTableEntry *interface_table;
     void *is_equal;
     void *hash;
     uintptr_t size;
-    bool no_pointers;
-    bool is_interface;
+    GcTypeKind kind;
+    // The type a trace of a value of this type recurses into: the pointee of a
+    // pointer, the element of a slice. Invalid when there is none.
+    TypeId pointed_to;
     void (*get_member_offset_runs)(TypeOffsetVisitor visit, uintptr_t base,
                                    void *arg);
 } TypeInfo;
@@ -155,8 +193,11 @@ typedef struct {
 const UserFunctionInfo *gox5_runtime_func_for_pc(uintptr_t pc);
 StringObject gox5_runtime_func_name(const UserFunctionInfo *func);
 
+// Registers a global variable as a GC root. Its type is what the root is
+// traced with, so a global of a struct, interface, ... type is scanned through
+// its member offset enumerator instead of word by word.
 void gox5_gc_register_global_object(LightWeightThreadContext *ctx,
-                                    void *address, size_t size);
+                                    void *address, TypeId type_id, size_t size);
 
 typedef struct {
     StackFrameCommon common;
@@ -367,6 +408,9 @@ typedef struct {
     StackFrameCommon common;
     FunctionObject *result_ptr;
     UserFunction user_function;
+    // TypeInfo of the captured FreeVars struct, installed by the generated
+    // code; the GC reads it back from the closure object.
+    TypeId capture_type;
     uintptr_t num_object_ptrs;
     void *object_ptrs[0];
 } StackFrameClosureNew;

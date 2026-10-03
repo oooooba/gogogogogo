@@ -29,7 +29,7 @@ pub extern "C" fn gox5_slice_from_string(ctx: &mut LightWeightThreadContext) -> 
 
     let len = src.len_in_bytes();
     let buffer_size = len * elem_size;
-    let ptr = ctx.allocate_slice_buffer(buffer_size, type_id, buffer_size);
+    let ptr = ctx.allocate(buffer_size);
 
     let mut result = SliceObject::new(ptr, len, len);
     if type_id.size() == mem::size_of::<u8>() {
@@ -62,8 +62,7 @@ fn reallocate_slice(
     base: &SliceObject,
     elem_size: usize,
     extend_bytes: &[u8],
-    type_id: TypeId,
-    allocate: impl FnOnce(usize, TypeId, usize) -> *mut (),
+    allocate: impl FnOnce(usize) -> *mut (),
 ) -> SliceObject {
     assert!(elem_size > 0);
     assert!(extend_bytes.len().is_multiple_of(elem_size));
@@ -72,7 +71,7 @@ fn reallocate_slice(
     let mut result = if new_size > base.capacity() {
         let new_capacity = new_size * 2;
         let buffer_size = new_capacity * elem_size;
-        let ptr = allocate(buffer_size, type_id, new_size * elem_size);
+        let ptr = allocate(buffer_size);
 
         let mut result = SliceObject::new(ptr, new_size, new_capacity);
         result.as_bytes_mut(elem_size).fill(0);
@@ -112,21 +111,13 @@ struct StackFrameSliceAppend<'a> {
 #[unsafe(no_mangle)]
 pub extern "C" fn gox5_slice_append(ctx: &mut LightWeightThreadContext) -> FunctionObject {
     let frame = ctx.stack_frame::<StackFrameSliceAppend>();
-    let type_id = frame.type_id;
+    let _type_id = frame.type_id;
     let lhs = frame.lhs;
     let rhs = frame.rhs;
 
-    let elem_size = type_id.size();
+    let elem_size = _type_id.size();
     let rhs_bytes = slice_extend_bytes(&rhs, elem_size);
-    let result = reallocate_slice(
-        &lhs,
-        elem_size,
-        rhs_bytes,
-        type_id,
-        |size, type_id, accessible| ctx.allocate_slice_buffer(size, type_id, accessible),
-    );
-    let scan_end = result.ptr() as usize;
-    ctx.set_slice_scan_end(scan_end, scan_end.wrapping_add(result.size() * elem_size));
+    let result = reallocate_slice(&lhs, elem_size, rhs_bytes, |size| ctx.allocate(size));
 
     let frame = ctx.stack_frame_mut::<StackFrameSliceAppend>();
     *frame.result_ptr = result;
@@ -146,20 +137,14 @@ struct StackFrameSliceAppendString<'a> {
 #[unsafe(no_mangle)]
 pub extern "C" fn gox5_slice_append_string(ctx: &mut LightWeightThreadContext) -> FunctionObject {
     let frame = ctx.stack_frame::<StackFrameSliceAppendString>();
-    let type_id = frame.type_id;
+    let _type_id = frame.type_id;
     let slice = frame.slice;
     let string = frame.string.clone();
 
     let elem_size = mem::size_of::<u8>();
-    let result = reallocate_slice(
-        &slice,
-        elem_size,
-        string.as_bytes(),
-        type_id,
-        |size, type_id, accessible| ctx.allocate_slice_buffer(size, type_id, accessible),
-    );
-    let scan_end = result.ptr() as usize;
-    ctx.set_slice_scan_end(scan_end, scan_end.wrapping_add(result.size() * elem_size));
+    let result = reallocate_slice(&slice, elem_size, string.as_bytes(), |size| {
+        ctx.allocate(size)
+    });
 
     let frame = ctx.stack_frame_mut::<StackFrameSliceAppendString>();
     *frame.result_ptr = result;
@@ -380,12 +365,12 @@ pub extern "C" fn gox5_slice_new_uninitialized(
 ) -> FunctionObject {
     let frame = ctx.stack_frame::<StackFrameSliceNewUninitialized>();
     let n = usize::try_from(frame.n).unwrap();
-    let type_id = frame.type_id;
+    let _type_id = frame.type_id;
 
     let result = if n == 0 {
         SliceObject::new(ptr::null_mut(), 0, 0)
     } else {
-        let ptr = ctx.allocate_slice_buffer(n, type_id, n);
+        let ptr = ctx.allocate(n);
         SliceObject::new(ptr, n, n)
     };
 
@@ -413,8 +398,7 @@ pub extern "C" fn gox5_slice_new(ctx: &mut LightWeightThreadContext) -> Function
 
     let elem_size = type_id.size();
     let buffer_size = capacity.wrapping_mul(elem_size);
-    let accessible_bytes = length.wrapping_mul(elem_size);
-    let ptr = ctx.allocate_slice_buffer(buffer_size, type_id, accessible_bytes);
+    let ptr = ctx.allocate(buffer_size);
     let result = SliceObject::new(ptr, length, capacity);
 
     let frame = ctx.stack_frame_mut::<StackFrameSliceNew>();
@@ -451,13 +435,6 @@ pub extern "C" fn gox5_slice_sub(ctx: &mut LightWeightThreadContext) -> Function
         high.wrapping_sub(low),
         max.wrapping_sub(low),
     );
-    if !base.ptr().is_null() {
-        // A (possibly extended) sub-slice makes elements up to `high` reachable;
-        // record the high-water mark so GC keeps them alive but nothing beyond.
-        let absolute_end = (base.ptr() as usize).wrapping_add(high.wrapping_mul(elem_size));
-        ctx.set_slice_scan_end(base.ptr() as usize, absolute_end);
-    }
-
     let frame = ctx.stack_frame_mut::<StackFrameSliceSub>();
     *frame.result_ptr = result;
 
@@ -495,13 +472,7 @@ mod tests {
         let base = SliceObject::new(ptr, 3, 10);
         let extend = [40u8, 50];
         let alloc = allocator.ptr();
-        let result = reallocate_slice(
-            &base,
-            1,
-            &extend,
-            TypeId::new_invalid(),
-            |size, type_id, _accessible| alloc.allocate(size, type_id),
-        );
+        let result = reallocate_slice(&base, 1, &extend, |size| alloc.allocate(size));
         assert_eq!(result.size(), 5);
         assert_eq!(result.capacity(), 10);
         let bytes = result.as_bytes(1);
@@ -522,13 +493,7 @@ mod tests {
         let base = SliceObject::new(ptr, 2, 2);
         let extend = [3u8, 4, 5, 6];
         let alloc = allocator.ptr();
-        let result = reallocate_slice(
-            &base,
-            1,
-            &extend,
-            TypeId::new_invalid(),
-            |size, type_id, _accessible| alloc.allocate(size, type_id),
-        );
+        let result = reallocate_slice(&base, 1, &extend, |size| alloc.allocate(size));
         assert_eq!(result.size(), 6);
         assert_eq!(result.capacity(), 12);
         let bytes = result.as_bytes(1);
@@ -554,13 +519,7 @@ mod tests {
         extend_bytes.extend_from_slice(&extend);
         extend_bytes.extend_from_slice(&extend2);
         let alloc = allocator.ptr();
-        let result = reallocate_slice(
-            &base,
-            4,
-            &extend_bytes,
-            TypeId::new_invalid(),
-            |size, type_id, _accessible| alloc.allocate(size, type_id),
-        );
+        let result = reallocate_slice(&base, 4, &extend_bytes, |size| alloc.allocate(size));
         assert_eq!(result.size(), 4);
         assert_eq!(result.capacity(), 4);
     }
@@ -1009,44 +968,39 @@ mod tests {
     }
 
     #[test]
-    fn test_gox5_slice_new_registers_accessible_prefix() {
-        let (mut ctx, gc) = create_ctx();
-        let elem = crate::type_id::FakeTypeInfo::new_with_size(false, 8);
+    fn test_gox5_slice_new_allocates_buffer() {
+        let (mut ctx, _gc) = create_ctx();
+        let elem = crate::type_id::FakeTypeInfo::new_with_size(8);
         let s = call_slice_new(&mut ctx, 3, 10, elem.tid());
         assert_eq!(s.size(), 3);
         assert_eq!(s.capacity(), 10);
         assert!(!s.ptr().is_null());
-        let scan_end = gc.process(|mut gc| gc.allocator().slice_scan_end(s.ptr() as usize));
-        assert_eq!(scan_end, 3 * 8);
     }
 
     #[test]
     fn test_gox5_slice_new_zero_capacity() {
         let (mut ctx, _gc) = create_ctx();
-        let elem = crate::type_id::FakeTypeInfo::new_with_size(false, 8);
+        let elem = crate::type_id::FakeTypeInfo::new_with_size(8);
         let s = call_slice_new(&mut ctx, 0, 0, elem.tid());
         assert_eq!(s.size(), 0);
         assert_eq!(s.capacity(), 0);
     }
 
     #[test]
-    fn test_gox5_slice_sub_matches_inline_formula_and_bumps_scan_end() {
-        let (mut ctx, gc) = create_ctx();
-        let elem = crate::type_id::FakeTypeInfo::new_with_size(false, 8);
+    fn test_gox5_slice_sub_matches_inline_formula() {
+        let (mut ctx, _gc) = create_ctx();
+        let elem = crate::type_id::FakeTypeInfo::new_with_size(8);
         let base = call_slice_new(&mut ctx, 3, 10, elem.tid());
         let sub = call_slice_sub(&mut ctx, base, 1, 5, 10, elem.tid());
         assert_eq!(sub.ptr() as usize, base.ptr() as usize + 8);
         assert_eq!(sub.size(), 4);
         assert_eq!(sub.capacity(), 9);
-        // The sub makes elements [0, high) reachable: scan-end bumped from 24 to 40.
-        let scan_end = gc.process(|mut gc| gc.allocator().slice_scan_end(base.ptr() as usize));
-        assert_eq!(scan_end, 5 * 8);
     }
 
     #[test]
     fn test_gox5_slice_sub_nil_slice_is_noop() {
         let (mut ctx, _gc) = create_ctx();
-        let elem = crate::type_id::FakeTypeInfo::new_with_size(false, 8);
+        let elem = crate::type_id::FakeTypeInfo::new_with_size(8);
         let s = call_slice_sub(
             &mut ctx,
             SliceObject::new(ptr::null_mut(), 0, 0),

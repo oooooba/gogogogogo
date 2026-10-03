@@ -18,9 +18,14 @@ struct StackFrameChannelNew<'a> {
     capacity: usize,
 }
 
-fn allocate_channel(ctx: &mut LightWeightThreadContext, capacity: usize) -> *mut ChannelObject {
+fn allocate_channel(
+    ctx: &mut LightWeightThreadContext,
+    capacity: usize,
+    elem_type: TypeId,
+) -> *mut ChannelObject {
     let object_size = mem::size_of::<ChannelObject>();
-    let ptr = ctx.allocate(object_size, TypeId::new_invalid()) as *mut ChannelObject;
+    let ptr = ctx.allocate(object_size) as *mut ChannelObject;
+    ctx.register_channel(ptr as usize, elem_type);
 
     let channel = ctx
         .global_context()
@@ -37,8 +42,9 @@ fn allocate_channel(ctx: &mut LightWeightThreadContext, capacity: usize) -> *mut
 pub extern "C" fn gox5_channel_new(ctx: &mut LightWeightThreadContext) -> FunctionObject {
     let frame = ctx.stack_frame::<StackFrameChannelNew>();
     let capacity = frame.capacity;
+    let elem_type = frame.type_id;
 
-    let ptr = allocate_channel(ctx, capacity);
+    let ptr = allocate_channel(ctx, capacity, elem_type);
     let result = ObjectPtr(ptr as *mut ());
 
     let frame = ctx.stack_frame_mut::<StackFrameChannelNew>();
@@ -47,13 +53,8 @@ pub extern "C" fn gox5_channel_new(ctx: &mut LightWeightThreadContext) -> Functi
     ctx.pop_frame()
 }
 
-fn load_send_data(
-    src: ObjectPtr,
-    size: usize,
-    type_id: TypeId,
-    ctx: &mut LightWeightThreadContext,
-) -> ObjectPtr {
-    let dst = ctx.allocate(size, type_id);
+fn load_send_data(src: ObjectPtr, size: usize, ctx: &mut LightWeightThreadContext) -> ObjectPtr {
+    let dst = ctx.allocate(size);
     let src_slice = unsafe { slice::from_raw_parts(src.as_ref::<u8>(), size) };
     let dst_slice = unsafe { slice::from_raw_parts_mut(dst as *mut u8, size) };
     dst_slice.copy_from_slice(src_slice);
@@ -118,12 +119,7 @@ pub extern "C" fn gox5_channel_select(ctx: &mut LightWeightThreadContext) -> Fun
         let channel = channel.as_mut::<ChannelObject>();
         let id = ctx.id();
         if !entry.send_data.is_null() && channel.can_complete_send(id) {
-            let data = load_send_data(
-                entry.send_data.clone(),
-                entry.type_id.size(),
-                entry.type_id,
-                ctx,
-            );
+            let data = load_send_data(entry.send_data.clone(), entry.type_id.size(), ctx);
             channel.send(id, data).unwrap();
             set_result(ctx, Some(i), false);
             return ctx.pop_frame();
@@ -241,7 +237,7 @@ pub extern "C" fn gox5_channel_send(ctx: &mut LightWeightThreadContext) -> Funct
     let channel = channel.as_mut::<ChannelObject>();
 
     let id = ctx.id();
-    let data = load_send_data(frame.data.clone(), frame.type_id.size(), frame.type_id, ctx);
+    let data = load_send_data(frame.data.clone(), frame.type_id.size(), ctx);
 
     if channel.send(id, data).is_some() {
         ctx.pop_frame()

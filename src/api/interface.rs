@@ -29,7 +29,7 @@ pub extern "C" fn gox5_interface_new(ctx: &mut LightWeightThreadContext) -> Func
         ObjectPtr(ptr::null_mut())
     } else {
         let size = type_id.size();
-        let ptr = ctx.allocate(size, type_id);
+        let ptr = ctx.allocate(size);
         let src = unsafe { slice::from_raw_parts(frame_receiver.0 as *const u8, size) };
         let dst = unsafe { slice::from_raw_parts_mut(ptr as *mut u8, size) };
         dst.copy_from_slice(src);
@@ -153,7 +153,7 @@ pub extern "C" fn gox5_interface_invoke(ctx: &mut LightWeightThreadContext) -> F
     // This allocation must not be made through the global context directly:
     // a hot interface invocation loop can exhaust the heap, and the garbage
     // collector has to run before giving up on the allocation.
-    let args = ctx.allocate(WordChunk::size_for_count(count), TypeId::new_invalid());
+    let args = ctx.allocate(WordChunk::size_for_count(count));
     let args = unsafe { WordChunk::copy_into_raw(args as *mut WordChunk, args_wc_ptr) };
 
     let current_stack_pointer = ctx.stack_pointer();
@@ -184,7 +184,7 @@ mod tests {
     use crate::light_weight_thread::LightWeightThreadContext;
     use crate::object::interface::InterfaceTableEntry;
     use crate::object::string::StringObject;
-    use crate::type_id::{FakeTypeInfo, TypeId, TypeInfo};
+    use crate::type_id::{TYPE_INFO_MAGIC, TypeId, TypeInfo, TypeKind};
     use std::mem;
     use std::slice;
     use std::sync::OnceLock;
@@ -203,14 +203,15 @@ mod tests {
             static TEST_NAME: [u8; 5] = *b"test\0";
             let name = StringObject::new(TEST_NAME.as_ptr(), 4);
             TypeInfo {
+                gc_magic: TYPE_INFO_MAGIC,
                 name,
                 num_methods: 0,
                 interface_table: ptr::null(),
                 is_equal: test_is_equal,
                 hash: test_hash,
                 size: mem::size_of::<isize>(),
-                no_pointers: false,
-                is_interface: false,
+                kind: TypeKind::NoPointer as i32,
+                pointed_to: TypeId::new_invalid(),
                 get_member_offset_runs: None,
             }
         })
@@ -326,14 +327,15 @@ mod tests {
         static INSTANCE: OnceLock<TypeInfo> = OnceLock::new();
         let table = test_interface_table();
         let info = INSTANCE.get_or_init(|| TypeInfo {
+            gc_magic: TYPE_INFO_MAGIC,
             name: StringObject::new(TEST_METHOD_NAME.as_ptr(), TEST_METHOD_NAME.len() - 1),
             num_methods: table.len(),
             interface_table: table.as_ptr(),
             is_equal: test_is_equal,
             hash: test_hash,
             size: mem::size_of::<isize>(),
-            no_pointers: false,
-            is_interface: false,
+            kind: TypeKind::NoPointer as i32,
+            pointed_to: TypeId::new_invalid(),
             get_member_offset_runs: None,
         });
         TypeId::from_raw(info as *const TypeInfo as usize)
@@ -453,10 +455,9 @@ mod tests {
         // Fill the heap with one referenced chunk and one collectible chunk. The
         // fillers are declared pointer-free, which keeps the collection from
         // having to scan this megabyte of them word by word.
-        let filler_type = FakeTypeInfo::new(true);
         let collectible_size = 65536;
         let referenced_size = MAX_TOTAL_ALLOCATED_SIZE - collectible_size;
-        let referenced = ctx.allocate(referenced_size, filler_type.tid());
+        let referenced = ctx.allocate(referenced_size);
         assert!(!referenced.is_null());
         // The GC scans the live frames one by one, so the big chunk is
         // referenced from a real frame rather than from the unused bottom of
@@ -477,7 +478,7 @@ mod tests {
                 referenced as usize,
             )
         };
-        let collectible = ctx.allocate(collectible_size, filler_type.tid());
+        let collectible = ctx.allocate(collectible_size);
         assert!(!collectible.is_null());
         let total_before = gc.process(|mut gc| gc.allocator().total_size());
 

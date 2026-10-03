@@ -6,6 +6,7 @@ use crate::FunctionObject;
 use crate::LightWeightThreadContext;
 use crate::StackFrameCommon;
 use crate::UserFunction;
+use crate::type_id::TypeId;
 use crate::word_chunk::WordChunk;
 
 #[repr(C)]
@@ -13,6 +14,9 @@ struct StackFrameClosureNew<'a> {
     common: StackFrameCommon,
     result_ptr: &'a mut FunctionObject,
     user_function: UserFunction,
+    /// TypeInfo of the captured FreeVars struct, installed by the generated
+    /// code; the GC reads it back from the closure object.
+    capture_type: TypeId,
     free_vars: WordChunk,
 }
 
@@ -20,6 +24,7 @@ struct StackFrameClosureNew<'a> {
 pub extern "C" fn gox5_closure_new(ctx: &mut LightWeightThreadContext) -> FunctionObject {
     let frame = ctx.stack_frame::<StackFrameClosureNew>();
     let user_function = frame.user_function.clone();
+    let capture_type = frame.capture_type;
 
     let wc_ptr = unsafe {
         let sp = ctx.stack_pointer() as *const u8;
@@ -32,6 +37,7 @@ pub extern "C" fn gox5_closure_new(ctx: &mut LightWeightThreadContext) -> Functi
         ctx.allocate_closure(mem::size_of::<ClosureLayout>() + wc_data_size) as *mut ClosureLayout;
 
     unsafe {
+        ptr::addr_of_mut!((*ptr).capture_type).write(capture_type);
         ptr::addr_of_mut!((*ptr).func).write(user_function);
         let wc_dst = ptr::addr_of_mut!((*ptr).object_ptrs) as *mut u8;
         let wc_src_size = mem::size_of::<usize>() + wc_data_size;
@@ -92,6 +98,7 @@ mod tests {
 
         let frame = ctx.stack_frame_mut::<StackFrameClosureNew>();
         frame.user_function = UserFunction::new(dummy_func);
+        frame.capture_type = TypeId::new_invalid();
         frame.free_vars = unsafe { ptr::read(wc) };
         frame.result_ptr = unsafe { &mut *result_raw };
 
@@ -130,6 +137,7 @@ mod tests {
 
         let frame = ctx.stack_frame_mut::<StackFrameClosureNew>();
         frame.user_function = UserFunction::new(dummy_func);
+        frame.capture_type = TypeId::new_invalid();
         frame.free_vars = unsafe { ptr::read(wc) };
         frame.result_ptr = unsafe { &mut *result_raw };
 
