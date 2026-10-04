@@ -16,6 +16,7 @@ use crate::object::map::MapObject;
 use crate::pager::PAGE_SIZE;
 use crate::pager::Pager;
 use crate::type_id::GC_SLOT_DEFER_STACK;
+use crate::type_id::GC_SLOT_FREE_VARS;
 use crate::type_id::GC_SLOT_FUNCTION;
 use crate::type_id::GC_SLOT_INTERFACE;
 use crate::type_id::GC_SLOT_POINTER;
@@ -905,6 +906,14 @@ impl ObjectAllocatorInner {
                 let word = unsafe { ptr::read_unaligned(offset as *const usize) };
                 if let Some(object_address) = self.resolve_any(word) {
                     self.mark_object(object_address);
+                }
+            }
+            GC_SLOT_FREE_VARS => {
+                let word = unsafe { ptr::read_unaligned(offset as *const usize) };
+                if word != 0
+                    && let Some(closure_address) = self.containing_closure(word)
+                {
+                    self.mark_object(closure_address);
                 }
             }
             GC_SLOT_RAW => self.mark_range_raw(offset, offset + size),

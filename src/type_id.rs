@@ -21,6 +21,8 @@ use crate::object::string::StringObject;
 ///                        closure's own capture descriptor).
 ///   GC_SLOT_DEFER_STACK  a word at `offset` that points at the head of a
 ///                        DeferStackEntry chain (traced by walking `next`).
+///   GC_SLOT_FREE_VARS    a word at `offset` that points at closure capture
+///                        data and marks the owning closure object.
 ///   GC_SLOT_RAW          `size` bytes at `offset` that no Go type describes
 ///                        (a frame's common block, an aggregate without an
 ///                        enumerator of its own, a map, a channel, ...); the
@@ -33,7 +35,8 @@ pub(crate) const GC_SLOT_INTERFACE: i32 = 2;
 pub(crate) const GC_SLOT_STRING: i32 = 3;
 pub(crate) const GC_SLOT_FUNCTION: i32 = 4;
 pub(crate) const GC_SLOT_DEFER_STACK: i32 = 5;
-pub(crate) const GC_SLOT_RAW: i32 = 6;
+pub(crate) const GC_SLOT_FREE_VARS: i32 = 6;
+pub(crate) const GC_SLOT_RAW: i32 = 7;
 
 /// C signature `TypeOffsetVisitor`:
 /// `void (*)(uintptr_t offset, uintptr_t size, TypeId type, int kind, void *arg)`.

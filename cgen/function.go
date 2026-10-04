@@ -208,7 +208,10 @@ func (ctx *Context) emitFrameStackMap(function *ssa.Function, frameName string, 
 	// The common block holds no Go value: a resume function pointer, the link
 	// to the previous frame, the free vars and the defer list, none of which
 	// has a Go type, so it is scanned word by word.
-	body := stackMapRawVisit(fmt.Sprintf("base + offsetof(%s, common)", frameCName), "sizeof(StackFrameCommon)", "common")
+	body := ""
+	body += fmt.Sprintf("	visit(base + offsetof(%s, common.resume_func), sizeof(FunctionObject), (TypeId){.id=0}, GC_SLOT_FUNCTION, arg); // resume_func\n", frameCName)
+	body += fmt.Sprintf("	visit(base + offsetof(%s, common.free_vars), sizeof(void*), (TypeId){.id=0}, GC_SLOT_FREE_VARS, arg); // free_vars\n", frameCName)
+	body += fmt.Sprintf("	visit(base + offsetof(%s, common.deferred_list), sizeof(void*), (TypeId){.id=0}, GC_SLOT_DEFER_STACK, arg); // deferred_list\n", frameCName)
 	body += fmt.Sprintf("\t%s(visit, base + offsetof(%s, signature), arg); // signature\n", getSignatureOffsetRunsName(signatureName), frameCName)
 	for _, member := range members {
 		if member.typ == nil {
