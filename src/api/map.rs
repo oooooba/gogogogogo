@@ -21,9 +21,7 @@ struct StackFrameMapNew<'a> {
 /// why the map must not be filled by moving a `MapObject` value in.
 fn allocate_map(ctx: &mut LightWeightThreadContext) -> *mut MapObject {
     let object_size = mem::size_of::<MapObject>();
-    let ptr = ctx.allocate(object_size) as *mut MapObject;
-    ctx.register_map(ptr as usize);
-    ptr
+    ctx.allocate_map(object_size) as *mut MapObject
 }
 
 #[unsafe(no_mangle)]

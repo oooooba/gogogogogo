@@ -150,8 +150,24 @@ impl ObjectAllocatorInner {
         Self::allocate_span(&mut self.total_size, size, &mut self.allocated_objects)
     }
 
+    fn allocate_channel(&mut self, size: usize, elem_type: TypeId) -> *mut () {
+        let ptr = self.allocate(size);
+        if !ptr.is_null() {
+            self.allocated_channels.insert(ptr as usize, elem_type);
+        }
+        ptr
+    }
+
     fn allocate_closure(&mut self, size: usize) -> *mut () {
         Self::allocate_span(&mut self.total_size, size, &mut self.allocated_closures)
+    }
+
+    fn allocate_map(&mut self, size: usize) -> *mut () {
+        let ptr = self.allocate(size);
+        if !ptr.is_null() {
+            self.allocated_maps.insert(ptr as usize);
+        }
+        ptr
     }
 
     /// Allocates a zero-initialized, 16-byte-aligned heap span and records it
@@ -282,17 +298,6 @@ impl ObjectAllocatorInner {
             size,
             type_id,
         });
-    }
-
-    /// Records that the object at `address` is a channel that buffers/moves
-    /// values of type `elem_type`. Called once at channel creation.
-    fn register_channel(&mut self, address: usize, elem_type: TypeId) {
-        self.allocated_channels.insert(address, elem_type);
-    }
-
-    /// Records that the object at `address` is a MapObject.
-    fn register_map(&mut self, address: usize) {
-        self.allocated_maps.insert(address);
     }
 
     fn free_all_allocated_objects(&mut self) {
@@ -950,20 +955,20 @@ impl ObjectAllocatorPtr {
         unsafe { &mut *self.0 }.allocate(size)
     }
 
+    pub(crate) fn allocate_channel(&self, size: usize, elem_type: TypeId) -> *mut () {
+        unsafe { &mut *self.0 }.allocate_channel(size, elem_type)
+    }
+
     pub(crate) fn allocate_closure(&self, size: usize) -> *mut () {
         unsafe { &mut *self.0 }.allocate_closure(size)
     }
 
+    pub(crate) fn allocate_map(&self, size: usize) -> *mut () {
+        unsafe { &mut *self.0 }.allocate_map(size)
+    }
+
     pub(crate) fn register_global_object(&self, address: *mut (), size: usize, type_id: TypeId) {
         unsafe { &mut *self.0 }.register_global_object(address, size, type_id);
-    }
-
-    pub(crate) fn register_channel(&self, address: usize, elem_type: TypeId) {
-        unsafe { &mut *self.0 }.register_channel(address, elem_type);
-    }
-
-    pub(crate) fn register_map(&self, address: usize) {
-        unsafe { &mut *self.0 }.register_map(address);
     }
 
     pub(crate) fn run_gc(&self, contexts: &[&LightWeightThreadContext]) {
@@ -1594,13 +1599,13 @@ mod tests {
     #[test]
     fn test_channel_scan_keeps_buffered_values() {
         let allocator = ObjectAllocator::new(Rc::new(Pager::new()));
-        let ptr = allocator.ptr().allocate(mem::size_of::<ChannelObject>()) as *mut ChannelObject;
+        let ptr = allocator
+            .ptr()
+            .allocate_channel(mem::size_of::<ChannelObject>(), types().node.tid())
+            as *mut ChannelObject;
         unsafe {
             ptr::write(ptr, ChannelObject::new(2, &allocator.ptr()));
         }
-        allocator
-            .ptr()
-            .register_channel(ptr as usize, types().node.tid());
         let leaf = alloc_node(&allocator.ptr(), ptr::null_mut());
         let data = alloc_node(&allocator.ptr(), leaf);
         unsafe {
@@ -1619,9 +1624,8 @@ mod tests {
     #[test]
     fn test_map_scan_keeps_entry_boxes() {
         let allocator = ObjectAllocator::new(Rc::new(Pager::new()));
-        let ptr = allocator.ptr().allocate(mem::size_of::<MapObject>()) as *mut MapObject;
+        let ptr = allocator.ptr().allocate_map(mem::size_of::<MapObject>()) as *mut MapObject;
         MapObject::construct_in(ptr, map_key_type(), types().node.tid(), allocator.ptr());
-        allocator.ptr().register_map(ptr as usize);
 
         let mut key = [0u64; 2];
         key[0] = 7;
@@ -1656,9 +1660,9 @@ mod tests {
         let channel = allocator.ptr().allocate(mem::size_of::<ChannelObject>());
         allocator
             .ptr()
-            .register_channel(channel as usize, types().node.tid());
+            .allocate_channel(mem::size_of::<ChannelObject>(), types().node.tid());
         let map = allocator.ptr().allocate(mem::size_of::<MapObject>());
-        allocator.ptr().register_map(map as usize);
+        allocator.ptr().allocate_map(mem::size_of::<MapObject>());
         assert_eq!(allocator.ptr().registered_channels_len(), 1);
         assert_eq!(allocator.ptr().registered_maps_len(), 1);
 

@@ -24,8 +24,7 @@ fn allocate_channel(
     elem_type: TypeId,
 ) -> *mut ChannelObject {
     let object_size = mem::size_of::<ChannelObject>();
-    let ptr = ctx.allocate(object_size) as *mut ChannelObject;
-    ctx.register_channel(ptr as usize, elem_type);
+    let ptr = ctx.allocate_channel(object_size, elem_type) as *mut ChannelObject;
 
     let channel = ctx
         .global_context()

@@ -157,18 +157,15 @@ impl LightWeightThreadContext {
         self.allocate_with(size, |allocator| allocator.allocate_closure(size))
     }
 
-    pub(crate) fn register_channel(&mut self, address: usize, elem_type: TypeId) {
+    pub(crate) fn allocate_channel(&mut self, size: usize, elem_type: TypeId) -> *mut () {
         self.global_context().process(|mut global_context| {
-            global_context
-                .allocator()
-                .register_channel(address, elem_type);
-        });
+            global_context.allocator().allocate_channel(size, elem_type)
+        })
     }
 
-    pub(crate) fn register_map(&mut self, address: usize) {
-        self.global_context().process(|mut global_context| {
-            global_context.allocator().register_map(address);
-        });
+    pub(crate) fn allocate_map(&mut self, size: usize) -> *mut () {
+        self.global_context()
+            .process(|mut global_context| global_context.allocator().allocate_map(size))
     }
 
     fn allocate_with(
