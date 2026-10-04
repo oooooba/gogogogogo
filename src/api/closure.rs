@@ -53,7 +53,6 @@ pub extern "C" fn gox5_closure_new(ctx: &mut LightWeightThreadContext) -> Functi
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ObjectAllocator;
     use crate::UserFunction;
     use crate::global_context;
     use crate::light_weight_thread::LightWeightThreadContext;
@@ -64,7 +63,7 @@ mod tests {
         LightWeightThreadContext,
         crate::global_context::GlobalContextPtr,
     ) {
-        let gc = global_context::create_global_context(ObjectAllocator::new());
+        let gc = global_context::create_global_context();
         let func = FunctionObject::new_null();
         let ctx = crate::create_light_weight_thread_context(gc.dupulicate(), func);
         (ctx, gc)

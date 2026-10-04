@@ -371,11 +371,13 @@ pub extern "C" fn gox5_string_search_string(ctx: &mut LightWeightThreadContext) 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ObjectAllocator;
+    use crate::allocator::ObjectAllocator;
     use crate::global_context;
     use crate::light_weight_thread::LightWeightThreadContext;
     use crate::object::string::StringObjectBuilder;
+    use crate::pager::Pager;
     use std::mem;
+    use std::rc::Rc;
 
     fn test_builder(len_in_bytes: usize, allocator: &ObjectAllocator) -> StringObjectBuilder {
         StringObject::builder(
@@ -388,7 +390,7 @@ mod tests {
         LightWeightThreadContext,
         crate::global_context::GlobalContextPtr,
     ) {
-        let gc = global_context::create_global_context(ObjectAllocator::new());
+        let gc = global_context::create_global_context();
         let func = FunctionObject::new_null();
         let ctx = crate::create_light_weight_thread_context(gc.dupulicate(), func);
         (ctx, gc)
@@ -413,7 +415,7 @@ mod tests {
             FunctionObject::new_null(),
         );
 
-        let allocator = ObjectAllocator::new();
+        let allocator = ObjectAllocator::new(Rc::new(Pager::new()));
         let mut builder = test_builder(5, &allocator);
         builder.append_bytes(b"hello");
         let s = builder.build();
@@ -447,7 +449,7 @@ mod tests {
             FunctionObject::new_null(),
         );
 
-        let allocator = ObjectAllocator::new();
+        let allocator = ObjectAllocator::new(Rc::new(Pager::new()));
         let builder = test_builder(0, &allocator);
         let s = builder.build();
 
@@ -538,7 +540,7 @@ mod tests {
             FunctionObject::new_null(),
         );
 
-        let allocator = ObjectAllocator::new();
+        let allocator = ObjectAllocator::new(Rc::new(Pager::new()));
         let mut builder = test_builder(5, &allocator);
         builder.append_bytes(b"hello");
         let base = builder.build();
@@ -574,7 +576,7 @@ mod tests {
             FunctionObject::new_null(),
         );
 
-        let allocator = ObjectAllocator::new();
+        let allocator = ObjectAllocator::new(Rc::new(Pager::new()));
         let mut builder = test_builder(5, &allocator);
         builder.append_bytes(b"hello");
         let base = builder.build();
@@ -610,7 +612,7 @@ mod tests {
             FunctionObject::new_null(),
         );
 
-        let allocator = ObjectAllocator::new();
+        let allocator = ObjectAllocator::new(Rc::new(Pager::new()));
         let mut builder1 = test_builder(5, &allocator);
         builder1.append_bytes(b"hello");
         let lhs = builder1.build();

@@ -272,7 +272,8 @@ impl ChannelObject {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ObjectAllocator;
+    use crate::allocator::ObjectAllocator;
+    use crate::pager::Pager;
 
     use std::cell::RefCell;
     use std::ptr;
@@ -289,7 +290,7 @@ mod tests {
 
     #[test]
     fn test_buffered_channel_send_receive() {
-        let allocator = ObjectAllocator::new();
+        let allocator = ObjectAllocator::new(Rc::new(Pager::new()));
         let channel = Rc::new(RefCell::new(ChannelObject::new(1, &allocator.ptr())));
         {
             let data = allocator.ptr().allocate(mem::size_of::<isize>()) as *mut isize;
@@ -310,7 +311,7 @@ mod tests {
     #[test]
     fn test_buffered_channel_order() {
         let capacity = 10;
-        let allocator = ObjectAllocator::new();
+        let allocator = ObjectAllocator::new(Rc::new(Pager::new()));
         let channel = Rc::new(RefCell::new(ChannelObject::new(capacity, &allocator.ptr())));
         for i in 0..capacity {
             let data = allocator.ptr().allocate(mem::size_of::<isize>()) as *mut isize;
@@ -330,7 +331,7 @@ mod tests {
 
     #[test]
     fn test_buffered_channel_first_send_second_receive() {
-        let allocator = ObjectAllocator::new();
+        let allocator = ObjectAllocator::new(Rc::new(Pager::new()));
         let channel = Rc::new(RefCell::new(ChannelObject::new(1, &allocator.ptr())));
         let first = channel.clone();
         let second = channel;
@@ -352,7 +353,7 @@ mod tests {
 
     #[test]
     fn test_buffered_channel_first_receive_second_send() {
-        let allocator = ObjectAllocator::new();
+        let allocator = ObjectAllocator::new(Rc::new(Pager::new()));
         let channel = Rc::new(RefCell::new(ChannelObject::new(1, &allocator.ptr())));
         let first = channel.clone();
         let second = channel;
@@ -371,7 +372,7 @@ mod tests {
 
     #[test]
     fn test_buffered_channel_send_close_receive() {
-        let allocator = ObjectAllocator::new();
+        let allocator = ObjectAllocator::new(Rc::new(Pager::new()));
         let channel = Rc::new(RefCell::new(ChannelObject::new(1, &allocator.ptr())));
         {
             let data = allocator.ptr().allocate(mem::size_of::<isize>()) as *mut isize;
@@ -398,7 +399,7 @@ mod tests {
 
     #[test]
     fn test_rendezvous_channel_first_send_second_receive() {
-        let allocator = ObjectAllocator::new();
+        let allocator = ObjectAllocator::new(Rc::new(Pager::new()));
         let channel = Rc::new(RefCell::new(ChannelObject::new(0, &allocator.ptr())));
         let first = channel.clone();
         let second = channel;
@@ -425,7 +426,7 @@ mod tests {
 
     #[test]
     fn test_rendezvous_channel_first_receive_second_send() {
-        let allocator = ObjectAllocator::new();
+        let allocator = ObjectAllocator::new(Rc::new(Pager::new()));
         let channel = Rc::new(RefCell::new(ChannelObject::new(0, &allocator.ptr())));
         let first = channel.clone();
         let second = channel;
@@ -451,7 +452,7 @@ mod tests {
 
     #[test]
     fn test_rendezvous_channel_first_send_and_close_second_receive() {
-        let allocator = ObjectAllocator::new();
+        let allocator = ObjectAllocator::new(Rc::new(Pager::new()));
         let channel = Rc::new(RefCell::new(ChannelObject::new(0, &allocator.ptr())));
         let first = channel.clone();
         let second = channel;

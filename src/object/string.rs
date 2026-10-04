@@ -92,7 +92,9 @@ impl StringObjectBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ObjectAllocator;
+    use crate::allocator::ObjectAllocator;
+    use crate::pager::Pager;
+    use std::rc::Rc;
 
     fn test_builder(len_in_bytes: usize, allocator: &ObjectAllocator) -> StringObjectBuilder {
         StringObjectBuilder::new(
@@ -103,7 +105,7 @@ mod tests {
 
     #[test]
     fn test_string_object_builder_and_as_bytes() {
-        let allocator = ObjectAllocator::new();
+        let allocator = ObjectAllocator::new(Rc::new(Pager::new()));
         let mut builder = test_builder(5, &allocator);
         builder.append_bytes(b"hello");
         let s = builder.build();
@@ -112,7 +114,7 @@ mod tests {
 
     #[test]
     fn test_string_object_len_in_bytes() {
-        let allocator = ObjectAllocator::new();
+        let allocator = ObjectAllocator::new(Rc::new(Pager::new()));
         let mut builder = test_builder(5, &allocator);
         builder.append_bytes(b"hello");
         let s = builder.build();
@@ -121,7 +123,7 @@ mod tests {
 
     #[test]
     fn test_string_object_to_str() {
-        let allocator = ObjectAllocator::new();
+        let allocator = ObjectAllocator::new(Rc::new(Pager::new()));
         let mut builder = test_builder(5, &allocator);
         builder.append_bytes(b"hello");
         let s = builder.build();
@@ -130,7 +132,7 @@ mod tests {
 
     #[test]
     fn test_string_object_eq() {
-        let allocator = ObjectAllocator::new();
+        let allocator = ObjectAllocator::new(Rc::new(Pager::new()));
         let mut builder1 = test_builder(5, &allocator);
         builder1.append_bytes(b"hello");
         let s1 = builder1.build();
@@ -144,7 +146,7 @@ mod tests {
 
     #[test]
     fn test_string_object_ne() {
-        let allocator = ObjectAllocator::new();
+        let allocator = ObjectAllocator::new(Rc::new(Pager::new()));
         let mut builder1 = test_builder(5, &allocator);
         builder1.append_bytes(b"hello");
         let s1 = builder1.build();
@@ -158,7 +160,7 @@ mod tests {
 
     #[test]
     fn test_string_object_append_char() {
-        let allocator = ObjectAllocator::new();
+        let allocator = ObjectAllocator::new(Rc::new(Pager::new()));
         let mut builder = test_builder(5, &allocator);
         builder.append_char('h');
         builder.append_char('e');
@@ -171,7 +173,7 @@ mod tests {
 
     #[test]
     fn test_string_object_empty() {
-        let allocator = ObjectAllocator::new();
+        let allocator = ObjectAllocator::new(Rc::new(Pager::new()));
         let builder = test_builder(0, &allocator);
         let s = builder.build();
         assert_eq!(s.as_bytes(), b"");
@@ -181,7 +183,7 @@ mod tests {
 
     #[test]
     fn test_string_object_contains_nul_bytes() {
-        let allocator = ObjectAllocator::new();
+        let allocator = ObjectAllocator::new(Rc::new(Pager::new()));
         let mut builder = test_builder(3, &allocator);
         builder.append_bytes(b"a\x00b");
         let s = builder.build();

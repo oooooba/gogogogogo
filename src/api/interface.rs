@@ -176,7 +176,6 @@ pub extern "C" fn gox5_interface_invoke(ctx: &mut LightWeightThreadContext) -> F
 mod tests {
     use super::*;
     use crate::DeferStack;
-    use crate::ObjectAllocator;
     use crate::StackFrame;
     use crate::UserFunction;
     use crate::allocator::MAX_TOTAL_ALLOCATED_SIZE;
@@ -225,7 +224,7 @@ mod tests {
         LightWeightThreadContext,
         crate::global_context::GlobalContextPtr,
     ) {
-        let gc = global_context::create_global_context(ObjectAllocator::new());
+        let gc = global_context::create_global_context();
         let func = FunctionObject::new_null();
         let ctx = crate::create_light_weight_thread_context(gc.dupulicate(), func);
         (ctx, gc)
@@ -452,13 +451,21 @@ mod tests {
     fn test_gox5_interface_invoke_allocates_args_when_heap_is_exhausted() {
         let (mut ctx, gc) = create_ctx();
 
-        // Fill the heap with one referenced chunk and one collectible chunk. The
-        // fillers are declared pointer-free, which keeps the collection from
-        // having to scan this megabyte of them word by word.
-        let collectible_size = 65536;
-        let referenced_size = MAX_TOTAL_ALLOCATED_SIZE - collectible_size;
-        let referenced = ctx.allocate(referenced_size);
-        assert!(!referenced.is_null());
+        // Fill the heap with 64 KiB chunks, one of which is referenced and the
+        // rest of which are collectible. They have to stay below the pager
+        // threshold: a larger allocation is mapped from pages and never counts
+        // against the heap budget, so it could never fill it up.
+        let chunk_size = 65536;
+        let mut referenced: *mut () = ptr::null_mut();
+        let mut budget = MAX_TOTAL_ALLOCATED_SIZE;
+        while budget > 0 {
+            let chunk = ctx.allocate(budget.min(chunk_size));
+            assert!(!chunk.is_null());
+            if referenced.is_null() {
+                referenced = chunk;
+            }
+            budget -= chunk_size.min(budget);
+        }
         // The GC scans the live frames one by one, so the big chunk is
         // referenced from a real frame rather than from the unused bottom of
         // the stack region.
@@ -478,9 +485,8 @@ mod tests {
                 referenced as usize,
             )
         };
-        let collectible = ctx.allocate(collectible_size);
-        assert!(!collectible.is_null());
         let total_before = gc.process(|mut gc| gc.allocator().total_size());
+        assert_eq!(total_before, MAX_TOTAL_ALLOCATED_SIZE);
 
         let (interface, _receiver) = test_interface();
         let args: Vec<*const ()> = vec![0x3333 as *const ()];

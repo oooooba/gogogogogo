@@ -155,7 +155,6 @@ pub extern "C" fn gox5_lwt_yield(ctx: &mut LightWeightThreadContext) -> Function
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ObjectAllocator;
     use crate::UserFunction;
     use crate::defer_stack::DeferStackEntry;
     use crate::global_context;
@@ -165,7 +164,7 @@ mod tests {
         LightWeightThreadContext,
         crate::global_context::GlobalContextPtr,
     ) {
-        let gc = global_context::create_global_context(ObjectAllocator::new());
+        let gc = global_context::create_global_context();
         let func = FunctionObject::new_null();
         let ctx = create_light_weight_thread_context(gc.dupulicate(), func);
         (ctx, gc)

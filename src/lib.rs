@@ -4,6 +4,7 @@ mod defer_stack;
 mod global_context;
 mod light_weight_thread;
 mod object;
+mod pager;
 mod type_id;
 mod word_chunk;
 
@@ -11,10 +12,11 @@ use std::mem;
 use std::process;
 use std::ptr;
 
-use allocator::{ObjectAllocator, ObjectAllocatorPtr};
+use allocator::ObjectAllocatorPtr;
 use defer_stack::DeferStack;
 use global_context::GlobalContextPtr;
 use light_weight_thread::LightWeightThreadContext;
+use light_weight_thread::STACK_PAGES;
 use type_id::TypeId;
 
 pub(crate) const FUNCTION_OBJECT_CLOSURE_FLAG: usize = 1usize << (usize::BITS - 1);
@@ -161,8 +163,8 @@ fn create_light_weight_thread_context(
 ) -> LightWeightThreadContext {
     let (id, stack_start_addr) = global_context.process(|mut global_context| {
         let id = global_context.issue_light_weight_thread_id();
-        let addr = global_context.allocator().allocate_guarded_pages(200);
-        (id, addr)
+        let stack_start_addr = global_context.pager().allocate(STACK_PAGES);
+        (id, stack_start_addr)
     });
     let prev_func = UserFunction::new(terminate);
     LightWeightThreadContext::new(
@@ -198,8 +200,7 @@ fn execute(ctx: &mut LightWeightThreadContext) {
 
 #[cfg_attr(not(test), unsafe(no_mangle))]
 fn main() {
-    let allocator = ObjectAllocator::new();
-    let global_context = global_context::create_global_context(allocator);
+    let global_context = global_context::create_global_context();
 
     let init_func = unsafe { runtime_info_get_init_point() };
     let init_func = FunctionObject::from_user_function(init_func);
@@ -226,7 +227,9 @@ fn main() {
         global_context.process(|mut global_context| global_context.pop_light_weight_thread())
     {
         execute(&mut ctx);
-        if !ctx.is_terminated() {
+        if ctx.is_terminated() {
+            ctx.reclaim_stack_pages();
+        } else {
             global_context.process(|mut global_context| {
                 if let Some(slot) = ctx.take_coro_slot() {
                     global_context.park_coro(slot, ctx);
@@ -246,7 +249,7 @@ mod tests {
 
     #[test]
     fn test_create_light_weight_thread_context() {
-        let global_context = global_context::create_global_context(ObjectAllocator::new());
+        let global_context = global_context::create_global_context();
         let func = FunctionObject::from_user_function(UserFunction::new(user_function));
         let ctx = create_light_weight_thread_context(global_context.dupulicate(), func);
         assert_eq!(ctx.id(), 0);
@@ -265,7 +268,7 @@ mod tests {
 
     #[test]
     fn test_invoke_user_function() {
-        let global_context = global_context::create_global_context(ObjectAllocator::new());
+        let global_context = global_context::create_global_context();
         let mut ctx = create_light_weight_thread_context(
             global_context.dupulicate(),
             FunctionObject::new_null(),

@@ -243,14 +243,16 @@ pub extern "C" fn gox5_map_set(ctx: &mut LightWeightThreadContext) -> FunctionOb
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ObjectAllocator;
     use crate::ObjectAllocatorPtr;
+    use crate::allocator::ObjectAllocator;
     use crate::global_context;
     use crate::light_weight_thread::LightWeightThreadContext;
     use crate::object::string::StringObject;
+    use crate::pager::Pager;
     use crate::type_id::{TYPE_INFO_MAGIC, TypeId, TypeInfo, TypeKind};
     use std::mem;
     use std::ptr;
+    use std::rc::Rc;
     use std::sync::OnceLock;
 
     extern "C" fn test_is_equal(a: ObjectPtr, b: ObjectPtr) -> bool {
@@ -289,7 +291,7 @@ mod tests {
         LightWeightThreadContext,
         crate::global_context::GlobalContextPtr,
     ) {
-        let gc = global_context::create_global_context(ObjectAllocator::new());
+        let gc = global_context::create_global_context();
         let func = FunctionObject::new_null();
         let ctx = crate::create_light_weight_thread_context(gc.dupulicate(), func);
         (ctx, gc)
@@ -342,7 +344,7 @@ mod tests {
 
     #[test]
     fn test_gox5_map_set_and_len() {
-        let allocator = ObjectAllocator::new();
+        let allocator = ObjectAllocator::new(Rc::new(Pager::new()));
         let map_ptr = make_map_ptr(&allocator.ptr());
 
         let key = make_isize_ptr(&allocator.ptr(), 42);
@@ -370,7 +372,7 @@ mod tests {
 
     #[test]
     fn test_gox5_map_len_empty() {
-        let allocator = ObjectAllocator::new();
+        let allocator = ObjectAllocator::new(Rc::new(Pager::new()));
         let map_ptr = make_map_ptr(&allocator.ptr());
 
         let (mut ctx, _gc) = create_ctx();
@@ -452,7 +454,7 @@ mod tests {
 
     #[test]
     fn test_gox5_map_clear() {
-        let allocator = ObjectAllocator::new();
+        let allocator = ObjectAllocator::new(Rc::new(Pager::new()));
         let map_ptr = make_map_ptr(&allocator.ptr());
 
         let (mut ctx, _gc) = create_ctx();

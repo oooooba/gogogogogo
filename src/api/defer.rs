@@ -131,7 +131,6 @@ pub extern "C" fn gox5_defer_execute(ctx: &mut LightWeightThreadContext) -> Func
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ObjectAllocator;
     use crate::allocator::MAX_TOTAL_ALLOCATED_SIZE;
     use crate::global_context;
     use crate::light_weight_thread::LightWeightThreadContext;
@@ -150,7 +149,7 @@ mod tests {
         LightWeightThreadContext,
         crate::global_context::GlobalContextPtr,
     ) {
-        let gc = global_context::create_global_context(ObjectAllocator::new());
+        let gc = global_context::create_global_context();
         let func = FunctionObject::new_null();
         let ctx = crate::create_light_weight_thread_context(gc.dupulicate(), func);
         (ctx, gc)
@@ -218,15 +217,20 @@ mod tests {
 
         // Fill the heap so that exactly one defer stack entry still fits: the
         // entry with its argument copy is larger than that, so it can only be
-        // allocated after the garbage collector reclaimed the unreferenced
-        // chunk. The fillers are declared pointer-free, which keeps the
-        // collection from having to scan this megabyte of them word by word.
-        let collectible_size = 65536;
-        let referenced_size =
-            MAX_TOTAL_ALLOCATED_SIZE - mem::size_of::<DeferStackEntry>() - collectible_size;
-
-        let referenced = ctx.allocate(referenced_size);
-        assert!(!referenced.is_null());
+        // allocated after the garbage collector reclaimed the collectible
+        // chunks. They are 64 KiB each, because a larger allocation is mapped
+        // from the pager's pages and never counts against the heap budget.
+        let chunk_size = 65536;
+        let mut referenced: *mut () = ptr::null_mut();
+        let mut budget = MAX_TOTAL_ALLOCATED_SIZE - mem::size_of::<DeferStackEntry>();
+        while budget > 0 {
+            let chunk = ctx.allocate(budget.min(chunk_size));
+            assert!(!chunk.is_null());
+            if referenced.is_null() {
+                referenced = chunk;
+            }
+            budget -= chunk_size.min(budget);
+        }
         // The GC scans the live frames one by one, so the big chunk is
         // referenced from a real frame rather than from the unused bottom of
         // the stack region.
@@ -246,8 +250,6 @@ mod tests {
                 referenced as usize,
             )
         };
-        let collectible = ctx.allocate(collectible_size);
-        assert!(!collectible.is_null());
         let total_before = total_size(&gc);
 
         // The stack the generated C code builds: a caller frame the deferred

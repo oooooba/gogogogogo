@@ -1,22 +1,26 @@
 use std::collections::VecDeque;
+use std::rc::Rc;
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use crate::LightWeightThreadContext;
-use crate::ObjectAllocator;
 use crate::ObjectAllocatorPtr;
+use crate::allocator::ObjectAllocator;
+use crate::pager::Pager;
 
 pub struct GlobalContext {
     created_light_weight_thread_count: usize,
     allocator: ObjectAllocator,
+    pager: Rc<Pager>,
     run_queue: VecDeque<LightWeightThreadContext>,
     coros: Vec<Option<LightWeightThreadContext>>,
 }
 
 impl GlobalContext {
-    fn new(allocator: ObjectAllocator) -> Self {
+    fn new(allocator: ObjectAllocator, pager: Rc<Pager>) -> Self {
         GlobalContext {
             created_light_weight_thread_count: 0,
             allocator,
+            pager,
             run_queue: VecDeque::new(),
             coros: Vec::new(),
         }
@@ -30,6 +34,10 @@ impl GlobalContext {
 
     pub fn allocator(&mut self) -> ObjectAllocatorPtr {
         self.allocator.ptr()
+    }
+
+    pub fn pager(&self) -> &Pager {
+        &self.pager
     }
 
     pub(crate) fn run_gc(&mut self, running: &LightWeightThreadContext) {
@@ -117,8 +125,10 @@ impl Drop for GlobalContextPtr {
 
 // ToDo: fix
 #[allow(clippy::arc_with_non_send_sync)]
-pub fn create_global_context(allocator: ObjectAllocator) -> GlobalContextPtr {
-    let global_context = Arc::new(Mutex::new(GlobalContext::new(allocator)));
+pub fn create_global_context() -> GlobalContextPtr {
+    let pager = Rc::new(Pager::new());
+    let allocator = ObjectAllocator::new(pager.clone());
+    let global_context = Arc::new(Mutex::new(GlobalContext::new(allocator, pager)));
     GlobalContextPtr::from(global_context)
 }
 
@@ -126,15 +136,16 @@ pub fn create_global_context(allocator: ObjectAllocator) -> GlobalContextPtr {
 mod tests {
     use super::*;
     use crate::FunctionObject;
-    use crate::ObjectAllocator;
     use crate::StackFrameCommon;
+    use crate::allocator::LARGE_ALLOCATION_THRESHOLD;
     use crate::allocator::MAX_TOTAL_ALLOCATED_SIZE;
     use crate::create_light_weight_thread_context;
+    use crate::pager::PAGE_SIZE;
     use std::mem;
     use std::ptr;
 
     fn make_gc() -> GlobalContextPtr {
-        create_global_context(ObjectAllocator::new())
+        create_global_context()
     }
 
     #[test]
@@ -184,19 +195,40 @@ mod tests {
         let gc = make_gc();
         let mut ctx =
             create_light_weight_thread_context(gc.dupulicate(), FunctionObject::new_null());
-        // Lay the self-linked bottom frame on the otherwise empty stack. Without
-        // it the garbage collector falls back to scanning the whole stack region
-        // for the one frame, which is both wasteful (word-by-word BTree lookups
-        // under Miri) and unlike production, where the bootstrap always leaves a
-        // frame with a recorded extent.
+        // Fill the heap with chunks of exactly the pager threshold: an
+        // allocation larger than that is mapped from pages and never counts
+        // against the heap budget, so only chunks this size can exhaust it.
+        // Every chunk is referenced from a frame, so the collection the last
+        // allocation triggers reclaims nothing and the allocation panics. The
+        // frame has a recorded extent, which also keeps the collector from
+        // falling back to a conservative scan of the whole stack region (both
+        // wasteful, word-by-word BTree lookups under Miri, and unlike
+        // production, where the bootstrap leaves such a frame behind).
+        let chunk_size = LARGE_ALLOCATION_THRESHOLD;
+        let chunk_count = MAX_TOTAL_ALLOCATED_SIZE / chunk_size;
+        let frame_size = mem::size_of::<StackFrameCommon>() + chunk_count * mem::size_of::<usize>();
+        ctx.grow_stack(frame_size);
+        let frame = ctx.stack_pointer() as *mut u8;
+        let prev_stack_pointer = ctx.stack_pointer();
         ctx.push_frame(
-            mem::size_of::<StackFrameCommon>(),
-            ctx.stack_pointer(),
+            frame_size,
+            prev_stack_pointer,
             None,
             &[],
             FunctionObject::new_null(),
         );
-        ctx.allocate(MAX_TOTAL_ALLOCATED_SIZE + 1);
+        for i in 0..chunk_count {
+            let chunk = ctx.allocate(chunk_size);
+            assert!(!chunk.is_null());
+            unsafe {
+                ptr::write(
+                    frame.add(mem::size_of::<StackFrameCommon>() + i * mem::size_of::<usize>())
+                        as *mut usize,
+                    chunk as usize,
+                )
+            };
+        }
+        ctx.allocate(64);
     }
 
     #[test]
@@ -248,5 +280,31 @@ mod tests {
         gc.process(|mut gc| {
             let _alloc = gc.allocator();
         });
+    }
+
+    #[test]
+    fn test_pager_access() {
+        let gc = make_gc();
+        let ptr = gc.process(|gc| gc.pager().allocate(1));
+        assert!(!ptr.is_null());
+        gc.process(|gc| gc.pager().deallocate(ptr, 1));
+    }
+
+    #[test]
+    fn test_pager_is_shared_with_the_allocator() {
+        let gc = create_global_context();
+        assert_eq!(gc.process(|gc| gc.pager().allocated_pages()), 0);
+        // An allocation too large for the heap is mapped from the pager the
+        // global context holds, so that pager is the one pager of the process.
+        let size = LARGE_ALLOCATION_THRESHOLD + 1;
+        let ptr = gc.process(|mut gc| gc.allocator().allocate(size));
+        assert!(!ptr.is_null());
+        assert_eq!(
+            gc.process(|gc| gc.pager().allocated_pages()),
+            size.div_ceil(PAGE_SIZE),
+            "the large allocation did not come out of the pager of the global context"
+        );
+        gc.process(|mut gc| gc.allocator().run_gc(&[]));
+        assert_eq!(gc.process(|gc| gc.pager().allocated_pages()), 0);
     }
 }

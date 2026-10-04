@@ -3,6 +3,7 @@ use std::ffi;
 use std::mem;
 use std::ptr;
 use std::ptr::NonNull;
+use std::rc::Rc;
 
 use allocator_api2::alloc::{AllocError, Allocator, Layout};
 
@@ -12,6 +13,8 @@ use crate::light_weight_thread::LightWeightThreadContext;
 use crate::object::channel::ChannelObject;
 use crate::object::interface::Interface;
 use crate::object::map::MapObject;
+use crate::pager::PAGE_SIZE;
+use crate::pager::Pager;
 use crate::type_id::GC_SLOT_DEFER_STACK;
 use crate::type_id::GC_SLOT_FUNCTION;
 use crate::type_id::GC_SLOT_INTERFACE;
@@ -26,9 +29,9 @@ use crate::type_id::TypeOffsetVisitor;
 pub(crate) struct ObjectAllocator(ObjectAllocatorPtr);
 
 impl ObjectAllocator {
-    pub(crate) fn new() -> Self {
+    pub(crate) fn new(pager: Rc<Pager>) -> Self {
         ObjectAllocator(ObjectAllocatorPtr(Box::into_raw(Box::new(
-            ObjectAllocatorInner::new(),
+            ObjectAllocatorInner::new(pager),
         ))))
     }
 
@@ -46,6 +49,7 @@ impl Drop for ObjectAllocator {
 }
 
 struct ObjectAllocatorInner {
+    pager: Rc<Pager>,
     allocated_objects: BTreeMap<usize, AllocatedObject>,
     /// Closure allocations live apart from ordinary objects: a closure is
     /// referenced through a `FunctionObject` whose address has the most
@@ -90,7 +94,7 @@ struct AllocatedObject {
 #[derive(Clone, Copy, PartialEq, Debug)]
 enum AllocationKind {
     Heap,
-    GuardedPages,
+    Pages,
 }
 
 /// What `mark_object` has to do with an object that is not a plain heap
@@ -111,6 +115,7 @@ const SLICE_HEADER_SIZE: usize = 3 * mem::size_of::<usize>();
 /// A string value is two words (data pointer, length).
 const STRING_SIZE: usize = 2 * mem::size_of::<usize>();
 pub(crate) const MAX_TOTAL_ALLOCATED_SIZE: usize = 1 << 20;
+pub(crate) const LARGE_ALLOCATION_THRESHOLD: usize = 128 * 1024;
 
 /// The number of bytes a value of type `typ` occupies, so a collector can
 /// check that the storage it is about to read really holds the whole value.
@@ -125,8 +130,9 @@ fn value_size(typ: TypeId) -> usize {
 }
 
 impl ObjectAllocatorInner {
-    fn new() -> Self {
+    fn new(pager: Rc<Pager>) -> Self {
         ObjectAllocatorInner {
+            pager,
             allocated_objects: BTreeMap::new(),
             allocated_closures: BTreeMap::new(),
             allocated_channels: BTreeMap::new(),
@@ -137,6 +143,9 @@ impl ObjectAllocatorInner {
     }
 
     fn allocate(&mut self, size: usize) -> *mut () {
+        if size > LARGE_ALLOCATION_THRESHOLD {
+            return self.allocate_pages(size);
+        }
         Self::allocate_span(&mut self.total_size, size, &mut self.allocated_objects)
     }
 
@@ -155,12 +164,25 @@ impl ObjectAllocatorInner {
         if total_size.saturating_add(size) > MAX_TOTAL_ALLOCATED_SIZE {
             return ptr::null_mut();
         }
-        let mut buf: Vec<u128> = Vec::new();
-        if buf.try_reserve_exact(size / ALLOCATION_ALIGNMENT).is_err() {
-            return ptr::null_mut();
-        }
-        buf.resize(size / ALLOCATION_ALIGNMENT, 0);
-        let ptr = buf.leak().as_mut_ptr() as *mut ();
+        // The span is raw storage for an object whose bytes the caller writes,
+        // so it is asked for zeroed rather than built out of a vector.
+        let ptr = if size == 0 {
+            // A zero-sized object is still recorded, and still answers with a
+            // non-null address, so it gets the dangling pointer of the span
+            // alignment: allocating a zero-sized layout is undefined behaviour.
+            NonNull::<u128>::dangling().as_ptr() as *mut ()
+        } else {
+            let Ok(layout) = Layout::from_size_align(size, ALLOCATION_ALIGNMENT) else {
+                return ptr::null_mut();
+            };
+            // SAFETY: the layout is non-zero sized and carries the alignment
+            // `free` hands the span back with.
+            let ptr = unsafe { std::alloc::alloc_zeroed(layout) };
+            if ptr.is_null() {
+                return ptr::null_mut();
+            }
+            ptr as *mut ()
+        };
         destinations.insert(
             ptr as usize,
             AllocatedObject {
@@ -173,54 +195,21 @@ impl ObjectAllocatorInner {
         ptr
     }
 
-    fn allocate_guarded_pages(&mut self, num_pages: usize) -> *mut () {
-        unsafe {
-            #[cfg(miri)]
-            let protection = libc::PROT_READ | libc::PROT_WRITE;
-            #[cfg(not(miri))]
-            let protection = libc::PROT_NONE;
-
-            let stack_area_addr = libc::mmap(
-                ptr::null_mut(),
-                4096 * (num_pages + 1),
-                protection,
-                libc::MAP_ANONYMOUS | libc::MAP_PRIVATE,
-                -1,
-                0,
-            );
-            if stack_area_addr == libc::MAP_FAILED {
-                let message = ffi::CString::new("allocate stack area").unwrap();
-                libc::perror(message.as_ptr());
-                panic!();
-            }
-            let stack_start_addr = ((stack_area_addr as usize) + 4096) as *mut libc::c_void;
-            #[cfg(not(miri))]
-            {
-                let ret = libc::mprotect(
-                    stack_start_addr,
-                    4096 * num_pages,
-                    libc::PROT_READ | libc::PROT_WRITE,
-                );
-                if ret != 0 {
-                    let message = ffi::CString::new("stack protection mode").unwrap();
-                    libc::perror(message.as_ptr());
-                    panic!();
-                }
-            }
-            let ptr = stack_start_addr as *mut ();
-            self.allocated_objects.insert(
-                ptr as usize,
-                AllocatedObject {
-                    span: Span {
-                        ptr,
-                        size: 4096 * num_pages,
-                    },
-                    kind: AllocationKind::GuardedPages,
-                    marked: false,
+    fn allocate_pages(&mut self, size: usize) -> *mut () {
+        let num_pages = size.div_ceil(PAGE_SIZE);
+        let ptr = self.pager.allocate(num_pages);
+        self.allocated_objects.insert(
+            ptr as usize,
+            AllocatedObject {
+                span: Span {
+                    ptr,
+                    size: PAGE_SIZE * num_pages,
                 },
-            );
-            ptr
-        }
+                kind: AllocationKind::Pages,
+                marked: false,
+            },
+        );
+        ptr
     }
 
     fn free(&mut self, object: &AllocatedObject) {
@@ -230,19 +219,22 @@ impl ObjectAllocatorInner {
                     .total_size
                     .checked_sub(object.span.size)
                     .expect("total allocated size underflow while freeing an object");
-                unsafe {
-                    Vec::from_raw_parts(
-                        object.span.ptr as *mut u128,
-                        0,
-                        object.span.size / ALLOCATION_ALIGNMENT,
-                    );
+                // A zero-sized span has no storage to hand back.
+                if object.span.size > 0 {
+                    unsafe {
+                        std::alloc::dealloc(
+                            object.span.ptr as *mut u8,
+                            Layout::from_size_align_unchecked(
+                                object.span.size,
+                                ALLOCATION_ALIGNMENT,
+                            ),
+                        );
+                    }
                 }
             }
-            AllocationKind::GuardedPages => {
-                let base_addr = (object.span.ptr as usize - 4096) as *mut libc::c_void;
-                unsafe {
-                    libc::munmap(base_addr, object.span.size + 4096);
-                }
+            AllocationKind::Pages => {
+                self.pager
+                    .deallocate(object.span.ptr, object.span.size / PAGE_SIZE);
             }
         }
     }
@@ -344,12 +336,9 @@ impl ObjectAllocatorInner {
     /// is scanned through its own stack map, so only the slots that can hold a
     /// heap pointer are looked at.
     fn mark_stack(&mut self, context: &LightWeightThreadContext) {
-        // The stack object is reachable from the prev_stack_pointer of every
-        // frame, but mark it explicitly so that it survives even a frame
-        // without a stack map.
-        if let Some(object_address) = self.containing_object(context.stack_base()) {
-            self.mark_object(object_address);
-        }
+        // The stack region is not an allocation of the heap: its pages come
+        // from the pager and the goroutine that ran on it gives them back when
+        // it dies, so there is nothing to keep alive here.
         for frame in context.stack_frames() {
             if let Some(get_member_offset_runs) = frame.frame_type.get_member_offset_runs() {
                 let inner = self as *mut ObjectAllocatorInner as *mut ffi::c_void;
@@ -362,8 +351,7 @@ impl ObjectAllocatorInner {
             } else {
                 // Unknown extent: scan the remainder of the stack region so
                 // that nothing reachable is missed.
-                self.object_end(context.stack_base())
-                    .unwrap_or(frame.address)
+                context.stack_end()
             };
             self.mark_range_raw(frame.address, end);
         }
@@ -382,20 +370,28 @@ impl ObjectAllocatorInner {
     /// fallbacks (runtime frames) and untyped contexts.
     fn mark_range_raw(&mut self, start: usize, end: usize) {
         let word_size = mem::size_of::<usize>();
+        let pair_size = 2 * word_size;
         let mut address = start;
-        while address + word_size <= end {
-            let word = unsafe { ptr::read_unaligned(address as *const usize) };
-            if (word & FUNCTION_OBJECT_CLOSURE_FLAG) != 0 {
-                let cleared_address = word & !FUNCTION_OBJECT_CLOSURE_FLAG;
-                if let Some(closure_address) = self.containing_closure(cleared_address) {
-                    self.mark_object(closure_address);
-                }
-            } else if let Some(object_address) = self.containing_object(word) {
-                self.mark_object(object_address);
-            } else if let Some(closure_address) = self.containing_closure(word) {
-                // An interior pointer into a closure's capture region.
-                self.mark_object(closure_address);
+        // The heap hands out every span 16-byte aligned, so the bulk of a range
+        // is walked as pairs of aligned words: an unaligned word is read one
+        // byte at a time, which is most of what a collection of a large span
+        // costs, and a pair of null words keeps nothing alive, so a span that
+        // is mostly zeros is stepped over instead of asked about word by word.
+        while address.is_multiple_of(word_size) && address + pair_size <= end {
+            let pair = unsafe { ptr::read(address as *const [usize; 2]) };
+            if pair != [0; 2] {
+                self.mark_word(pair[0]);
+                self.mark_word(pair[1]);
             }
+            address += pair_size;
+        }
+        while address + word_size <= end {
+            let word = if address.is_multiple_of(word_size) {
+                unsafe { ptr::read(address as *const usize) }
+            } else {
+                unsafe { ptr::read_unaligned(address as *const usize) }
+            };
+            self.mark_word(word);
             address += word_size;
         }
     }
@@ -403,6 +399,16 @@ impl ObjectAllocatorInner {
     /// Marks a single raw word and everything it resolves to.
     fn mark_raw_word(&mut self, address: usize) {
         let word = unsafe { ptr::read_unaligned(address as *const usize) };
+        self.mark_word(word);
+    }
+
+    /// Marks the object a raw word points at. A null word is nothing to mark:
+    /// it is not a tagged closure and lies in no allocation, so a span of
+    /// zeros is answered without asking the maps about every one of its words.
+    fn mark_word(&mut self, word: usize) {
+        if word == 0 {
+            return;
+        }
         if (word & FUNCTION_OBJECT_CLOSURE_FLAG) != 0 {
             if let Some(closure_address) =
                 self.containing_closure(word & !FUNCTION_OBJECT_CLOSURE_FLAG)
@@ -672,9 +678,6 @@ impl ObjectAllocatorInner {
             return;
         }
         self.mark_object_as_marked(object_address);
-        if record.kind != AllocationKind::Heap {
-            return;
-        }
         match record.special {
             SpecialObject::None => {
                 self.mark_range_raw(
@@ -819,7 +822,6 @@ impl ObjectAllocatorInner {
             };
             return Some(MarkRecord {
                 span: object.span,
-                kind: object.kind,
                 marked: object.marked,
                 special,
             });
@@ -827,7 +829,6 @@ impl ObjectAllocatorInner {
         if let Some(object) = self.allocated_closures.get(&object_address) {
             return Some(MarkRecord {
                 span: object.span,
-                kind: object.kind,
                 marked: object.marked,
                 special: SpecialObject::Closure,
             });
@@ -851,7 +852,6 @@ impl ObjectAllocatorInner {
 #[derive(Clone, Copy)]
 struct MarkRecord {
     span: Span,
-    kind: AllocationKind,
     marked: bool,
     special: SpecialObject,
 }
@@ -945,10 +945,6 @@ impl ObjectAllocatorPtr {
         unsafe { &mut *self.0 }.allocate_closure(size)
     }
 
-    pub(crate) fn allocate_guarded_pages(&self, num_pages: usize) -> *mut () {
-        unsafe { &mut *self.0 }.allocate_guarded_pages(num_pages)
-    }
-
     pub(crate) fn register_global_object(&self, address: *mut (), size: usize, type_id: TypeId) {
         unsafe { &mut *self.0 }.register_global_object(address, size, type_id);
     }
@@ -1030,9 +1026,9 @@ unsafe impl Allocator for ObjectAllocatorPtr {
 mod tests {
     use super::*;
     use crate::FunctionObject;
-    use crate::ObjectAllocator;
     use crate::ObjectPtr;
     use crate::StackFrameCommon;
+    use crate::allocator::ObjectAllocator;
 
     /// Where a generated frame keeps its first local: just past the header
     /// every frame starts with. The stack map generators below list their
@@ -1219,7 +1215,7 @@ mod tests {
         LightWeightThreadContext,
         crate::global_context::GlobalContextPtr,
     ) {
-        let gc = global_context::create_global_context(ObjectAllocator::new());
+        let gc = global_context::create_global_context();
         let func = FunctionObject::new_null();
         let ctx = crate::create_light_weight_thread_context(gc.dupulicate(), func);
         (ctx, gc)
@@ -1300,8 +1296,101 @@ mod tests {
     }
 
     #[test]
+    fn test_allocation_above_the_threshold_is_mapped_from_pages() {
+        let pager = Rc::new(Pager::new());
+        let allocator = ObjectAllocator::new(pager.clone());
+        let size = LARGE_ALLOCATION_THRESHOLD + 1;
+        let ptr = allocator.ptr().allocate(size);
+        assert!(!ptr.is_null());
+        // The pages of the allocation belong to the pager that maps them.
+        assert_eq!(
+            pager.allocated_pages(),
+            size.div_ceil(PAGE_SIZE),
+            "the pager did not count the pages of the large allocation"
+        );
+        assert!(allocator.ptr().contains(ptr));
+        // Mapped from whole pages between two guard pages, and zeroed like a
+        // heap span.
+        assert_eq!(ptr as usize % PAGE_SIZE, 0);
+        assert_eq!(unsafe { (ptr as *const u8).add(size - 1).read() }, 0);
+        #[cfg(not(miri))]
+        {
+            // The region is rounded up to whole pages, so the byte past the end
+            // of the allocation is mapped (and zeroed) as well.
+            assert_eq!(unsafe { (ptr as *const u8).add(size).read() }, 0);
+        }
+        // Its pages are not heap, so they do not eat into the heap budget that
+        // refuses an allocation once MAX_TOTAL_ALLOCATED_SIZE is reached.
+        assert_eq!(allocator.ptr().total_size(), 0);
+    }
+
+    #[test]
+    fn test_sweep_unmaps_a_large_allocation() {
+        let pager = Rc::new(Pager::new());
+        let allocator = ObjectAllocator::new(pager.clone());
+        let size = LARGE_ALLOCATION_THRESHOLD + 1;
+        let ptr = allocator.ptr().allocate(size);
+        allocator.ptr().run_gc(&[]);
+        assert!(!allocator.ptr().contains(ptr));
+        assert_eq!(pager.allocated_pages(), 0);
+        #[cfg(not(miri))]
+        assert!(
+            sweep_unmaps_a_large_allocation(),
+            "mprotect succeeded on the pages of a large allocation that was swept"
+        );
+    }
+
+    /// Whether the collector really unmaps the pages of an allocation too large
+    /// for the heap when it sweeps it. Reading the pages would fault, which a
+    /// test cannot catch, so a forked child checks with mprotect, which fails on
+    /// an address that is not mapped anymore.
+    ///
+    /// The child allocates and sweeps the region itself: an address that was
+    /// unmapped here is free for another thread to map again, and such a mapping
+    /// is what makes the check fail for the wrong reason. The child has its own
+    /// address space, in which nothing else runs.
+    #[cfg(not(miri))]
+    fn sweep_unmaps_a_large_allocation() -> bool {
+        let size = LARGE_ALLOCATION_THRESHOLD + 1;
+        // SAFETY: the child only allocates, sweeps, calls mprotect and exits.
+        let pid = unsafe { libc::fork() };
+        assert!(pid >= 0, "fork failed");
+        if pid == 0 {
+            let allocator = ObjectAllocator::new(Rc::new(Pager::new()));
+            let ptr = allocator.ptr().allocate(size);
+            allocator.ptr().run_gc(&[]);
+            let ret = unsafe {
+                libc::mprotect(
+                    ptr as *mut libc::c_void,
+                    size.div_ceil(PAGE_SIZE) * PAGE_SIZE,
+                    libc::PROT_READ | libc::PROT_WRITE,
+                )
+            };
+            unsafe { libc::_exit(if ret != 0 { 0 } else { 1 }) };
+        }
+        let mut status = 0;
+        assert_eq!(unsafe { libc::waitpid(pid, &mut status, 0) }, pid);
+        libc::WIFEXITED(status) && libc::WEXITSTATUS(status) == 0
+    }
+
+    #[test]
+    fn test_large_allocation_is_traced_like_a_heap_allocation() {
+        let allocator = ObjectAllocator::new(Rc::new(Pager::new()));
+        let leaf = alloc_node(&allocator.ptr(), ptr::null_mut());
+        let region = allocator.ptr().allocate(LARGE_ALLOCATION_THRESHOLD + 1);
+        // The pointer to the leaf sits in the middle of the region, so it is
+        // only found if the interior of a page-backed allocation is scanned.
+        unsafe { (region as *mut usize).add(64).write(leaf as usize) };
+        let _root = register_root(&allocator.ptr(), TypeId::new_invalid(), &word(region));
+
+        allocator.ptr().run_gc(&[]);
+        assert!(allocator.ptr().contains(region));
+        assert!(allocator.ptr().contains(leaf));
+    }
+
+    #[test]
     fn test_allocate_rounds_size_up_and_registers_object() {
-        let allocator = ObjectAllocator::new();
+        let allocator = ObjectAllocator::new(Rc::new(Pager::new()));
         let ptr = allocator.ptr().allocate(1);
         assert!(!ptr.is_null());
         assert!(allocator.ptr().contains(ptr));
@@ -1310,14 +1399,14 @@ mod tests {
 
     #[test]
     fn test_allocate_returns_null_when_heap_is_exhausted() {
-        let allocator = ObjectAllocator::new();
+        let allocator = ObjectAllocator::new(Rc::new(Pager::new()));
         while !allocator.ptr().allocate(65536).is_null() {}
         assert!(allocator.ptr().allocate(65536).is_null());
     }
 
     #[test]
     fn test_allocate_closure_is_registered_apart_from_ordinary_objects() {
-        let allocator = ObjectAllocator::new();
+        let allocator = ObjectAllocator::new(Rc::new(Pager::new()));
         let closure = allocator.ptr().allocate_closure(32);
         assert!(!closure.is_null());
         assert!(!allocator.ptr().contains(closure));
@@ -1331,7 +1420,7 @@ mod tests {
     #[test]
     fn test_untyped_frame_is_scanned_conservatively() {
         let (mut ctx, _gc) = create_ctx();
-        let allocator = ObjectAllocator::new();
+        let allocator = ObjectAllocator::new(Rc::new(Pager::new()));
         let target = alloc_node(&allocator.ptr(), ptr::null_mut());
         let frame_size = FRAME_LOCAL_OFFSET + 2 * mem::size_of::<usize>();
         ctx.push_frame(
@@ -1351,7 +1440,7 @@ mod tests {
 
     #[test]
     fn test_typed_global_pointer_traces_transitively() {
-        let allocator = ObjectAllocator::new();
+        let allocator = ObjectAllocator::new(Rc::new(Pager::new()));
         let leaf = alloc_node(&allocator.ptr(), ptr::null_mut());
         let child = alloc_node(&allocator.ptr(), leaf);
         let root = alloc_node(&allocator.ptr(), child);
@@ -1365,7 +1454,7 @@ mod tests {
 
     #[test]
     fn test_no_pointer_global_interior_is_not_scanned() {
-        let allocator = ObjectAllocator::new();
+        let allocator = ObjectAllocator::new(Rc::new(Pager::new()));
         let target = alloc_node(&allocator.ptr(), ptr::null_mut());
         let _root = register_root(&allocator.ptr(), types().opaque_16.tid(), &word(target));
 
@@ -1375,7 +1464,7 @@ mod tests {
 
     #[test]
     fn test_string_global_keeps_its_buffer() {
-        let allocator = ObjectAllocator::new();
+        let allocator = ObjectAllocator::new(Rc::new(Pager::new()));
         let buffer = allocator.ptr().allocate(8);
         unsafe { (buffer as *mut u8).write(0) };
         let mut value = [0u8; 16];
@@ -1389,7 +1478,7 @@ mod tests {
 
     #[test]
     fn test_slice_global_scans_only_the_accessible_prefix() {
-        let allocator = ObjectAllocator::new();
+        let allocator = ObjectAllocator::new(Rc::new(Pager::new()));
         let len: usize = 2;
         let cap: usize = 4;
         let buffer = allocator.ptr().allocate(cap * mem::size_of::<usize>());
@@ -1416,7 +1505,7 @@ mod tests {
 
     #[test]
     fn test_slice_of_struct_elements_traces_their_members() {
-        let allocator = ObjectAllocator::new();
+        let allocator = ObjectAllocator::new(Rc::new(Pager::new()));
         let leaf = alloc_node(&allocator.ptr(), ptr::null_mut());
         let buffer = allocator.ptr().allocate(16);
         unsafe { (buffer as *mut usize).write(leaf as usize) };
@@ -1434,7 +1523,7 @@ mod tests {
 
     #[test]
     fn test_interface_global_marks_receiver_and_its_members() {
-        let allocator = ObjectAllocator::new();
+        let allocator = ObjectAllocator::new(Rc::new(Pager::new()));
         let leaf = alloc_node(&allocator.ptr(), ptr::null_mut());
         let box_ptr = alloc_node(&allocator.ptr(), leaf);
         let mut value = [0u8; 16];
@@ -1449,7 +1538,7 @@ mod tests {
 
     #[test]
     fn test_interface_global_with_pointer_free_receiver() {
-        let allocator = ObjectAllocator::new();
+        let allocator = ObjectAllocator::new(Rc::new(Pager::new()));
         let box_ptr = allocator.ptr().allocate(8);
         let mut value = [0u8; 16];
         value[..8].copy_from_slice(&word(box_ptr));
@@ -1462,7 +1551,7 @@ mod tests {
 
     #[test]
     fn test_function_global_marks_closure_with_typed_captures() {
-        let allocator = ObjectAllocator::new();
+        let allocator = ObjectAllocator::new(Rc::new(Pager::new()));
         let leaf = alloc_node(&allocator.ptr(), ptr::null_mut());
         let captured = alloc_node(&allocator.ptr(), leaf);
         let layout = allocator
@@ -1495,7 +1584,7 @@ mod tests {
 
     #[test]
     fn test_channel_scan_keeps_buffered_values() {
-        let allocator = ObjectAllocator::new();
+        let allocator = ObjectAllocator::new(Rc::new(Pager::new()));
         let ptr = allocator.ptr().allocate(mem::size_of::<ChannelObject>()) as *mut ChannelObject;
         unsafe {
             ptr::write(ptr, ChannelObject::new(2, &allocator.ptr()));
@@ -1520,7 +1609,7 @@ mod tests {
 
     #[test]
     fn test_map_scan_keeps_entry_boxes() {
-        let allocator = ObjectAllocator::new();
+        let allocator = ObjectAllocator::new(Rc::new(Pager::new()));
         let ptr = allocator.ptr().allocate(mem::size_of::<MapObject>()) as *mut MapObject;
         MapObject::construct_in(ptr, map_key_type(), types().node.tid(), allocator.ptr());
         allocator.ptr().register_map(ptr as usize);
@@ -1554,7 +1643,7 @@ mod tests {
 
     #[test]
     fn test_sweep_prunes_channel_and_map_registrations() {
-        let allocator = ObjectAllocator::new();
+        let allocator = ObjectAllocator::new(Rc::new(Pager::new()));
         let channel = allocator.ptr().allocate(mem::size_of::<ChannelObject>());
         allocator
             .ptr()
@@ -1573,26 +1662,28 @@ mod tests {
 
     /// A pointer does not have to be the base of the allocation it points
     /// into: it can be an interior address, which is how a `*[N]T` frame
-    /// temporary of a `make([]T, n)` ends up pointing into the goroutine
-    /// stack. Such a region is never scanned conservatively, so the pointee
-    /// has to be traced exactly where the pointer points. The first word of
-    /// the region is null, which makes a scan from the region's base find
-    /// nothing at all.
-    fn stack_region_with_value_at(allocator: &ObjectAllocatorPtr, offset: usize) -> *mut usize {
-        let region = allocator.allocate_guarded_pages(1);
+    /// temporary of a `make([]T, n)` ends up pointing into the memory that
+    /// holds it. Such a region is never scanned conservatively from its base,
+    /// so the pointee has to be traced exactly where the pointer points. The
+    /// first word of the region is null, which makes a scan from the region's
+    /// base find nothing at all.
+    fn region_with_value_at(allocator: &ObjectAllocatorPtr, offset: usize) -> *mut usize {
+        // The region is a large allocation, so it is mapped from the pager's
+        // pages: nothing but a pointer into its interior reaches the value.
+        let region = allocator.allocate(LARGE_ALLOCATION_THRESHOLD + 1);
         unsafe { (region as *mut usize).write(0) };
         unsafe { (region as *mut usize).add(offset) }
     }
 
     #[test]
     fn test_pointer_to_interior_address_traces_the_value_there() {
-        let allocator = ObjectAllocator::new();
+        let allocator = ObjectAllocator::new(Rc::new(Pager::new()));
         let leaf = alloc_node(&allocator.ptr(), ptr::null_mut());
         let buffer = allocator.ptr().allocate(mem::size_of::<usize>());
         unsafe { (buffer as *mut usize).write(leaf as usize) };
         // A `[]*Node` header living inside the region instead of in an
         // allocation of its own.
-        let header = stack_region_with_value_at(&allocator.ptr(), 256);
+        let header = region_with_value_at(&allocator.ptr(), 256);
         unsafe {
             header.write(buffer as usize);
             header.add(1).write(1);
@@ -1611,11 +1702,11 @@ mod tests {
 
     #[test]
     fn test_pointer_to_interior_struct_field_traces_its_members() {
-        let allocator = ObjectAllocator::new();
+        let allocator = ObjectAllocator::new(Rc::new(Pager::new()));
         let leaf = alloc_node(&allocator.ptr(), ptr::null_mut());
         // A `*Node` pointing at a node that is embedded in the region: the
         // node generator then finds the leaf at its own first word.
-        let inner = stack_region_with_value_at(&allocator.ptr(), 256);
+        let inner = region_with_value_at(&allocator.ptr(), 256);
         unsafe { inner.write(leaf as usize) };
         let _root = register_root(&allocator.ptr(), types().node_ptr.tid(), &word(inner));
 
@@ -1664,7 +1755,7 @@ mod tests {
     #[test]
     fn test_interface_slot_with_a_garbage_type_word_keeps_the_receiver() {
         let (mut ctx, _gc) = create_ctx();
-        let allocator = ObjectAllocator::new();
+        let allocator = ObjectAllocator::new(Rc::new(Pager::new()));
         let receiver = alloc_node(&allocator.ptr(), ptr::null_mut());
         // Frames are reused, so an interface-typed slot can still hold the
         // words of an older call. The receiver is still a live object and has
@@ -1678,7 +1769,7 @@ mod tests {
     #[test]
     fn test_slice_slot_of_unwritten_frame_is_ignored() {
         let (mut ctx, _gc) = create_ctx();
-        let allocator = ObjectAllocator::new();
+        let allocator = ObjectAllocator::new(Rc::new(Pager::new()));
         // Frames are reused, so a slot can still hold the words of an older
         // call. A length read from such a slot must not be believed.
         push_slice_frame(&mut ctx, 0x1_0000_0000, 1 << 40);
@@ -1689,7 +1780,7 @@ mod tests {
     #[test]
     fn test_slice_scan_is_clamped_to_the_buffer_allocation() {
         let (mut ctx, _gc) = create_ctx();
-        let allocator = ObjectAllocator::new();
+        let allocator = ObjectAllocator::new(Rc::new(Pager::new()));
         let buffer = alloc_node(&allocator.ptr(), ptr::null_mut());
         let beyond = alloc_node(&allocator.ptr(), ptr::null_mut());
         // The length claims far more elements than the 16-byte allocation
@@ -1704,7 +1795,7 @@ mod tests {
     #[test]
     fn test_typed_stack_frame_scans_only_listed_slots() {
         let (mut ctx, _gc) = create_ctx();
-        let allocator = ObjectAllocator::new();
+        let allocator = ObjectAllocator::new(Rc::new(Pager::new()));
         let listed = alloc_node(&allocator.ptr(), ptr::null_mut());
         let unlisted = alloc_node(&allocator.ptr(), ptr::null_mut());
         let frame_size = 2 * mem::size_of::<usize>();
@@ -1732,7 +1823,7 @@ mod tests {
     #[test]
     fn test_defer_stack_slot_keeps_the_entry_and_its_arguments() {
         let (mut ctx, _gc) = create_ctx();
-        let allocator = ObjectAllocator::new();
+        let allocator = ObjectAllocator::new(Rc::new(Pager::new()));
         let argument = alloc_node(&allocator.ptr(), ptr::null_mut());
         // A defer stack entry: next link, function, and the argument words of
         // the deferred call.
@@ -1764,9 +1855,48 @@ mod tests {
         assert!(allocator.ptr().contains(argument));
     }
 
+    /// The conservative scan of a range walks it two words at a time while it
+    /// can and then the word that is left over, stepping over the pairs of null
+    /// words that keep nothing alive. A frame without a stack map is scanned
+    /// that way, so this fills one with three leaves: the first two sit in a
+    /// pair the scan takes at once and the third in the word it has to walk on
+    /// its own.
+    #[test]
+    fn test_conservative_scan_of_a_frame_finds_a_pointer_in_every_word() {
+        let (mut ctx, _gc) = create_ctx();
+        let allocator = ObjectAllocator::new(Rc::new(Pager::new()));
+        // An odd number of words, so the last one is left over by the pairs.
+        let words = 3;
+        let frame_size = FRAME_LOCAL_OFFSET + words * mem::size_of::<usize>();
+        ctx.push_frame(
+            frame_size,
+            ctx.stack_pointer(),
+            None,
+            &[],
+            FunctionObject::new_null(),
+        );
+        let frame = ctx.stack_pointer() as *mut u8;
+        let mut leaves = Vec::new();
+        for index in 0..words {
+            let leaf = alloc_node(&allocator.ptr(), ptr::null_mut());
+            unsafe {
+                ptr::write_unaligned(
+                    frame.add(FRAME_LOCAL_OFFSET + index * mem::size_of::<usize>()) as *mut usize,
+                    leaf as usize,
+                )
+            };
+            leaves.push(leaf);
+        }
+
+        allocator.ptr().run_gc(&[&ctx]);
+        for leaf in leaves {
+            assert!(allocator.ptr().contains(leaf));
+        }
+    }
+
     #[test]
     fn test_run_gc_reclaims_unreferenced_objects() {
-        let allocator = ObjectAllocator::new();
+        let allocator = ObjectAllocator::new(Rc::new(Pager::new()));
         let kept = alloc_node(&allocator.ptr(), ptr::null_mut());
         let _root = register_root(&allocator.ptr(), types().node_ptr.tid(), &word(kept));
         let garbage = alloc_node(&allocator.ptr(), kept);

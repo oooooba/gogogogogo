@@ -444,8 +444,10 @@ pub extern "C" fn gox5_slice_sub(ctx: &mut LightWeightThreadContext) -> Function
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ObjectAllocator;
+    use crate::allocator::ObjectAllocator;
+    use crate::pager::Pager;
     use std::mem;
+    use std::rc::Rc;
 
     #[test]
     fn test_slice_extend_bytes_clamps_to_size() {
@@ -463,7 +465,7 @@ mod tests {
 
     #[test]
     fn test_reallocate_slice_within_capacity() {
-        let allocator = ObjectAllocator::new();
+        let allocator = ObjectAllocator::new(Rc::new(Pager::new()));
         let mut buf = [0u8; 64];
         buf[0] = 10;
         buf[1] = 20;
@@ -485,7 +487,7 @@ mod tests {
 
     #[test]
     fn test_reallocate_slice_overflow_triggers_realloc() {
-        let allocator = ObjectAllocator::new();
+        let allocator = ObjectAllocator::new(Rc::new(Pager::new()));
         let mut buf = [0u8; 4];
         buf[0] = 1;
         buf[1] = 2;
@@ -507,7 +509,7 @@ mod tests {
 
     #[test]
     fn test_reallocate_slice_u32_elements() {
-        let allocator = ObjectAllocator::new();
+        let allocator = ObjectAllocator::new(Rc::new(Pager::new()));
         let mut buf = [0u32; 4];
         buf[0] = 100;
         buf[1] = 200;
@@ -587,7 +589,7 @@ mod tests {
         LightWeightThreadContext,
         crate::global_context::GlobalContextPtr,
     ) {
-        let gc = global_context::create_global_context(ObjectAllocator::new());
+        let gc = global_context::create_global_context();
         let func = FunctionObject::new_null();
         let ctx = crate::create_light_weight_thread_context(gc.dupulicate(), func);
         (ctx, gc)

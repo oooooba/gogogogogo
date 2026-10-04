@@ -246,10 +246,12 @@ impl MapObject {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ObjectAllocator;
+    use crate::allocator::ObjectAllocator;
+    use crate::pager::Pager;
     use crate::type_id::{TYPE_INFO_MAGIC, TypeId, TypeInfo, TypeKind};
     use std::mem;
     use std::ptr;
+    use std::rc::Rc;
     use std::sync::OnceLock;
 
     extern "C" fn test_is_equal(a: ObjectPtr, b: ObjectPtr) -> bool {
@@ -298,14 +300,14 @@ mod tests {
 
     #[test]
     fn test_map_new() {
-        let allocator = ObjectAllocator::new();
+        let allocator = ObjectAllocator::new(Rc::new(Pager::new()));
         let map = MapObject::new(test_type_id(), test_type_id(), allocator.ptr());
         assert_eq!(map.len(), 0);
     }
 
     #[test]
     fn test_map_set_get() {
-        let allocator = ObjectAllocator::new();
+        let allocator = ObjectAllocator::new(Rc::new(Pager::new()));
         let mut map = MapObject::new(test_type_id(), test_type_id(), allocator.ptr());
         let key = make_isize_ptr(&allocator.ptr(), 1);
         let value = make_isize_ptr(&allocator.ptr(), 100);
@@ -318,7 +320,7 @@ mod tests {
 
     #[test]
     fn test_map_get_nonexistent() {
-        let allocator = ObjectAllocator::new();
+        let allocator = ObjectAllocator::new(Rc::new(Pager::new()));
         let map = MapObject::new(test_type_id(), test_type_id(), allocator.ptr());
         let key = make_isize_ptr(&allocator.ptr(), 1);
         let result = make_result_ptr(&allocator.ptr());
@@ -327,7 +329,7 @@ mod tests {
 
     #[test]
     fn test_map_set_overwrite() {
-        let allocator = ObjectAllocator::new();
+        let allocator = ObjectAllocator::new(Rc::new(Pager::new()));
         let mut map = MapObject::new(test_type_id(), test_type_id(), allocator.ptr());
         let key = make_isize_ptr(&allocator.ptr(), 1);
         let value1 = make_isize_ptr(&allocator.ptr(), 100);
@@ -342,7 +344,7 @@ mod tests {
 
     #[test]
     fn test_map_delete() {
-        let allocator = ObjectAllocator::new();
+        let allocator = ObjectAllocator::new(Rc::new(Pager::new()));
         let mut map = MapObject::new(test_type_id(), test_type_id(), allocator.ptr());
         let key = make_isize_ptr(&allocator.ptr(), 1);
         let value = make_isize_ptr(&allocator.ptr(), 100);
@@ -356,7 +358,7 @@ mod tests {
 
     #[test]
     fn test_map_delete_nonexistent() {
-        let allocator = ObjectAllocator::new();
+        let allocator = ObjectAllocator::new(Rc::new(Pager::new()));
         let mut map = MapObject::new(test_type_id(), test_type_id(), allocator.ptr());
         let key = make_isize_ptr(&allocator.ptr(), 999);
         map.delete(key);
@@ -365,7 +367,7 @@ mod tests {
 
     #[test]
     fn test_map_nth() {
-        let allocator = ObjectAllocator::new();
+        let allocator = ObjectAllocator::new(Rc::new(Pager::new()));
         let mut map = MapObject::new(test_type_id(), test_type_id(), allocator.ptr());
         let key1 = make_isize_ptr(&allocator.ptr(), 1);
         let value1 = make_isize_ptr(&allocator.ptr(), 10);
@@ -382,7 +384,7 @@ mod tests {
 
     #[test]
     fn test_map_nth_null_key() {
-        let allocator = ObjectAllocator::new();
+        let allocator = ObjectAllocator::new(Rc::new(Pager::new()));
         let mut map = MapObject::new(test_type_id(), test_type_id(), allocator.ptr());
         let key = make_isize_ptr(&allocator.ptr(), 1);
         let value = make_isize_ptr(&allocator.ptr(), 10);
@@ -393,7 +395,7 @@ mod tests {
 
     #[test]
     fn test_map_nth_null_value() {
-        let allocator = ObjectAllocator::new();
+        let allocator = ObjectAllocator::new(Rc::new(Pager::new()));
         let mut map = MapObject::new(test_type_id(), test_type_id(), allocator.ptr());
         let key = make_isize_ptr(&allocator.ptr(), 1);
         let value = make_isize_ptr(&allocator.ptr(), 10);
@@ -404,7 +406,7 @@ mod tests {
 
     #[test]
     fn test_map_clear() {
-        let allocator = ObjectAllocator::new();
+        let allocator = ObjectAllocator::new(Rc::new(Pager::new()));
         let mut map = MapObject::new(test_type_id(), test_type_id(), allocator.ptr());
         for (k, v) in [(1isize, 10isize), (2, 20), (3, 30)] {
             let key = make_isize_ptr(&allocator.ptr(), k);
@@ -423,7 +425,7 @@ mod tests {
 
     #[test]
     fn test_map_clear_resets_iteration() {
-        let allocator = ObjectAllocator::new();
+        let allocator = ObjectAllocator::new(Rc::new(Pager::new()));
         let mut map = MapObject::new(test_type_id(), test_type_id(), allocator.ptr());
         let key1 = make_isize_ptr(&allocator.ptr(), 1);
         let value1 = make_isize_ptr(&allocator.ptr(), 10);

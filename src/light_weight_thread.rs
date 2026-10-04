@@ -9,7 +9,11 @@ use crate::UserFunction;
 use crate::defer_stack::DeferStack;
 use crate::global_context::GlobalContextPtr;
 use crate::object::interface::Interface;
+use crate::pager::PAGE_SIZE;
 use crate::type_id::TypeId;
+
+/// The number of pages a goroutine's stack region is mapped from.
+pub(crate) const STACK_PAGES: usize = 200;
 
 #[repr(C)]
 pub struct LightWeightThreadContext {
@@ -214,6 +218,22 @@ impl LightWeightThreadContext {
         self.initial_stack_pointer as usize
     }
 
+    /// The address just past the last page of this goroutine's stack region.
+    pub(crate) fn stack_end(&self) -> usize {
+        self.stack_base() + STACK_PAGES * PAGE_SIZE
+    }
+
+    /// Gives the pages this goroutine's stack region was mapped from back to
+    /// the system, once the goroutine is dead: it will never run again, so
+    /// nothing may read the stack. The region was never an allocation of the
+    /// object allocator, so no collector can unmap it a second time.
+    pub(crate) fn reclaim_stack_pages(&self) {
+        let stack_base = self.stack_base() as *mut ();
+        self.global_context().process(|global_context| {
+            global_context.pager().deallocate(stack_base, STACK_PAGES);
+        });
+    }
+
     /// Iterates the live frames of this goroutine, innermost first.
     pub(crate) fn stack_frames(&self) -> StackFrames {
         StackFrames {
@@ -318,11 +338,10 @@ impl Iterator for StackFrames {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ObjectAllocator;
     use crate::global_context;
 
     fn create_ctx() -> (LightWeightThreadContext, crate::GlobalContextPtr) {
-        let gc = global_context::create_global_context(ObjectAllocator::new());
+        let gc = global_context::create_global_context();
         let func = FunctionObject::new_null();
         let ctx = crate::create_light_weight_thread_context(gc.dupulicate(), func);
         (ctx, gc)
@@ -336,6 +355,50 @@ mod tests {
         let sp_after = ctx.stack_pointer();
         assert!(sp_after as usize > sp_before as usize);
         assert_eq!((sp_after as usize) - (sp_before as usize), 64);
+    }
+
+    /// Whether the pages of a goroutine stack are unmapped once the goroutine
+    /// has terminated and reclaimed them. Reading the region would fault, which
+    /// a test cannot catch, so a forked child checks with mprotect, which fails
+    /// on an address that is not mapped anymore.
+    ///
+    /// The child creates the goroutine itself: an address that was unmapped here
+    /// is free for another thread to map again, and such a mapping is what makes
+    /// the check fail for the wrong reason. The child has its own address space,
+    /// in which nothing else runs.
+    #[cfg(not(miri))]
+    fn reclaim_unmaps_the_stack_region() -> bool {
+        // SAFETY: the child only creates a goroutine, reclaims its pages, calls
+        // mprotect and exits.
+        let pid = unsafe { libc::fork() };
+        assert!(pid >= 0, "fork failed");
+        if pid == 0 {
+            let (ctx, _gc) = create_ctx();
+            let stack_base = ctx.stack_base();
+            ctx.reclaim_stack_pages();
+            let ret = unsafe {
+                libc::mprotect(
+                    stack_base as *mut libc::c_void,
+                    STACK_PAGES * crate::pager::PAGE_SIZE,
+                    libc::PROT_READ | libc::PROT_WRITE,
+                )
+            };
+            unsafe { libc::_exit(if ret != 0 { 0 } else { 1 }) };
+        }
+        let mut status = 0;
+        assert_eq!(unsafe { libc::waitpid(pid, &mut status, 0) }, pid);
+        libc::WIFEXITED(status) && libc::WEXITSTATUS(status) == 0
+    }
+
+    #[test]
+    fn test_reclaim_stack_pages_unmaps_the_region() {
+        let (ctx, _gc) = create_ctx();
+        ctx.reclaim_stack_pages();
+        #[cfg(not(miri))]
+        assert!(
+            reclaim_unmaps_the_stack_region(),
+            "mprotect succeeded on the pages of a reclaimed goroutine stack"
+        );
     }
 
     #[test]
