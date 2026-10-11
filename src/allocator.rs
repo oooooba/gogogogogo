@@ -91,6 +91,7 @@ struct AllocatedObject {
     kind: AllocationKind,
     marked: bool,
     type_id: TypeId,
+    pointer_bitmap: Option<NonNull<usize>>,
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -212,6 +213,11 @@ impl ObjectAllocatorInner {
             }
             ptr as *mut ()
         };
+        let pointer_bitmap = if type_id.is_valid() && !ptr.is_null() {
+            build_pointer_bitmap(type_id, size)
+        } else {
+            None
+        };
         destinations.insert(
             ptr as usize,
             AllocatedObject {
@@ -219,6 +225,7 @@ impl ObjectAllocatorInner {
                 kind: AllocationKind::Heap,
                 marked: false,
                 type_id,
+                pointer_bitmap,
             },
         );
         *total_size += size;
@@ -238,6 +245,7 @@ impl ObjectAllocatorInner {
                 kind: AllocationKind::Pages,
                 marked: false,
                 type_id,
+                pointer_bitmap: None,
             },
         );
         ptr
@@ -261,6 +269,9 @@ impl ObjectAllocatorInner {
                             ),
                         );
                     }
+                }
+                if let Some(bitmap) = object.pointer_bitmap {
+                    free_pointer_bitmap(bitmap, object.span.size);
                 }
             }
             AllocationKind::Pages => {
@@ -700,6 +711,25 @@ impl ObjectAllocatorInner {
         self.mark_object_as_marked(object_address);
         match record.special {
             SpecialObject::None => {
+                if let Some(bitmap) = record.pointer_bitmap {
+                    let base = record.span.ptr as usize;
+                    let ws = std::mem::size_of::<usize>();
+                    let bits = usize::BITS as usize;
+                    let words = unsafe {
+                        std::slice::from_raw_parts(
+                            bitmap.as_ptr(),
+                            bitmap_word_count(record.span.size),
+                        )
+                    };
+                    let mut i = 0;
+                    while i < record.span.size / ws {
+                        if (words[i / bits] & (1usize << (i % bits))) != 0 {
+                            self.mark_raw_word(base + i * ws);
+                        }
+                        i += 1;
+                    }
+                    return;
+                }
                 if record.type_id.is_valid() {
                     self.mark_value(record.type_id, record.span.ptr as usize);
                 } else {
@@ -849,6 +879,7 @@ impl ObjectAllocatorInner {
                 marked: object.marked,
                 special,
                 type_id: object.type_id,
+                pointer_bitmap: object.pointer_bitmap,
             });
         }
         if let Some(object) = self.allocated_closures.get(&object_address) {
@@ -857,6 +888,7 @@ impl ObjectAllocatorInner {
                 marked: object.marked,
                 special: SpecialObject::Closure,
                 type_id: object.type_id,
+                pointer_bitmap: object.pointer_bitmap,
             });
         }
         None
@@ -881,6 +913,7 @@ struct MarkRecord {
     marked: bool,
     special: SpecialObject,
     type_id: TypeId,
+    pointer_bitmap: Option<NonNull<usize>>,
 }
 
 impl ObjectAllocatorInner {
@@ -946,6 +979,116 @@ impl ObjectAllocatorInner {
             // An unknown slot kind is scanned conservatively rather than
             // skipped: the whole point of a raw run is that nothing is known.
             _ => self.mark_range_raw(offset, offset + size),
+        }
+    }
+}
+
+/// The word buffer a pointer bitmap is built into. It has one `usize` of bits
+/// per `usize::BITS` words of the object, so bit `n` (n = byte offset / word
+/// size) records whether word `n` holds a pointer the collector must trace.
+#[repr(C)]
+struct PointerBitmapBuilder {
+    words: *mut usize,
+    count: usize,
+}
+
+/// Number of `usize` words needed to hold one bit per word of a `size`-byte
+/// object.
+fn bitmap_word_count(size: usize) -> usize {
+    (size / mem::size_of::<usize>()).div_ceil(usize::BITS as usize)
+}
+
+/// Builds the pointer bitmap of an object of `type_id` and `size` bytes. The
+/// bitmap is a fresh allocation the caller owns; it is `None` when the type
+/// carries no enumerator or reports no pointer word at all.
+fn build_pointer_bitmap(type_id: TypeId, size: usize) -> Option<NonNull<usize>> {
+    let runs = type_id.get_member_offset_runs()?;
+    let count = bitmap_word_count(size);
+    if count == 0 {
+        return None;
+    }
+    let mut words = vec![0usize; count].into_boxed_slice();
+    let mut builder = PointerBitmapBuilder {
+        words: words.as_mut_ptr(),
+        count,
+    };
+    runs(
+        pointer_bitmap_visitor,
+        0,
+        &mut builder as *mut PointerBitmapBuilder as *mut ffi::c_void,
+    );
+    if words.iter().all(|word| *word == 0) {
+        return None;
+    }
+    NonNull::new(Box::into_raw(words) as *mut usize)
+}
+
+/// Hands a bitmap built by `build_pointer_bitmap` back.
+fn free_pointer_bitmap(bitmap: NonNull<usize>, size: usize) {
+    let slice = ptr::slice_from_raw_parts_mut(bitmap.as_ptr(), bitmap_word_count(size));
+    unsafe {
+        drop(Box::from_raw(slice));
+    }
+}
+
+/// Records, in the bitmap being built, every word the enumerator reports as
+/// pointer-bearing. The builder's `count` bounds every write.
+extern "C" fn pointer_bitmap_visitor(
+    offset: usize,
+    size: usize,
+    _typ: TypeId,
+    kind: i32,
+    arg: *mut ffi::c_void,
+) {
+    let builder = unsafe { &mut *(arg as *mut PointerBitmapBuilder) };
+    let word_size = mem::size_of::<usize>();
+    let bits = usize::BITS as usize;
+    let set = |addr: usize| {
+        let bit = addr / word_size;
+        let index = bit / bits;
+        if index < builder.count {
+            let word = unsafe { &mut *builder.words.add(index) };
+            *word |= 1usize << (bit % bits);
+        }
+    };
+    let end = offset.saturating_add(size);
+    match kind {
+        GC_SLOT_POINTER | GC_SLOT_FUNCTION | GC_SLOT_RAW => {
+            let mut addr = offset;
+            while addr + mem::size_of::<usize>() <= end {
+                set(addr);
+                addr += mem::size_of::<usize>();
+            }
+        }
+        GC_SLOT_SLICE => {
+            let mut addr = offset;
+            while addr + SLICE_HEADER_SIZE <= end {
+                set(addr);
+                addr += SLICE_HEADER_SIZE;
+            }
+        }
+        GC_SLOT_INTERFACE => {
+            let mut addr = offset;
+            while addr + mem::size_of::<Interface>() <= end {
+                set(addr);
+                set(addr + mem::size_of::<usize>());
+                addr += mem::size_of::<Interface>();
+            }
+        }
+        GC_SLOT_STRING => {
+            let mut addr = offset;
+            while addr + STRING_SIZE <= end {
+                set(addr);
+                addr += STRING_SIZE;
+            }
+        }
+        GC_SLOT_DEFER_STACK | GC_SLOT_FREE_VARS => set(offset),
+        _ => {
+            let mut addr = offset;
+            while addr + mem::size_of::<usize>() <= end {
+                set(addr);
+                addr += mem::size_of::<usize>();
+            }
         }
     }
 }
@@ -1130,6 +1273,58 @@ mod tests {
             SLICE_HEADER_SIZE,
             *NODE_TID.get().unwrap(),
             GC_SLOT_SLICE,
+            arg,
+        );
+    }
+
+    extern "C" fn mixed_generator(visit: TypeOffsetVisitor, base: usize, arg: *mut ffi::c_void) {
+        let node = *NODE_TID.get().unwrap();
+        visit(base, mem::size_of::<usize>(), node, GC_SLOT_POINTER, arg);
+        visit(base + 8, SLICE_HEADER_SIZE, node, GC_SLOT_SLICE, arg);
+        visit(
+            base + 32,
+            STRING_SIZE,
+            TypeId::new_invalid(),
+            GC_SLOT_STRING,
+            arg,
+        );
+        visit(
+            base + 48,
+            2 * mem::size_of::<usize>(),
+            TypeId::new_invalid(),
+            GC_SLOT_INTERFACE,
+            arg,
+        );
+        visit(
+            base + 64,
+            mem::size_of::<usize>(),
+            TypeId::new_invalid(),
+            GC_SLOT_FUNCTION,
+            arg,
+        );
+        visit(
+            base + 72,
+            mem::size_of::<usize>(),
+            TypeId::new_invalid(),
+            GC_SLOT_RAW,
+            arg,
+        );
+    }
+
+    /// A type with pointer words in two different bitmap words: one at the
+    /// object base and one past the first 512 bytes.
+    extern "C" fn far_pointer_generator(
+        visit: TypeOffsetVisitor,
+        base: usize,
+        arg: *mut ffi::c_void,
+    ) {
+        let node = *NODE_TID.get().unwrap();
+        visit(base, mem::size_of::<usize>(), node, GC_SLOT_POINTER, arg);
+        visit(
+            base + 520,
+            mem::size_of::<usize>(),
+            node,
+            GC_SLOT_POINTER,
             arg,
         );
     }
@@ -1549,6 +1744,91 @@ mod tests {
         assert!(allocator.ptr().contains(alive));
         // ... while the element above len is not reachable through the slice.
         assert!(!allocator.ptr().contains(beyond_len));
+    }
+
+    #[test]
+    fn test_pointer_bitmap_marks_every_pointer_bearing_slot() {
+        let allocator = ObjectAllocator::new(Rc::new(Pager::new()));
+        let typ = FakeTypeInfo::new_with(
+            TypeKind::StructArray,
+            TypeId::new_invalid(),
+            Some(mixed_generator),
+            80,
+        );
+        let object = allocator.ptr().allocate(80, typ.tid());
+        let first = alloc_node(&allocator.ptr(), ptr::null_mut());
+        let buffer = allocator.ptr().allocate(8, TypeId::new_invalid());
+        let data = allocator.ptr().allocate(8, TypeId::new_invalid());
+        let receiver = alloc_node(&allocator.ptr(), ptr::null_mut());
+        let raw = alloc_node(&allocator.ptr(), ptr::null_mut());
+        unsafe {
+            let words = object as *mut usize;
+            words.add(0).write(first as usize);
+            words.add(1).write(buffer as usize);
+            words.add(2).write(1);
+            words.add(3).write(1);
+            words.add(4).write(data as usize);
+            words.add(5).write(1);
+            words.add(6).write(receiver as usize);
+            words.add(7).write(0);
+            words.add(8).write(0);
+            words.add(9).write(raw as usize);
+        }
+        let _root = register_root(&allocator.ptr(), TypeId::new_invalid(), &word(object));
+
+        allocator.ptr().run_gc(&[]);
+        assert!(allocator.ptr().contains(object));
+        assert!(allocator.ptr().contains(first));
+        assert!(allocator.ptr().contains(buffer));
+        assert!(allocator.ptr().contains(data));
+        assert!(allocator.ptr().contains(receiver));
+        assert!(allocator.ptr().contains(raw));
+    }
+
+    #[test]
+    fn test_pointer_bitmap_handles_objects_over_512_bytes() {
+        let allocator = ObjectAllocator::new(Rc::new(Pager::new()));
+        let typ = FakeTypeInfo::new_with(
+            TypeKind::StructArray,
+            TypeId::new_invalid(),
+            Some(far_pointer_generator),
+            1024,
+        );
+        let object = allocator.ptr().allocate(1024, typ.tid());
+        let low = alloc_node(&allocator.ptr(), ptr::null_mut());
+        let high = alloc_node(&allocator.ptr(), ptr::null_mut());
+        unsafe {
+            let words = object as *mut usize;
+            words.add(0).write(low as usize);
+            words.add(65).write(high as usize);
+        }
+        let _root = register_root(&allocator.ptr(), TypeId::new_invalid(), &word(object));
+
+        allocator.ptr().run_gc(&[]);
+        assert!(allocator.ptr().contains(object));
+        assert!(allocator.ptr().contains(low));
+        assert!(allocator.ptr().contains(high));
+    }
+
+    #[test]
+    fn test_object_larger_than_the_bitmap_is_traced_by_type() {
+        let allocator = ObjectAllocator::new(Rc::new(Pager::new()));
+        let typ = FakeTypeInfo::new_with(
+            TypeKind::StructArray,
+            TypeId::new_invalid(),
+            Some(node_generator),
+            LARGE_ALLOCATION_THRESHOLD + 1,
+        );
+        let object = allocator
+            .ptr()
+            .allocate(LARGE_ALLOCATION_THRESHOLD + 1, typ.tid());
+        let leaf = alloc_node(&allocator.ptr(), ptr::null_mut());
+        unsafe { (object as *mut usize).write(leaf as usize) };
+        let _root = register_root(&allocator.ptr(), TypeId::new_invalid(), &word(object));
+
+        allocator.ptr().run_gc(&[]);
+        assert!(allocator.ptr().contains(object));
+        assert!(allocator.ptr().contains(leaf));
     }
 
     #[test]
