@@ -53,7 +53,7 @@ pub extern "C" fn gox5_channel_new(ctx: &mut LightWeightThreadContext) -> Functi
 }
 
 fn load_send_data(src: ObjectPtr, size: usize, ctx: &mut LightWeightThreadContext) -> ObjectPtr {
-    let dst = ctx.allocate(size);
+    let dst = ctx.allocate(size, TypeId::new_invalid());
     let src_slice = unsafe { slice::from_raw_parts(src.as_ref::<u8>(), size) };
     let dst_slice = unsafe { slice::from_raw_parts_mut(dst as *mut u8, size) };
     dst_slice.copy_from_slice(src_slice);

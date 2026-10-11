@@ -90,6 +90,7 @@ struct AllocatedObject {
     span: Span,
     kind: AllocationKind,
     marked: bool,
+    type_id: TypeId,
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -143,15 +144,20 @@ impl ObjectAllocatorInner {
         }
     }
 
-    fn allocate(&mut self, size: usize) -> *mut () {
+    fn allocate(&mut self, size: usize, type_id: TypeId) -> *mut () {
         if size > LARGE_ALLOCATION_THRESHOLD {
-            return self.allocate_pages(size);
+            return self.allocate_pages(size, type_id);
         }
-        Self::allocate_span(&mut self.total_size, size, &mut self.allocated_objects)
+        Self::allocate_span(
+            &mut self.total_size,
+            size,
+            &mut self.allocated_objects,
+            type_id,
+        )
     }
 
     fn allocate_channel(&mut self, size: usize, elem_type: TypeId) -> *mut () {
-        let ptr = self.allocate(size);
+        let ptr = self.allocate(size, TypeId::new_invalid());
         if !ptr.is_null() {
             self.allocated_channels.insert(ptr as usize, elem_type);
         }
@@ -159,11 +165,16 @@ impl ObjectAllocatorInner {
     }
 
     fn allocate_closure(&mut self, size: usize) -> *mut () {
-        Self::allocate_span(&mut self.total_size, size, &mut self.allocated_closures)
+        Self::allocate_span(
+            &mut self.total_size,
+            size,
+            &mut self.allocated_closures,
+            TypeId::new_invalid(),
+        )
     }
 
     fn allocate_map(&mut self, size: usize) -> *mut () {
-        let ptr = self.allocate(size);
+        let ptr = self.allocate(size, TypeId::new_invalid());
         if !ptr.is_null() {
             self.allocated_maps.insert(ptr as usize);
         }
@@ -176,6 +187,7 @@ impl ObjectAllocatorInner {
         total_size: &mut usize,
         size: usize,
         destinations: &mut BTreeMap<usize, AllocatedObject>,
+        type_id: TypeId,
     ) -> *mut () {
         let size = size.div_ceil(ALLOCATION_ALIGNMENT) * ALLOCATION_ALIGNMENT;
         if total_size.saturating_add(size) > MAX_TOTAL_ALLOCATED_SIZE {
@@ -206,13 +218,14 @@ impl ObjectAllocatorInner {
                 span: Span { ptr, size },
                 kind: AllocationKind::Heap,
                 marked: false,
+                type_id,
             },
         );
         *total_size += size;
         ptr
     }
 
-    fn allocate_pages(&mut self, size: usize) -> *mut () {
+    fn allocate_pages(&mut self, size: usize, type_id: TypeId) -> *mut () {
         let num_pages = size.div_ceil(PAGE_SIZE);
         let ptr = self.pager.allocate(num_pages);
         self.allocated_objects.insert(
@@ -224,6 +237,7 @@ impl ObjectAllocatorInner {
                 },
                 kind: AllocationKind::Pages,
                 marked: false,
+                type_id,
             },
         );
         ptr
@@ -686,10 +700,14 @@ impl ObjectAllocatorInner {
         self.mark_object_as_marked(object_address);
         match record.special {
             SpecialObject::None => {
-                self.mark_range_raw(
-                    record.span.ptr as usize,
-                    record.span.ptr as usize + record.span.size,
-                );
+                if record.type_id.is_valid() {
+                    self.mark_value(record.type_id, record.span.ptr as usize);
+                } else {
+                    self.mark_range_raw(
+                        record.span.ptr as usize,
+                        record.span.ptr as usize + record.span.size,
+                    );
+                }
             }
             SpecialObject::Closure => self.mark_closure_scan(record.span.ptr as usize),
             SpecialObject::Channel => self.mark_channel_scan(record.span.ptr as usize),
@@ -830,6 +848,7 @@ impl ObjectAllocatorInner {
                 span: object.span,
                 marked: object.marked,
                 special,
+                type_id: object.type_id,
             });
         }
         if let Some(object) = self.allocated_closures.get(&object_address) {
@@ -837,6 +856,7 @@ impl ObjectAllocatorInner {
                 span: object.span,
                 marked: object.marked,
                 special: SpecialObject::Closure,
+                type_id: object.type_id,
             });
         }
         None
@@ -860,6 +880,7 @@ struct MarkRecord {
     span: Span,
     marked: bool,
     special: SpecialObject,
+    type_id: TypeId,
 }
 
 impl ObjectAllocatorInner {
@@ -951,8 +972,8 @@ const _: TypeOffsetVisitor = mark_typed_visitor;
 pub(crate) struct ObjectAllocatorPtr(*mut ObjectAllocatorInner);
 
 impl ObjectAllocatorPtr {
-    pub(crate) fn allocate(&self, size: usize) -> *mut () {
-        unsafe { &mut *self.0 }.allocate(size)
+    pub(crate) fn allocate(&self, size: usize, type_id: TypeId) -> *mut () {
+        unsafe { &mut *self.0 }.allocate(size, type_id)
     }
 
     pub(crate) fn allocate_channel(&self, size: usize, elem_type: TypeId) -> *mut () {
@@ -1013,14 +1034,14 @@ impl ObjectAllocatorPtr {
 unsafe impl Allocator for ObjectAllocatorPtr {
     fn allocate(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
         let ptr = if layout.align() <= ALLOCATION_ALIGNMENT {
-            let ptr = self.allocate(layout.size());
+            let ptr = self.allocate(layout.size(), TypeId::new_invalid());
             if ptr.is_null() {
                 return Err(AllocError);
             }
             ptr
         } else {
             let total = layout.size() + layout.align();
-            let base = self.allocate(total);
+            let base = self.allocate(total, TypeId::new_invalid());
             if base.is_null() {
                 return Err(AllocError);
             }
@@ -1276,7 +1297,7 @@ mod tests {
 
     /// A `struct { p *Node }` object whose first word is `child`.
     fn alloc_node(allocator: &ObjectAllocatorPtr, child: *mut ()) -> *mut () {
-        let node = allocator.allocate(16);
+        let node = allocator.allocate(16, TypeId::new_invalid());
         unsafe { (node as *mut usize).write(child as usize) };
         node
     }
@@ -1314,7 +1335,7 @@ mod tests {
         let pager = Rc::new(Pager::new());
         let allocator = ObjectAllocator::new(pager.clone());
         let size = LARGE_ALLOCATION_THRESHOLD + 1;
-        let ptr = allocator.ptr().allocate(size);
+        let ptr = allocator.ptr().allocate(size, TypeId::new_invalid());
         assert!(!ptr.is_null());
         // The pages of the allocation belong to the pager that maps them.
         assert_eq!(
@@ -1343,7 +1364,7 @@ mod tests {
         let pager = Rc::new(Pager::new());
         let allocator = ObjectAllocator::new(pager.clone());
         let size = LARGE_ALLOCATION_THRESHOLD + 1;
-        let ptr = allocator.ptr().allocate(size);
+        let ptr = allocator.ptr().allocate(size, TypeId::new_invalid());
         allocator.ptr().run_gc(&[]);
         assert!(!allocator.ptr().contains(ptr));
         assert_eq!(pager.allocated_pages(), 0);
@@ -1371,7 +1392,7 @@ mod tests {
         assert!(pid >= 0, "fork failed");
         if pid == 0 {
             let allocator = ObjectAllocator::new(Rc::new(Pager::new()));
-            let ptr = allocator.ptr().allocate(size);
+            let ptr = allocator.ptr().allocate(size, TypeId::new_invalid());
             allocator.ptr().run_gc(&[]);
             let ret = unsafe {
                 libc::mprotect(
@@ -1391,7 +1412,9 @@ mod tests {
     fn test_large_allocation_is_traced_like_a_heap_allocation() {
         let allocator = ObjectAllocator::new(Rc::new(Pager::new()));
         let leaf = alloc_node(&allocator.ptr(), ptr::null_mut());
-        let region = allocator.ptr().allocate(LARGE_ALLOCATION_THRESHOLD + 1);
+        let region = allocator
+            .ptr()
+            .allocate(LARGE_ALLOCATION_THRESHOLD + 1, TypeId::new_invalid());
         // The pointer to the leaf sits in the middle of the region, so it is
         // only found if the interior of a page-backed allocation is scanned.
         unsafe { (region as *mut usize).add(64).write(leaf as usize) };
@@ -1405,7 +1428,7 @@ mod tests {
     #[test]
     fn test_allocate_rounds_size_up_and_registers_object() {
         let allocator = ObjectAllocator::new(Rc::new(Pager::new()));
-        let ptr = allocator.ptr().allocate(1);
+        let ptr = allocator.ptr().allocate(1, TypeId::new_invalid());
         assert!(!ptr.is_null());
         assert!(allocator.ptr().contains(ptr));
         assert!(!allocator.ptr().contains_closure(ptr));
@@ -1414,8 +1437,17 @@ mod tests {
     #[test]
     fn test_allocate_returns_null_when_heap_is_exhausted() {
         let allocator = ObjectAllocator::new(Rc::new(Pager::new()));
-        while !allocator.ptr().allocate(65536).is_null() {}
-        assert!(allocator.ptr().allocate(65536).is_null());
+        while !allocator
+            .ptr()
+            .allocate(65536, TypeId::new_invalid())
+            .is_null()
+        {}
+        assert!(
+            allocator
+                .ptr()
+                .allocate(65536, TypeId::new_invalid())
+                .is_null()
+        );
     }
 
     #[test]
@@ -1426,7 +1458,7 @@ mod tests {
         assert!(!allocator.ptr().contains(closure));
         assert!(allocator.ptr().contains_closure(closure));
 
-        let ordinary = allocator.ptr().allocate(32);
+        let ordinary = allocator.ptr().allocate(32, TypeId::new_invalid());
         assert!(allocator.ptr().contains(ordinary));
         assert!(!allocator.ptr().contains_closure(ordinary));
     }
@@ -1479,7 +1511,7 @@ mod tests {
     #[test]
     fn test_string_global_keeps_its_buffer() {
         let allocator = ObjectAllocator::new(Rc::new(Pager::new()));
-        let buffer = allocator.ptr().allocate(8);
+        let buffer = allocator.ptr().allocate(8, TypeId::new_invalid());
         unsafe { (buffer as *mut u8).write(0) };
         let mut value = [0u8; 16];
         value[..8].copy_from_slice(&word(buffer));
@@ -1495,7 +1527,9 @@ mod tests {
         let allocator = ObjectAllocator::new(Rc::new(Pager::new()));
         let len: usize = 2;
         let cap: usize = 4;
-        let buffer = allocator.ptr().allocate(cap * mem::size_of::<usize>());
+        let buffer = allocator
+            .ptr()
+            .allocate(cap * mem::size_of::<usize>(), TypeId::new_invalid());
         let alive = alloc_node(&allocator.ptr(), ptr::null_mut());
         let beyond_len = alloc_node(&allocator.ptr(), ptr::null_mut());
         unsafe {
@@ -1521,7 +1555,7 @@ mod tests {
     fn test_slice_of_struct_elements_traces_their_members() {
         let allocator = ObjectAllocator::new(Rc::new(Pager::new()));
         let leaf = alloc_node(&allocator.ptr(), ptr::null_mut());
-        let buffer = allocator.ptr().allocate(16);
+        let buffer = allocator.ptr().allocate(16, TypeId::new_invalid());
         unsafe { (buffer as *mut usize).write(leaf as usize) };
 
         let mut header = [0u8; 24];
@@ -1553,7 +1587,7 @@ mod tests {
     #[test]
     fn test_interface_global_with_pointer_free_receiver() {
         let allocator = ObjectAllocator::new(Rc::new(Pager::new()));
-        let box_ptr = allocator.ptr().allocate(8);
+        let box_ptr = allocator.ptr().allocate(8, TypeId::new_invalid());
         let mut value = [0u8; 16];
         value[..8].copy_from_slice(&word(box_ptr));
         value[8..16].copy_from_slice(&raw_word(types().opaque_16.tid().to_raw()));
@@ -1657,11 +1691,15 @@ mod tests {
     #[test]
     fn test_sweep_prunes_channel_and_map_registrations() {
         let allocator = ObjectAllocator::new(Rc::new(Pager::new()));
-        let channel = allocator.ptr().allocate(mem::size_of::<ChannelObject>());
+        let channel = allocator
+            .ptr()
+            .allocate(mem::size_of::<ChannelObject>(), TypeId::new_invalid());
         allocator
             .ptr()
             .allocate_channel(mem::size_of::<ChannelObject>(), types().node.tid());
-        let map = allocator.ptr().allocate(mem::size_of::<MapObject>());
+        let map = allocator
+            .ptr()
+            .allocate(mem::size_of::<MapObject>(), TypeId::new_invalid());
         allocator.ptr().allocate_map(mem::size_of::<MapObject>());
         assert_eq!(allocator.ptr().registered_channels_len(), 1);
         assert_eq!(allocator.ptr().registered_maps_len(), 1);
@@ -1683,7 +1721,7 @@ mod tests {
     fn region_with_value_at(allocator: &ObjectAllocatorPtr, offset: usize) -> *mut usize {
         // The region is a large allocation, so it is mapped from the pager's
         // pages: nothing but a pointer into its interior reaches the value.
-        let region = allocator.allocate(LARGE_ALLOCATION_THRESHOLD + 1);
+        let region = allocator.allocate(LARGE_ALLOCATION_THRESHOLD + 1, TypeId::new_invalid());
         unsafe { (region as *mut usize).write(0) };
         unsafe { (region as *mut usize).add(offset) }
     }
@@ -1692,7 +1730,9 @@ mod tests {
     fn test_pointer_to_interior_address_traces_the_value_there() {
         let allocator = ObjectAllocator::new(Rc::new(Pager::new()));
         let leaf = alloc_node(&allocator.ptr(), ptr::null_mut());
-        let buffer = allocator.ptr().allocate(mem::size_of::<usize>());
+        let buffer = allocator
+            .ptr()
+            .allocate(mem::size_of::<usize>(), TypeId::new_invalid());
         unsafe { (buffer as *mut usize).write(leaf as usize) };
         // A `[]*Node` header living inside the region instead of in an
         // allocation of its own.
@@ -1840,7 +1880,9 @@ mod tests {
         let argument = alloc_node(&allocator.ptr(), ptr::null_mut());
         // A defer stack entry: next link, function, and the argument words of
         // the deferred call.
-        let entry = allocator.ptr().allocate(3 * mem::size_of::<usize>());
+        let entry = allocator
+            .ptr()
+            .allocate(3 * mem::size_of::<usize>(), TypeId::new_invalid());
         unsafe {
             (entry as *mut usize).write(0);
             ((entry as *mut usize).add(1)).write(0);

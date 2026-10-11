@@ -93,7 +93,7 @@ impl MapObject {
     pub fn set(&mut self, key: ObjectPtr, value: ObjectPtr) {
         let allocator = self.map.allocator().clone();
         let key_object_size = self.key_type.size();
-        let key_ptr = allocator.allocate(key_object_size);
+        let key_ptr = allocator.allocate(key_object_size, TypeId::new_invalid());
         if key_ptr.is_null() {
             unimplemented!();
         }
@@ -104,7 +104,7 @@ impl MapObject {
         let key = ObjectPtr(key_ptr as *mut ());
 
         let value_object_size = self.value_type.size();
-        let value_ptr = allocator.allocate(value_object_size);
+        let value_ptr = allocator.allocate(value_object_size, TypeId::new_invalid());
         if value_ptr.is_null() {
             unimplemented!();
         }
@@ -288,13 +288,13 @@ mod tests {
     }
 
     fn make_isize_ptr(allocator: &ObjectAllocatorPtr, value: isize) -> ObjectPtr {
-        let ptr = allocator.allocate(mem::size_of::<isize>()) as *mut isize;
+        let ptr = allocator.allocate(mem::size_of::<isize>(), TypeId::new_invalid()) as *mut isize;
         unsafe { *ptr = value };
         ObjectPtr(ptr as *mut ())
     }
 
     fn make_result_ptr(allocator: &ObjectAllocatorPtr) -> ObjectPtr {
-        let ptr = allocator.allocate(mem::size_of::<isize>()) as *mut isize;
+        let ptr = allocator.allocate(mem::size_of::<isize>(), TypeId::new_invalid()) as *mut isize;
         ObjectPtr(ptr as *mut ())
     }
 

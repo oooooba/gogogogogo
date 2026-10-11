@@ -29,7 +29,7 @@ pub extern "C" fn gox5_interface_new(ctx: &mut LightWeightThreadContext) -> Func
         ObjectPtr(ptr::null_mut())
     } else {
         let size = type_id.size();
-        let ptr = ctx.allocate(size);
+        let ptr = ctx.allocate(size, type_id);
         let src = unsafe { slice::from_raw_parts(frame_receiver.0 as *const u8, size) };
         let dst = unsafe { slice::from_raw_parts_mut(ptr as *mut u8, size) };
         dst.copy_from_slice(src);
@@ -153,7 +153,7 @@ pub extern "C" fn gox5_interface_invoke(ctx: &mut LightWeightThreadContext) -> F
     // This allocation must not be made through the global context directly:
     // a hot interface invocation loop can exhaust the heap, and the garbage
     // collector has to run before giving up on the allocation.
-    let args = ctx.allocate(WordChunk::size_for_count(count));
+    let args = ctx.allocate(WordChunk::size_for_count(count), TypeId::new_invalid());
     let args = unsafe { WordChunk::copy_into_raw(args as *mut WordChunk, args_wc_ptr) };
 
     let current_stack_pointer = ctx.stack_pointer();
@@ -459,7 +459,7 @@ mod tests {
         let mut referenced: *mut () = ptr::null_mut();
         let mut budget = MAX_TOTAL_ALLOCATED_SIZE;
         while budget > 0 {
-            let chunk = ctx.allocate(budget.min(chunk_size));
+            let chunk = ctx.allocate(budget.min(chunk_size), TypeId::new_invalid());
             assert!(!chunk.is_null());
             if referenced.is_null() {
                 referenced = chunk;

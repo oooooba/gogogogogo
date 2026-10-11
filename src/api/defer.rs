@@ -8,6 +8,7 @@ use crate::UserFunction;
 use crate::defer_stack::DeferStackEntry;
 use crate::object::interface::Interface;
 use crate::object::string::StringObject;
+use crate::type_id::TypeId;
 use crate::word_chunk::WordChunk;
 
 fn register<F>(ctx: &mut LightWeightThreadContext, param: F) -> FunctionObject
@@ -25,8 +26,10 @@ where
     // is pushed onto the defer stack below.
     let count = unsafe { WordChunk::count_of_raw(args) };
     let entry_size = mem::size_of::<DeferStackEntry>();
-    let entry_ptr =
-        ctx.allocate(entry_size + WordChunk::size_for_count(count)) as *mut DeferStackEntry;
+    let entry_ptr = ctx.allocate(
+        entry_size + WordChunk::size_for_count(count),
+        TypeId::new_invalid(),
+    ) as *mut DeferStackEntry;
     let args_copy = unsafe { (entry_ptr as *mut u8).add(entry_size) as *mut WordChunk };
     let args = unsafe { WordChunk::copy_into_raw(args_copy, args) };
 
@@ -224,7 +227,7 @@ mod tests {
         let mut referenced: *mut () = ptr::null_mut();
         let mut budget = MAX_TOTAL_ALLOCATED_SIZE - mem::size_of::<DeferStackEntry>();
         while budget > 0 {
-            let chunk = ctx.allocate(budget.min(chunk_size));
+            let chunk = ctx.allocate(budget.min(chunk_size), TypeId::new_invalid());
             assert!(!chunk.is_null());
             if referenced.is_null() {
                 referenced = chunk;

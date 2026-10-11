@@ -1,3 +1,4 @@
+use crate::type_id::TypeId;
 use std::mem;
 use std::ptr;
 
@@ -29,7 +30,7 @@ pub extern "C" fn gox5_coro_new(ctx: &mut LightWeightThreadContext) -> FunctionO
     let slot = ctx
         .global_context()
         .process(|mut gc| gc.reserve_coro_slot());
-    let coro = ctx.allocate(mem::size_of::<CoroObject>());
+    let coro = ctx.allocate(mem::size_of::<CoroObject>(), TypeId::new_invalid());
     unsafe {
         ptr::write(coro as *mut CoroObject, CoroObject { slot });
     }

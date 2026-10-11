@@ -88,7 +88,7 @@ pub extern "C" fn gox5_map_clone(ctx: &mut LightWeightThreadContext) -> Function
     let ptr = allocate_map(ctx);
     MapObject::construct_clone_in(ptr, map);
     let slot_size = mem::size_of::<*mut ()>();
-    let slot = ctx.allocate(slot_size);
+    let slot = ctx.allocate(slot_size, TypeId::new_invalid());
     unsafe {
         *(slot as *mut *mut ()) = ptr as *mut ();
     }
@@ -297,13 +297,13 @@ mod tests {
 
     fn make_map_ptr(allocator: &ObjectAllocatorPtr) -> ObjectPtr {
         let size = mem::size_of::<MapObject>();
-        let ptr = allocator.allocate(size) as *mut MapObject;
+        let ptr = allocator.allocate(size, TypeId::new_invalid()) as *mut MapObject;
         MapObject::construct_in(ptr, test_type_id(), test_type_id(), allocator.clone());
         ObjectPtr(ptr as *mut ())
     }
 
     fn make_isize_ptr(allocator: &ObjectAllocatorPtr, value: isize) -> ObjectPtr {
-        let ptr = allocator.allocate(mem::size_of::<isize>()) as *mut isize;
+        let ptr = allocator.allocate(mem::size_of::<isize>(), TypeId::new_invalid()) as *mut isize;
         unsafe { *ptr = value };
         ObjectPtr(ptr as *mut ())
     }

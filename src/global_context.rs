@@ -141,6 +141,7 @@ mod tests {
     use crate::allocator::MAX_TOTAL_ALLOCATED_SIZE;
     use crate::create_light_weight_thread_context;
     use crate::pager::PAGE_SIZE;
+    use crate::type_id::TypeId;
     use std::mem;
     use std::ptr;
 
@@ -166,7 +167,7 @@ mod tests {
             &[],
             FunctionObject::new_null(),
         );
-        let kept = ctx.allocate(64);
+        let kept = ctx.allocate(64, TypeId::new_invalid());
         assert!(!kept.is_null());
         unsafe {
             ptr::write(
@@ -176,7 +177,7 @@ mod tests {
             ptr::write(kept as *mut u8, 0xAB);
         }
         for _ in 0..10 {
-            let ptr = ctx.allocate(65536);
+            let ptr = ctx.allocate(65536, TypeId::new_invalid());
             assert!(!ptr.is_null());
         }
         let alive = gc.process(|mut gc| gc.allocator().contains(kept));
@@ -218,7 +219,7 @@ mod tests {
             FunctionObject::new_null(),
         );
         for i in 0..chunk_count {
-            let chunk = ctx.allocate(chunk_size);
+            let chunk = ctx.allocate(chunk_size, TypeId::new_invalid());
             assert!(!chunk.is_null());
             unsafe {
                 ptr::write(
@@ -228,7 +229,7 @@ mod tests {
                 )
             };
         }
-        ctx.allocate(64);
+        ctx.allocate(64, TypeId::new_invalid());
     }
 
     #[test]
@@ -297,7 +298,7 @@ mod tests {
         // An allocation too large for the heap is mapped from the pager the
         // global context holds, so that pager is the one pager of the process.
         let size = LARGE_ALLOCATION_THRESHOLD + 1;
-        let ptr = gc.process(|mut gc| gc.allocator().allocate(size));
+        let ptr = gc.process(|mut gc| gc.allocator().allocate(size, TypeId::new_invalid()));
         assert!(!ptr.is_null());
         assert_eq!(
             gc.process(|gc| gc.pager().allocated_pages()),

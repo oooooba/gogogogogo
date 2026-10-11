@@ -94,12 +94,15 @@ mod tests {
     use super::*;
     use crate::allocator::ObjectAllocator;
     use crate::pager::Pager;
+    use crate::type_id::TypeId;
     use std::rc::Rc;
 
     fn test_builder(len_in_bytes: usize, allocator: &ObjectAllocator) -> StringObjectBuilder {
         StringObjectBuilder::new(
             len_in_bytes,
-            allocator.ptr().allocate(len_in_bytes + 1) as *mut u8,
+            allocator
+                .ptr()
+                .allocate(len_in_bytes + 1, TypeId::new_invalid()) as *mut u8,
         )
     }
 

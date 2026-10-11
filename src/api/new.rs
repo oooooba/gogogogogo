@@ -19,7 +19,7 @@ pub extern "C" fn gox5_new(ctx: &mut LightWeightThreadContext) -> FunctionObject
     let frame = ctx.stack_frame::<StackFrameNew>();
     let size = frame.size;
 
-    let ptr = ctx.allocate(size);
+    let ptr = ctx.allocate(size, frame.type_id);
     let bytes = unsafe { slice::from_raw_parts_mut(ptr as *mut u8, size) };
     bytes.fill(0);
 

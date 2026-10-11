@@ -149,8 +149,8 @@ impl LightWeightThreadContext {
         &self.global_context
     }
 
-    pub(crate) fn allocate(&mut self, size: usize) -> *mut () {
-        self.allocate_with(size, |allocator| allocator.allocate(size))
+    pub(crate) fn allocate(&mut self, size: usize, type_id: TypeId) -> *mut () {
+        self.allocate_with(size, |allocator| allocator.allocate(size, type_id))
     }
 
     pub(crate) fn allocate_closure(&mut self, size: usize) -> *mut () {
