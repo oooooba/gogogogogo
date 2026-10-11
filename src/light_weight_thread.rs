@@ -168,6 +168,13 @@ impl LightWeightThreadContext {
             .process(|mut global_context| global_context.allocator().allocate_map(size))
     }
 
+    /// Runs a collection synchronously, with this goroutine as an additional
+    /// root alongside the parked ones. The runtime.GC builtin is mapped here.
+    pub(crate) fn run_gc(&mut self) {
+        self.global_context()
+            .process(|mut global_context| global_context.run_gc(&*self));
+    }
+
     fn allocate_with(
         &mut self,
         size: usize,

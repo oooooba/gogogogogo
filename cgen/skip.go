@@ -66,7 +66,7 @@ func isFunctionBodySkipped(fn *ssa.Function) bool {
 					// their callers (Goexit/Gosched for sync.Pool via pinSlow,
 					// GOMAXPROCS for sync.Pool, FuncForPC/Name for the function
 					// identity tests in xtests/reflect.go).
-					if f.Name() == "Goexit" || f.Name() == "Gosched" || f.Name() == "GOMAXPROCS" || f.Name() == "FuncForPC" || f.Name() == "Name" || f.Name() == "SetFinalizer" || f.Name() == "fcntl" || f.Name() == "beforeExit" || f.Name() == "KeepAlive" {
+					if f.Name() == "Goexit" || f.Name() == "Gosched" || f.Name() == "GOMAXPROCS" || f.Name() == "FuncForPC" || f.Name() == "Name" || f.Name() == "SetFinalizer" || f.Name() == "fcntl" || f.Name() == "beforeExit" || f.Name() == "KeepAlive" || f.Name() == "GC" {
 						continue
 					}
 				case "syscall":

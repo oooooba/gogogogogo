@@ -1,3 +1,4 @@
+use crate::FunctionObject;
 use crate::LightWeightThreadContext;
 use crate::type_id::TypeId;
 
@@ -13,6 +14,12 @@ pub extern "C" fn gox5_gc_register_global_object(
             .allocator()
             .register_global_object(address, size, type_id);
     });
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn gox5_gc_collect(ctx: &mut LightWeightThreadContext) -> FunctionObject {
+    ctx.run_gc();
+    ctx.pop_frame()
 }
 
 #[cfg(test)]
@@ -42,5 +49,54 @@ mod tests {
             .global_context()
             .process(|mut global_context| global_context.allocator().global_spans_len());
         assert_eq!(len, 1);
+    }
+
+    #[test]
+    fn test_gox5_gc_collect_pops_the_runtime_frame() {
+        let (mut ctx, _gc) = create_ctx();
+        let prev_stack_pointer = ctx.stack_pointer();
+        ctx.grow_stack(128);
+        let resume = FunctionObject::new_null();
+        ctx.push_frame(128, prev_stack_pointer, None, &[], resume.clone());
+        let returned = gox5_gc_collect(&mut ctx);
+        assert_eq!(returned, resume);
+        assert_eq!(ctx.stack_pointer(), prev_stack_pointer);
+    }
+
+    #[test]
+    fn test_gox5_gc_collect_keeps_reachable_and_frees_garbage() {
+        let (mut ctx, _gc) = create_ctx();
+        let live = ctx.allocate(16, TypeId::new_invalid());
+        let garbage = ctx.allocate(16, TypeId::new_invalid());
+        assert!(
+            ctx.global_context()
+                .process(|mut gc| gc.allocator().contains(live))
+        );
+        assert!(
+            ctx.global_context()
+                .process(|mut gc| gc.allocator().contains(garbage))
+        );
+
+        // A global root holds a pointer to `live`; a conservative scan of the
+        // root span reaches it, so only `garbage` is swept.
+        let mut root = [live as usize, 0usize];
+        gox5_gc_register_global_object(
+            &mut ctx,
+            root.as_mut_ptr() as *mut (),
+            TypeId::new_invalid(),
+            std::mem::size_of_val(&root),
+        );
+        ctx.run_gc();
+
+        assert!(
+            ctx.global_context()
+                .process(|mut gc| gc.allocator().contains(live)),
+            "reachable object was collected"
+        );
+        assert!(
+            !ctx.global_context()
+                .process(|mut gc| gc.allocator().contains(garbage)),
+            "unreachable object survived the collection"
+        );
     }
 }

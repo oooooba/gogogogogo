@@ -731,6 +731,11 @@ DECLARE_RUNTIME_API(lwt_yield, StackFrameLwtYield);
 
 typedef struct {
     StackFrameCommon common;
+} StackFrameGcCollect;
+DECLARE_RUNTIME_API(gc_collect, StackFrameGcCollect);
+
+typedef struct {
+    StackFrameCommon common;
     Uint64Object *result_ptr;
 } StackFrameRuntimeRand;
 DECLARE_RUNTIME_API(runtime_rand, StackFrameRuntimeRand);

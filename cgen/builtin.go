@@ -34,6 +34,13 @@ func (ctx *Context) emitSpecialRuntimeCall(callee *ssa.Function, instr *ssa.Call
 			// runtime.KeepAlive is a compiler hint with no runtime effect.
 			fmt.Fprintf(ctx.stream, "\treturn %s;\n", wrapInFunctionObject(createInstructionName(instr)))
 			return true
+		case "GC":
+			// runtime.GC forces a synchronous collection. It is mapped to the
+			// runtime API frame so the collector runs between the caller's
+			// instructions; the resumed function keeps the caller's stack frame
+			// alive as a root while it runs.
+			ctx.switchFunctionToCallRuntimeApi("gox5_gc_collect", "StackFrameGcCollect", createInstructionName(instr), nil, nil)
+			return true
 		}
 	}
 	if pkgPath == "internal/syscall/unix" {
