@@ -161,6 +161,7 @@ func (ctx *Context) emitFunctionVariableStructure(function *ssa.Function) {
 
 	fmt.Fprintf(ctx.stream, "} StackFrame_%s;\n", createFunctionName(function))
 	ctx.emitFrameStackMap(function, createFunctionName(function), concreteSignatureName, members)
+	ctx.emitRuntimeArgumentsFrameTypeInfos(function)
 }
 
 // frameMember is one pointer-bearing-capable member of a generated stack
@@ -236,6 +237,103 @@ func (ctx *Context) emitFrameStackMap(function *ssa.Function, frameName string, 
 	fmt.Fprintf(ctx.stream, "\t.kind = GC_TYPE_STRUCT_ARRAY,\n")
 	fmt.Fprintf(ctx.stream, "\t.pointed_to = (TypeId){.id = 0},\n")
 	fmt.Fprintf(ctx.stream, "\t.get_member_offset_runs = %s,\n", offsetRunsName)
+	fmt.Fprintf(ctx.stream, "};\n\n")
+}
+
+// runtimeArgsFrameTypeInfoName returns the symbol of the generated stack-map
+// TypeInfo that describes the frame a `go`/`defer` call site pushes for its
+// argument words. It returns "" for a call whose argument offsets are not
+// known at compile time (a method or interface call, where the receiver prepended
+// to the argument buffer has a run-time size), which keeps the conservative
+// explicit-root path for those frames.
+func runtimeArgsFrameTypeInfoName(instr ssa.Instruction) string {
+	var common *ssa.CallCommon
+	switch i := instr.(type) {
+	case *ssa.Go:
+		common = i.Common()
+	case *ssa.Defer:
+		common = i.Common()
+	default:
+		return ""
+	}
+	if common.Method != nil {
+		return ""
+	}
+	if builtin, ok := common.Value.(*ssa.Builtin); ok {
+		switch builtin.Name() {
+		case "print", "println", "close":
+			return ""
+		}
+	}
+	return fmt.Sprintf("TypeInfo_RuntimeArgs_%s", createInstructionName(instr))
+}
+
+// emitRuntimeArgumentsFrameTypeInfos emits the stack map of every frame the
+// `go`/`defer` instructions of function push for their arguments. The runtime
+// frame holds the argument words the runtime API copies into the goroutine's
+// start (or deferred call's) frame, so describing them here lets the collector
+// trace them precisely instead of scanning the whole frame extent.
+func (ctx *Context) emitRuntimeArgumentsFrameTypeInfos(function *ssa.Function) {
+	if function.Blocks == nil {
+		return
+	}
+	for _, block := range function.Blocks {
+		for _, instr := range block.Instrs {
+			switch instr.(type) {
+			case *ssa.Go, *ssa.Defer:
+				ctx.emitRuntimeArgumentsFrameTypeInfo(instr)
+			}
+		}
+	}
+}
+
+// emitRuntimeArgumentsFrameTypeInfo emits the descriptor of one runtime frame
+// that carries copied argument words. The pushed frame is laid out as the
+// common frame header, an optional result pointer, and then the argument words,
+// each padded up to a whole word, which is exactly the layout push_frame builds.
+func (ctx *Context) emitRuntimeArgumentsFrameTypeInfo(instr ssa.Instruction) {
+	typeInfoName := runtimeArgsFrameTypeInfoName(instr)
+	if typeInfoName == "" {
+		return
+	}
+	if !ctx.markTypeDefinition("runtime_args_frame", typeInfoName) {
+		return
+	}
+	common := instr.(interface{ Common() *ssa.CallCommon }).Common()
+	signature, _ := common.Value.Type().Underlying().(*types.Signature)
+	hasResult := signature != nil && signature.Results().Len() > 0
+	argsBase := "sizeof(StackFrameCommon)"
+	if hasResult {
+		argsBase += " + sizeof(void*)"
+	}
+
+	body := ""
+	body += "\tvisit(base + offsetof(StackFrameCommon, resume_func), sizeof(FunctionObject), (TypeId){.id=0}, GC_SLOT_FUNCTION, arg); // resume_func\n"
+	body += "\tvisit(base + offsetof(StackFrameCommon, free_vars), sizeof(void*), (TypeId){.id=0}, GC_SLOT_FREE_VARS, arg); // free_vars\n"
+	body += "\tvisit(base + offsetof(StackFrameCommon, deferred_list), sizeof(void*), (TypeId){.id=0}, GC_SLOT_DEFER_STACK, arg); // deferred_list\n"
+	offset := "0"
+	for _, arg := range common.Args {
+		if !isNoPointerType(arg.Type()) {
+			offsetExpr := fmt.Sprintf("base + %s + (%s)", argsBase, offset)
+			body += stackMapTypedVisit(offsetExpr, createTypeName(arg.Type()), arg.Type())
+		}
+		offset = fmt.Sprintf("(%s) + (sizeof(%s) + sizeof(void*) - 1) / sizeof(void*) * sizeof(void*)", offset, createTypeName(arg.Type()))
+	}
+
+	storage := "static __attribute__((unused)) "
+	fmt.Fprintf(ctx.stream, "%svoid get_member_offset_runs_%s(TypeOffsetVisitor visit, uintptr_t base, void *arg) { // runtime argument words\n%s}\n\n",
+		storage, typeInfoName, body)
+	fmt.Fprintf(ctx.stream, "%sconst TypeInfo %s = {\n", storage, typeInfoName)
+	fmt.Fprintf(ctx.stream, "\t.gc_magic = TYPE_INFO_MAGIC,\n")
+	fmt.Fprintf(ctx.stream, "\t.name = (StringObject){.raw = \"%s\", .len = sizeof(\"%s\") - 1},\n", typeInfoName, typeInfoName)
+	fmt.Fprintf(ctx.stream, "\t.num_methods = 0,\n")
+	fmt.Fprintf(ctx.stream, "\t.interface_table = NULL,\n")
+	fmt.Fprintf(ctx.stream, "\t.is_equal = gox5_frame_type_is_equal,\n")
+	fmt.Fprintf(ctx.stream, "\t.hash = gox5_frame_type_hash,\n")
+	fmt.Fprintf(ctx.stream, "\t.size = sizeof(StackFrameCommon),\n")
+	fmt.Fprintf(ctx.stream, "\t.kind = GC_TYPE_STRUCT_ARRAY,\n")
+	fmt.Fprintf(ctx.stream, "\t.pointed_to = (TypeId){.id = 0},\n")
+	fmt.Fprintf(ctx.stream, "\t.get_member_offset_runs = get_member_offset_runs_%s,\n", typeInfoName)
 	fmt.Fprintf(ctx.stream, "};\n\n")
 }
 

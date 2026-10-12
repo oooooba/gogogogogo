@@ -201,10 +201,9 @@ mod tests {
         // against the heap budget, so only chunks this size can exhaust it.
         // Every chunk is referenced from a frame, so the collection the last
         // allocation triggers reclaims nothing and the allocation panics. The
-        // frame has a recorded extent, which also keeps the collector from
-        // falling back to a conservative scan of the whole stack region (both
-        // wasteful, word-by-word BTree lookups under Miri, and unlike
-        // production, where the bootstrap leaves such a frame behind).
+        // frame is a runtime frame, so its recorded extent is registered as an
+        // explicit root and the chunks are reached by the word-by-word scan of
+        // that region.
         let chunk_size = LARGE_ALLOCATION_THRESHOLD;
         let chunk_count = MAX_TOTAL_ALLOCATED_SIZE / chunk_size;
         let frame_size = mem::size_of::<StackFrameCommon>() + chunk_count * mem::size_of::<usize>();

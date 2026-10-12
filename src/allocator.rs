@@ -376,17 +376,12 @@ impl ObjectAllocatorInner {
             if let Some(get_member_offset_runs) = frame.frame_type.get_member_offset_runs() {
                 let inner = self as *mut ObjectAllocatorInner as *mut ffi::c_void;
                 get_member_offset_runs(mark_typed_visitor, frame.address, inner);
-                continue;
             }
-            // No stack map: fall back to a conservative scan of the frame.
-            let end = if frame.frame_size > 0 {
-                frame.address + frame.frame_size
-            } else {
-                // Unknown extent: scan the remainder of the stack region so
-                // that nothing reachable is missed.
-                context.stack_end()
-            };
-            self.mark_range_raw(frame.address, end);
+        }
+        // A runtime frame carries no stack map; the objects it holds are kept
+        // alive through the explicit roots the runtime registered for it.
+        for &(address, size) in context.gc_roots() {
+            self.mark_range_raw(address, address + size);
         }
     }
 
@@ -399,8 +394,8 @@ impl ObjectAllocatorInner {
     /// Marks every object directly reachable through the raw words of
     /// [start, end) and traces them conservatively: a plain heap object is
     /// rescanned word by word, while closures/channels/maps/defer entries use
-    /// their own descriptor. This is the keep-alive path used for frame
-    /// fallbacks (runtime frames) and untyped contexts.
+    /// their own descriptor. This is the keep-alive path used for the
+    /// explicit roots a runtime frame registers and for untyped contexts.
     fn mark_range_raw(&mut self, start: usize, end: usize) {
         let word_size = mem::size_of::<usize>();
         let pair_size = 2 * word_size;

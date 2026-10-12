@@ -85,10 +85,10 @@ pub extern "C" fn gox5_map_clone(ctx: &mut LightWeightThreadContext) -> Function
     let map_ptr = unsafe { *(receiver.0 as *const *mut ()) };
     let map = unsafe { &*(map_ptr as *const MapObject) };
 
-    let ptr = allocate_map(ctx);
-    MapObject::construct_clone_in(ptr, map);
     let slot_size = mem::size_of::<*mut ()>();
     let slot = ctx.allocate(slot_size, TypeId::new_invalid());
+    let ptr = allocate_map(ctx);
+    MapObject::construct_clone_in(ptr, map);
     unsafe {
         *(slot as *mut *mut ()) = ptr as *mut ();
     }

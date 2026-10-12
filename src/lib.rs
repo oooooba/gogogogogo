@@ -100,8 +100,9 @@ pub struct StackFrame {
 
 // Stack map of a frame: reports every pointer-bearing slot of the frame as
 // frame-relative (offset, size) ranges, exactly like the
-// get_member_offset_runs function of a TypeInfo. A frame whose TypeId is
-// invalid (the runtime frames) is scanned conservatively over frame_size.
+// get_member_offset_runs function of a TypeInfo. A runtime frame whose TypeId
+// is invalid is not scanned through a map; it is kept alive by an explicit
+// root registered when the runtime pushed it.
 #[repr(C)]
 struct StackFrameCommon {
     resume_func: FunctionObject,

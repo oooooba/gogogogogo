@@ -9,7 +9,6 @@ use crate::UserFunction;
 use crate::defer_stack::DeferStack;
 use crate::global_context::GlobalContextPtr;
 use crate::object::interface::Interface;
-use crate::pager::PAGE_SIZE;
 use crate::type_id::TypeId;
 
 /// The number of pages a goroutine's stack region is mapped from.
@@ -27,6 +26,7 @@ pub struct LightWeightThreadContext {
     panic_data: Interface,
     initial_stack_pointer: *mut StackFrame,
     coro_slot: Option<usize>,
+    gc_roots: Vec<(usize, usize)>,
 }
 
 impl LightWeightThreadContext {
@@ -48,6 +48,7 @@ impl LightWeightThreadContext {
             panic_data: Interface::nil(),
             initial_stack_pointer: stack_pointer,
             coro_slot: None,
+            gc_roots: Vec::new(),
         }
     }
 
@@ -58,9 +59,9 @@ impl LightWeightThreadContext {
     }
 
     /// Pushes a new frame at the current stack pointer. `frame_size` is the
-    /// total extent of that frame, trailing argument buffer included, and is
-    /// recorded so the GC can scan the frame conservatively when it carries no
-    /// stack map of its own.
+    /// total extent of that frame, trailing argument buffer included. The
+    /// frame carries no stack map, so its extent is registered as an explicit
+    /// GC root, which the collector scans word by word.
     pub(crate) fn push_frame(
         &mut self,
         frame_size: usize,
@@ -69,6 +70,30 @@ impl LightWeightThreadContext {
         args: &[*const ()],
         resume_func: FunctionObject,
     ) {
+        self.push_frame_typed(
+            frame_size,
+            prev_stack_pointer,
+            result_pointer,
+            args,
+            resume_func,
+            TypeId::new_invalid(),
+        );
+    }
+
+    /// Pushes a new frame that carries its own stack map. `frame_type`
+    /// describes the pointer-bearing slots of the pushed frame, so the
+    /// collector can trace them precisely instead of scanning the whole
+    /// extent; such a frame is not registered as an explicit root. An invalid
+    /// `frame_type` falls back to the explicit-root path of `push_frame`.
+    pub(crate) fn push_frame_typed(
+        &mut self,
+        frame_size: usize,
+        prev_stack_pointer: *mut StackFrame,
+        result_pointer: Option<*const ()>,
+        args: &[*const ()],
+        resume_func: FunctionObject,
+        frame_type: TypeId,
+    ) {
         let next_stack_pointer = self.stack_pointer;
         let next_frame = unsafe { &mut (*next_stack_pointer) };
 
@@ -76,9 +101,7 @@ impl LightWeightThreadContext {
         next_frame.common.prev_stack_pointer = prev_stack_pointer;
         next_frame.common.free_vars = ptr::null_mut();
         next_frame.common.defer_stack = DeferStack::new();
-        // Frames pushed here are runtime frames: they carry no stack map, so
-        // the GC scans them conservatively over `frame_size`.
-        next_frame.common.frame_type = TypeId::new_invalid();
+        next_frame.common.frame_type = frame_type;
         next_frame.common.frame_size = frame_size;
 
         let params_offset = usize::from(result_pointer.is_some());
@@ -96,6 +119,11 @@ impl LightWeightThreadContext {
         }
 
         self.stack_pointer = next_stack_pointer;
+        // A frame with a stack map is traced through it; only a frame that
+        // carries none needs the conservative root.
+        if !frame_type.is_valid() {
+            self.push_gc_root(next_stack_pointer as usize, frame_size);
+        }
     }
 
     /// Total extent of a frame the runtime pushes itself: the fixed part, the
@@ -113,6 +141,7 @@ impl LightWeightThreadContext {
     }
 
     pub(crate) fn pop_frame(&mut self) -> FunctionObject {
+        let frame_address = self.stack_pointer as usize;
         let (prev_stack_pointer, resume_func) = {
             let stack_frame = self.stack_frame::<StackFrameCommon>();
             (
@@ -121,6 +150,11 @@ impl LightWeightThreadContext {
             )
         };
         self.stack_pointer = prev_stack_pointer;
+        if let Some(&(address, _)) = self.gc_roots.last()
+            && address == frame_address
+        {
+            self.gc_roots.pop();
+        }
         resume_func
     }
 
@@ -201,6 +235,14 @@ impl LightWeightThreadContext {
         self.stack_pointer
     }
 
+    pub(crate) fn push_gc_root(&mut self, address: usize, size: usize) {
+        self.gc_roots.push((address, size));
+    }
+
+    pub(crate) fn gc_roots(&self) -> &[(usize, usize)] {
+        &self.gc_roots
+    }
+
     pub(crate) fn stack_frame<T>(&self) -> &T {
         let p = self.stack_pointer as *const T;
         unsafe { &*p }
@@ -220,11 +262,6 @@ impl LightWeightThreadContext {
     /// the start of the allocator object backing it.
     pub(crate) fn stack_base(&self) -> usize {
         self.initial_stack_pointer as usize
-    }
-
-    /// The address just past the last page of this goroutine's stack region.
-    pub(crate) fn stack_end(&self) -> usize {
-        self.stack_base() + STACK_PAGES * PAGE_SIZE
     }
 
     /// Gives the pages this goroutine's stack region was mapped from back to
@@ -297,8 +334,6 @@ pub(crate) struct StackFrameDescriptor {
     pub(crate) address: usize,
     /// Stack map source of the frame, invalid when the frame carries none.
     pub(crate) frame_type: TypeId,
-    /// Total extent of the frame in bytes, 0 when unknown.
-    pub(crate) frame_size: usize,
 }
 
 /// Iterator over the frames of a goroutine stack, innermost first. The bottom
@@ -322,7 +357,6 @@ impl Iterator for StackFrames {
         let descriptor = StackFrameDescriptor {
             address: self.next,
             frame_type: common.frame_type,
-            frame_size: common.frame_size,
         };
         // The bottom frame links to itself; anything else that does not point
         // further down ends the walk as well. The bottom frame sits exactly at
@@ -430,6 +464,46 @@ mod tests {
         );
         let popped = ctx.pop_frame();
         assert_eq!(popped, resume);
+        assert_eq!(ctx.stack_pointer(), prev_sp);
+    }
+
+    #[test]
+    fn test_push_frame_registers_extent_and_pop_frame_removes_it() {
+        let (mut ctx, _gc) = create_ctx();
+        let prev_sp = ctx.stack_pointer();
+        let frame_extent = mem::size_of::<StackFrameCommon>() + 128;
+        ctx.grow_stack(frame_extent);
+        let frame_address = ctx.stack_pointer() as usize;
+        ctx.push_gc_root(0x1000, 8);
+        assert_eq!(ctx.gc_roots(), &[(0x1000, 8)]);
+        ctx.push_frame(frame_extent, prev_sp, None, &[], FunctionObject::new_null());
+        assert_eq!(
+            ctx.gc_roots(),
+            &[(0x1000, 8), (frame_address, frame_extent)]
+        );
+        ctx.pop_frame();
+        assert_eq!(ctx.gc_roots(), &[(0x1000, 8)]);
+    }
+
+    #[test]
+    fn test_push_frame_typed_records_type_and_skips_root() {
+        let (mut ctx, _gc) = create_ctx();
+        let prev_sp = ctx.stack_pointer();
+        let frame_extent = mem::size_of::<StackFrameCommon>() + 128;
+        ctx.grow_stack(frame_extent);
+        let type_info = crate::type_id::FakeTypeInfo::new_with_size(frame_extent);
+        let tid = type_info.tid();
+        ctx.push_frame_typed(
+            frame_extent,
+            prev_sp,
+            None,
+            &[],
+            FunctionObject::new_null(),
+            tid,
+        );
+        assert_eq!(ctx.stack_frame::<StackFrameCommon>().frame_type, tid);
+        assert!(ctx.gc_roots().is_empty());
+        ctx.pop_frame();
         assert_eq!(ctx.stack_pointer(), prev_sp);
     }
 

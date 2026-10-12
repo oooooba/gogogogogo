@@ -43,9 +43,9 @@ func (ctx *Context) switchFunctionToCallRuntimeApi(nextFunction string, nextFunc
 	fmt.Fprintf(ctx.stream, "*next_frame = (%s){ 0 };\n", nextFunctionFrame)
 	fmt.Fprintf(ctx.stream, "next_frame->common.resume_func = %s;\n", wrapInFunctionObject(resumeFunction))
 	fmt.Fprintf(ctx.stream, "next_frame->common.prev_stack_pointer = ctx->stack_pointer;\n")
-	// The GC scans a frame that carries no stack map of its own
-	// conservatively, so the frame has to record its own extent. A frame with
-	// a trailing buffer refines this once the buffer length is known.
+	// A runtime frame carries no stack map, so the runtime registers its
+	// extent as an explicit GC root; the frame records that extent here. A
+	// frame with a trailing buffer refines it once the buffer length is known.
 	fmt.Fprintf(ctx.stream, "next_frame->common.frame_size = sizeof(%s);\n", nextFunctionFrame)
 
 	if resultPtr != nil {
@@ -124,10 +124,10 @@ func (ctx *Context) emitGoOrDefer(instr ssa.Instruction, callCommon *ssa.CallCom
 		)
 		return
 	}
-	ctx.emitCallCommon(callCommon, registerApi, registerFrame, resumeFunction)
+	ctx.emitCallCommon(instr, callCommon, registerApi, registerFrame, resumeFunction)
 }
 
-func (ctx *Context) emitCallCommon(callCommon *ssa.CallCommon, nextFunction string, nextFunctionFrame string, resumeFunction string) {
+func (ctx *Context) emitCallCommon(instr ssa.Instruction, callCommon *ssa.CallCommon, nextFunction string, nextFunctionFrame string, resumeFunction string) {
 	if callCommon.Method != nil {
 		panic("method not supported")
 	}
@@ -165,9 +165,13 @@ func (ctx *Context) emitCallCommon(callCommon *ssa.CallCommon, nextFunction stri
 		resultSize = fmt.Sprintf("sizeof(%s)", createTypeName(signature.Results()))
 	}
 
+	argFrameType := runtimeArgsFrameTypeInfoName(instr)
 	ctx.switchFunctionToCallRuntimeApi(nextFunction, nextFunctionFrame, resumeFunction, nil,
 		func() {
 			ctx.emitArgBufferCopies(callCommon.Args)
+			if argFrameType != "" {
+				fmt.Fprintf(ctx.stream, "next_frame->arg_type = (TypeId){.info = &%s};\n", argFrameType)
+			}
 		},
 		paramArgPair{param: "function_object", arg: functionObject},
 		paramArgPair{param: "result_size", arg: resultSize},

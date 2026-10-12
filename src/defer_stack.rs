@@ -1,6 +1,7 @@
 use std::ptr;
 
 use crate::FunctionObject;
+use crate::type_id::TypeId;
 use crate::word_chunk::WordChunk;
 
 #[repr(C)]
@@ -9,6 +10,10 @@ pub(crate) struct DeferStackEntry {
     func: FunctionObject,
     result_size: usize,
     args: ptr::NonNull<WordChunk>,
+    /// Stack map of the deferred call's argument words, as installed by the
+    /// generated code. Invalid when the call site carried no map, in which
+    /// case the arguments are scanned conservatively.
+    arg_type: TypeId,
 }
 
 impl DeferStackEntry {
@@ -16,12 +21,14 @@ impl DeferStackEntry {
         func: FunctionObject,
         result_size: usize,
         args: ptr::NonNull<WordChunk>,
+        arg_type: TypeId,
     ) -> Self {
         Self {
             next: None,
             func,
             result_size,
             args,
+            arg_type,
         }
     }
 
@@ -35,6 +42,10 @@ impl DeferStackEntry {
 
     pub(crate) fn args(&self) -> &[*const ()] {
         unsafe { WordChunk::as_slice_raw(self.args.as_ptr()) }
+    }
+
+    pub(crate) fn arg_type(&self) -> TypeId {
+        self.arg_type
     }
 }
 
@@ -75,6 +86,7 @@ mod tests {
             FunctionObject::new_null(),
             0,
             ptr::NonNull::dangling(),
+            TypeId::new_invalid(),
         )));
         let nn = unsafe { ptr::NonNull::new_unchecked(entry) };
         stack.push(nn);
@@ -94,6 +106,7 @@ mod tests {
                     FunctionObject::new_null(),
                     0,
                     ptr::NonNull::dangling(),
+                    TypeId::new_invalid(),
                 )))
             })
             .collect();
@@ -126,11 +139,13 @@ mod tests {
             FunctionObject::new_null(),
             0,
             ptr::NonNull::dangling(),
+            TypeId::new_invalid(),
         )));
         let e2 = Box::into_raw(Box::new(DeferStackEntry::new(
             FunctionObject::new_null(),
             0,
             ptr::NonNull::dangling(),
+            TypeId::new_invalid(),
         )));
         let nn1 = unsafe { ptr::NonNull::new_unchecked(e1) };
         let nn2 = unsafe { ptr::NonNull::new_unchecked(e2) };
@@ -149,8 +164,14 @@ mod tests {
 
     #[test]
     fn test_defer_stack_entry_accessors() {
-        let entry = DeferStackEntry::new(FunctionObject::new_null(), 42, ptr::NonNull::dangling());
+        let entry = DeferStackEntry::new(
+            FunctionObject::new_null(),
+            42,
+            ptr::NonNull::dangling(),
+            TypeId::new_invalid(),
+        );
         assert_eq!(entry.func(), FunctionObject::new_null());
         assert_eq!(entry.result_size(), 42);
+        assert_eq!(entry.arg_type(), TypeId::new_invalid());
     }
 }

@@ -8,6 +8,7 @@ use crate::create_light_weight_thread_context;
 use crate::light_weight_thread::LightWeightThreadContext;
 use crate::object::interface::Interface;
 use crate::object::string::StringObject;
+use crate::type_id::TypeId;
 use crate::word_chunk::WordChunk;
 
 #[repr(C)]
@@ -30,7 +31,7 @@ extern "C" fn lwt_exit_body(ctx: &mut LightWeightThreadContext) -> FunctionObjec
                 None
             };
             ctx.grow_stack(entry.result_size());
-            ctx.push_frame(
+            ctx.push_frame_typed(
                 LightWeightThreadContext::frame_extent(
                     mem::size_of::<StackFrameLwtExit>(),
                     entry.result_size(),
@@ -40,6 +41,7 @@ extern "C" fn lwt_exit_body(ctx: &mut LightWeightThreadContext) -> FunctionObjec
                 result_pointer,
                 entry.args(),
                 FunctionObject::from_user_function(UserFunction::new(lwt_exit_body)),
+                entry.arg_type(),
             );
             entry.func()
         }
@@ -66,9 +68,12 @@ pub extern "C" fn gox5_lwt_exit(_ctx: &mut LightWeightThreadContext) -> Function
 
 fn spawn<F>(ctx: &mut LightWeightThreadContext, param: F) -> FunctionObject
 where
-    F: FnOnce(&LightWeightThreadContext) -> (FunctionObject, usize, *const WordChunk),
+    F: FnOnce(&LightWeightThreadContext) -> (FunctionObject, usize, *const WordChunk, TypeId),
 {
-    let (entry_func, result_size, args) = param(ctx);
+    // The stack map of the argument words the generated call site recorded on
+    // the runtime API frame, carried over to the goroutine's start frame so the
+    // collector can trace those words precisely.
+    let (entry_func, result_size, args, arg_type) = param(ctx);
     let new_ctx = {
         let global_context = ctx.global_context().dupulicate();
         let mut new_ctx = create_light_weight_thread_context(global_context, entry_func);
@@ -80,7 +85,7 @@ where
         };
         new_ctx.grow_stack(result_size);
         let args = unsafe { WordChunk::as_slice_raw(args) };
-        new_ctx.push_frame(
+        new_ctx.push_frame_typed(
             LightWeightThreadContext::frame_extent(
                 mem::size_of::<StackFrameCommon>(),
                 result_size,
@@ -90,6 +95,7 @@ where
             result_pointer,
             args,
             FunctionObject::from_user_function(UserFunction::new(crate::terminate)),
+            arg_type,
         );
         new_ctx
     };
@@ -103,6 +109,7 @@ where
 #[repr(C)]
 struct StackFrameLwtSpawn {
     common: StackFrameCommon,
+    arg_type: TypeId,
     func: FunctionObject,
     result_size: usize,
     args: WordChunk,
@@ -118,7 +125,7 @@ pub extern "C" fn gox5_lwt_spawn(ctx: &mut LightWeightThreadContext) -> Function
             let sp = ctx.stack_pointer() as *const u8;
             sp.add(mem::offset_of!(StackFrameLwtSpawn, args)) as *const WordChunk
         };
-        (entry_func, result_size, args)
+        (entry_func, result_size, args, frame.arg_type)
     })
 }
 
@@ -142,7 +149,7 @@ pub extern "C" fn gox5_lwt_spawn_invoke(ctx: &mut LightWeightThreadContext) -> F
             let sp = ctx.stack_pointer() as *const u8;
             sp.add(mem::offset_of!(StackFrameLwtSpawnInvoke, args)) as *const WordChunk
         };
-        (entry_func, result_size, args)
+        (entry_func, result_size, args, TypeId::new_invalid())
     })
 }
 
@@ -236,6 +243,7 @@ mod tests {
             0,
             std::ptr::NonNull::new(args_buf.as_mut_ptr() as *mut WordChunk)
                 .expect("non-null args pointer"),
+            crate::type_id::TypeId::new_invalid(),
         )));
         {
             let frame = ctx.stack_frame_mut::<StackFrameCommon>();

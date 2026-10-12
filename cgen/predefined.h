@@ -351,6 +351,7 @@ DECLARE_RUNTIME_API(string_next, StackFrameStringNext);
 
 typedef struct {
     StackFrameCommon common;
+    TypeId arg_type;
     FunctionObject function_object;
     uintptr_t result_size;
     uintptr_t num_arg_buffer_words;
@@ -708,6 +709,7 @@ DECLARE_RUNTIME_API(lwt_exit, StackFrameLwtExit);
 
 typedef struct {
     StackFrameCommon common;
+    TypeId arg_type;
     FunctionObject function_object;
     uintptr_t result_size;
     uintptr_t num_arg_buffer_words;
