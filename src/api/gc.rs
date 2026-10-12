@@ -28,6 +28,15 @@ mod tests {
     use crate::FunctionObject;
     use crate::global_context;
     use crate::light_weight_thread::LightWeightThreadContext;
+    use crate::type_id::FakeTypeInfo;
+    use std::sync::OnceLock;
+
+    fn pointer_type_id() -> TypeId {
+        static INSTANCE: OnceLock<FakeTypeInfo> = OnceLock::new();
+        INSTANCE
+            .get_or_init(|| FakeTypeInfo::pointer(TypeId::new_invalid()))
+            .tid()
+    }
 
     fn create_ctx() -> (
         LightWeightThreadContext,
@@ -77,13 +86,13 @@ mod tests {
                 .process(|mut gc| gc.allocator().contains(garbage))
         );
 
-        // A global root holds a pointer to `live`; a conservative scan of the
-        // root span reaches it, so only `garbage` is swept.
+        // A typed global root holds a pointer to `live`, so tracing the root by
+        // its type reaches it and only `garbage` is swept.
         let mut root = [live as usize, 0usize];
         gox5_gc_register_global_object(
             &mut ctx,
             root.as_mut_ptr() as *mut (),
-            TypeId::new_invalid(),
+            pointer_type_id(),
             std::mem::size_of_val(&root),
         );
         ctx.run_gc();

@@ -349,11 +349,12 @@ impl ObjectAllocatorInner {
         }
         let global_spans = mem::take(&mut self.global_spans);
         for span in &global_spans {
-            if span.type_id != TypeId::new_invalid() {
-                self.mark_value(span.type_id, span.ptr as usize);
-            } else {
-                self.mark_range_raw(span.ptr as usize, span.ptr as usize + span.size);
-            }
+            assert!(
+                span.type_id.is_valid(),
+                "global object of size {} was registered without a type descriptor",
+                span.size
+            );
+            self.mark_value(span.type_id, span.ptr as usize);
         }
         self.global_spans = global_spans;
         for context in contexts {
@@ -1613,7 +1614,7 @@ mod tests {
         // The pointer to the leaf sits in the middle of the region, so it is
         // only found if the interior of a page-backed allocation is scanned.
         unsafe { (region as *mut usize).add(64).write(leaf as usize) };
-        let _root = register_root(&allocator.ptr(), TypeId::new_invalid(), &word(region));
+        let _root = register_root(&allocator.ptr(), types().opaque_ptr.tid(), &word(region));
 
         allocator.ptr().run_gc(&[]);
         assert!(allocator.ptr().contains(region));
@@ -1704,6 +1705,16 @@ mod tests {
     }
 
     #[test]
+    #[should_panic(expected = "without a type descriptor")]
+    fn test_untyped_global_root_is_rejected() {
+        let allocator = ObjectAllocator::new(Rc::new(Pager::new()));
+        let target = alloc_node(&allocator.ptr(), ptr::null_mut());
+        let _root = register_root(&allocator.ptr(), TypeId::new_invalid(), &word(target));
+
+        allocator.ptr().run_gc(&[]);
+    }
+
+    #[test]
     fn test_string_global_keeps_its_buffer() {
         let allocator = ObjectAllocator::new(Rc::new(Pager::new()));
         let buffer = allocator.ptr().allocate(8, TypeId::new_invalid());
@@ -1774,7 +1785,7 @@ mod tests {
             words.add(8).write(0);
             words.add(9).write(raw as usize);
         }
-        let _root = register_root(&allocator.ptr(), TypeId::new_invalid(), &word(object));
+        let _root = register_root(&allocator.ptr(), types().opaque_ptr.tid(), &word(object));
 
         allocator.ptr().run_gc(&[]);
         assert!(allocator.ptr().contains(object));
@@ -1802,7 +1813,7 @@ mod tests {
             words.add(0).write(low as usize);
             words.add(65).write(high as usize);
         }
-        let _root = register_root(&allocator.ptr(), TypeId::new_invalid(), &word(object));
+        let _root = register_root(&allocator.ptr(), types().opaque_ptr.tid(), &word(object));
 
         allocator.ptr().run_gc(&[]);
         assert!(allocator.ptr().contains(object));
@@ -1824,7 +1835,7 @@ mod tests {
             .allocate(LARGE_ALLOCATION_THRESHOLD + 1, typ.tid());
         let leaf = alloc_node(&allocator.ptr(), ptr::null_mut());
         unsafe { (object as *mut usize).write(leaf as usize) };
-        let _root = register_root(&allocator.ptr(), TypeId::new_invalid(), &word(object));
+        let _root = register_root(&allocator.ptr(), types().opaque_ptr.tid(), &word(object));
 
         allocator.ptr().run_gc(&[]);
         assert!(allocator.ptr().contains(object));
