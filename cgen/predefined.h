@@ -106,6 +106,7 @@ typedef enum {
     GC_SLOT_DEFER_STACK = 5,
     GC_SLOT_FREE_VARS = 6,
     GC_SLOT_RAW = 7,
+    GC_SLOT_MAP = 8,
 } GcStackSlotKind;
 
 // Stack map of a stack frame: it reports every pointer-bearing slot of the

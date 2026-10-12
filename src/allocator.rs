@@ -19,6 +19,7 @@ use crate::type_id::GC_SLOT_DEFER_STACK;
 use crate::type_id::GC_SLOT_FREE_VARS;
 use crate::type_id::GC_SLOT_FUNCTION;
 use crate::type_id::GC_SLOT_INTERFACE;
+use crate::type_id::GC_SLOT_MAP;
 use crate::type_id::GC_SLOT_POINTER;
 use crate::type_id::GC_SLOT_RAW;
 use crate::type_id::GC_SLOT_SLICE;
@@ -976,6 +977,14 @@ impl ObjectAllocatorInner {
                     self.mark_object(closure_address);
                 }
             }
+            GC_SLOT_MAP => {
+                let mut address = offset;
+                let end = offset.saturating_add(size);
+                while address + word_size <= end {
+                    self.mark_map_slot(address);
+                    address += word_size;
+                }
+            }
             GC_SLOT_RAW => self.mark_range_raw(offset, offset + size),
             // An unknown slot kind is scanned conservatively rather than
             // skipped: the whole point of a raw run is that nothing is known.
@@ -1054,7 +1063,7 @@ extern "C" fn pointer_bitmap_visitor(
     };
     let end = offset.saturating_add(size);
     match kind {
-        GC_SLOT_POINTER | GC_SLOT_FUNCTION | GC_SLOT_RAW => {
+        GC_SLOT_POINTER | GC_SLOT_FUNCTION | GC_SLOT_RAW | GC_SLOT_MAP => {
             let mut addr = offset;
             while addr + mem::size_of::<usize>() <= end {
                 set(addr);
@@ -1312,6 +1321,17 @@ mod tests {
         );
     }
 
+    /// A struct whose only pointer-bearing member is a map value.
+    extern "C" fn map_slot_generator(visit: TypeOffsetVisitor, base: usize, arg: *mut ffi::c_void) {
+        visit(
+            base,
+            mem::size_of::<usize>(),
+            TypeId::new_invalid(),
+            GC_SLOT_MAP,
+            arg,
+        );
+    }
+
     /// A type with pointer words in two different bitmap words: one at the
     /// object base and one past the first 512 bytes.
     extern "C" fn far_pointer_generator(
@@ -1349,6 +1369,8 @@ mod tests {
     struct TestTypes {
         /// struct { p *Node }, one word.
         node: FakeTypeInfo,
+        /// struct { m map[...]... }, one word.
+        map_slot: FakeTypeInfo,
         /// *struct { p *Node }
         node_ptr: FakeTypeInfo,
         /// An opaque pointer (a channel value, or a pointer to something whose
@@ -1386,6 +1408,12 @@ mod tests {
             let node_tid = node.tid();
             let _ = NODE_TID.set(node_tid);
             let node_ptr = FakeTypeInfo::pointer(node_tid);
+            let map_slot = FakeTypeInfo::new_with(
+                TypeKind::StructArray,
+                TypeId::new_invalid(),
+                Some(map_slot_generator),
+                mem::size_of::<usize>(),
+            );
             let opaque_ptr = FakeTypeInfo::pointer(TypeId::new_invalid());
             let string = FakeTypeInfo::string();
             let interface = FakeTypeInfo::interface_();
@@ -1421,6 +1449,7 @@ mod tests {
             );
             TestTypes {
                 node,
+                map_slot,
                 node_ptr,
                 opaque_ptr,
                 string,
@@ -1977,6 +2006,54 @@ mod tests {
             ObjectPtr(out.as_mut_ptr() as *mut ()),
         ));
         assert_eq!(out[0] as usize, leaf as usize);
+    }
+
+    #[test]
+    fn test_map_slot_marks_the_map_and_its_entries() {
+        let allocator = ObjectAllocator::new(Rc::new(Pager::new()));
+        let map_ptr = allocator.ptr().allocate_map(mem::size_of::<MapObject>()) as *mut MapObject;
+        MapObject::construct_in(map_ptr, map_key_type(), types().node.tid(), allocator.ptr());
+
+        let mut key = [0u64; 2];
+        key[0] = 11;
+        let leaf = alloc_node(&allocator.ptr(), ptr::null_mut());
+        let value = alloc_node(&allocator.ptr(), leaf);
+        unsafe {
+            (&mut *map_ptr).set(ObjectPtr(key.as_mut_ptr() as *mut ()), ObjectPtr(value));
+        }
+
+        let mut slot = [0u8; 8];
+        slot.copy_from_slice(&word(map_ptr as *mut ()));
+        let _root = register_root(&allocator.ptr(), types().map_slot.tid(), &slot);
+
+        allocator.ptr().run_gc(&[]);
+        assert!(allocator.ptr().contains(map_ptr as *mut ()));
+        assert!(allocator.ptr().contains(leaf));
+    }
+
+    #[test]
+    fn test_map_slot_pointer_bitmap_keeps_the_map() {
+        let allocator = ObjectAllocator::new(Rc::new(Pager::new()));
+        let object = allocator
+            .ptr()
+            .allocate(mem::size_of::<usize>(), types().map_slot.tid());
+        let map_ptr = allocator.ptr().allocate_map(mem::size_of::<MapObject>()) as *mut MapObject;
+        MapObject::construct_in(map_ptr, map_key_type(), types().node.tid(), allocator.ptr());
+        let mut key = [0u64; 2];
+        key[0] = 13;
+        let leaf = alloc_node(&allocator.ptr(), ptr::null_mut());
+        let value = alloc_node(&allocator.ptr(), leaf);
+        unsafe {
+            (object as *mut usize).write(map_ptr as usize);
+            (&mut *map_ptr).set(ObjectPtr(key.as_mut_ptr() as *mut ()), ObjectPtr(value));
+        }
+
+        let _root = register_root(&allocator.ptr(), types().opaque_ptr.tid(), &word(object));
+
+        allocator.ptr().run_gc(&[]);
+        assert!(allocator.ptr().contains(object));
+        assert!(allocator.ptr().contains(map_ptr as *mut ()));
+        assert!(allocator.ptr().contains(leaf));
     }
 
     #[test]

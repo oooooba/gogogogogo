@@ -497,9 +497,9 @@ func gcTypeKindOf(typ types.Type) (kind string, element types.Type) {
 // read the words of one reported range, and the type it has to be traced with:
 // the pointee for a pointer run, the element type for a slice run, nothing for
 // the slots whose words are traced on their own. Everything the type does not
-// describe (a map, a channel, an aggregate without an enumerator of its own)
-// becomes a raw run, which is sound because reaching the object is enough:
-// maps and channels are registered with the type of what they own.
+// describe (a channel, an aggregate without an enumerator of its own) becomes
+// a raw run, which is sound because reaching the object is enough: channels
+// are registered with the type of what they own.
 func gcStackSlotOf(typ types.Type) (slot string, traceType types.Type) {
 	kind, element := gcTypeKindOf(typ)
 	switch kind {
@@ -507,6 +507,8 @@ func gcStackSlotOf(typ types.Type) (slot string, traceType types.Type) {
 		return "GC_SLOT_POINTER", gcTraceTypeOf(element)
 	case "GC_TYPE_SLICE":
 		return "GC_SLOT_SLICE", gcTraceTypeOf(element)
+	case "GC_TYPE_MAP":
+		return "GC_SLOT_MAP", nil
 	case "GC_TYPE_INTERFACE":
 		return "GC_SLOT_INTERFACE", nil
 	case "GC_TYPE_STRING":
