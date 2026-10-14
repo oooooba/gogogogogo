@@ -13,9 +13,11 @@ use crate::word_chunk::WordChunk;
 
 fn register<F>(ctx: &mut LightWeightThreadContext, param: F) -> FunctionObject
 where
-    F: FnOnce(&LightWeightThreadContext) -> (FunctionObject, usize, *const WordChunk, TypeId),
+    F: FnOnce(
+        &LightWeightThreadContext,
+    ) -> (FunctionObject, usize, *const WordChunk, TypeId, TypeId),
 {
-    let (func, result_size, args, arg_type) = param(ctx);
+    let (func, result_size, args, arg_type, args_type) = param(ctx);
 
     // The copy of the deferred arguments is allocated next to the entry, in a
     // single allocation. It must not be allocated through the global context
@@ -36,7 +38,7 @@ where
     let frame = ctx.stack_frame_mut::<StackFrameCommon>();
     let prev_frame = frame.prev_stack_frame_mut::<StackFrameCommon>();
 
-    let entry = DeferStackEntry::new(func, result_size, args, arg_type);
+    let entry = DeferStackEntry::new(func, result_size, args, arg_type, args_type);
     unsafe { *entry_ptr = entry };
     let entry_nn = ptr::NonNull::new(entry_ptr).expect("allocator returned null");
     prev_frame.defer_stack_mut().push(entry_nn);
@@ -48,6 +50,7 @@ where
 struct StackFrameDeferRegister {
     common: StackFrameCommon,
     arg_type: TypeId,
+    entry_arg_type: TypeId,
     func: FunctionObject,
     result_size: usize,
     args: WordChunk,
@@ -63,7 +66,13 @@ pub extern "C" fn gox5_defer_register(ctx: &mut LightWeightThreadContext) -> Fun
             let sp = ctx.stack_pointer() as *const u8;
             sp.add(mem::offset_of!(StackFrameDeferRegister, args)) as *const WordChunk
         };
-        (func, result_size, args, frame.arg_type)
+        (
+            func,
+            result_size,
+            args,
+            frame.arg_type,
+            frame.entry_arg_type,
+        )
     })
 }
 
@@ -87,7 +96,13 @@ pub extern "C" fn gox5_defer_register_invoke(ctx: &mut LightWeightThreadContext)
             let sp = ctx.stack_pointer() as *const u8;
             sp.add(mem::offset_of!(StackFrameDeferRegisterInvoke, args)) as *const WordChunk
         };
-        (func, result_size, args, TypeId::new_invalid())
+        (
+            func,
+            result_size,
+            args,
+            TypeId::new_invalid(),
+            TypeId::new_invalid(),
+        )
     })
 }
 

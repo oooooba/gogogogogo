@@ -1,3 +1,4 @@
+use std::mem;
 use std::ptr;
 
 use crate::FunctionObject;
@@ -10,10 +11,14 @@ pub(crate) struct DeferStackEntry {
     func: FunctionObject,
     result_size: usize,
     args: ptr::NonNull<WordChunk>,
-    /// Stack map of the deferred call's argument words, as installed by the
-    /// generated code. Invalid when the call site carried no map, in which
-    /// case the arguments are scanned conservatively.
+    /// Stack map of the frame the deferred call pushes when it runs, as
+    /// installed by the generated code. Invalid when the call site carried no
+    /// map, in which case the pushed frame holds no traced argument word.
     arg_type: TypeId,
+    /// Enumerator of the argument words of the deferred call, based at the
+    /// first of them. It describes the copy this entry owns while it waits on
+    /// the defer stack; invalid when the call site carried no map.
+    args_type: TypeId,
 }
 
 impl DeferStackEntry {
@@ -22,6 +27,7 @@ impl DeferStackEntry {
         result_size: usize,
         args: ptr::NonNull<WordChunk>,
         arg_type: TypeId,
+        args_type: TypeId,
     ) -> Self {
         Self {
             next: None,
@@ -29,6 +35,7 @@ impl DeferStackEntry {
             result_size,
             args,
             arg_type,
+            args_type,
         }
     }
 
@@ -46,6 +53,22 @@ impl DeferStackEntry {
 
     pub(crate) fn arg_type(&self) -> TypeId {
         self.arg_type
+    }
+
+    pub(crate) fn args_type(&self) -> TypeId {
+        self.args_type
+    }
+
+    pub(crate) fn next_address(&self) -> usize {
+        self.next.map_or(0, |next| next.as_ptr() as usize)
+    }
+
+    pub(crate) fn func_address(&self) -> usize {
+        self as *const Self as usize + mem::offset_of!(Self, func)
+    }
+
+    pub(crate) fn args_words_address(&self) -> usize {
+        self.args().as_ptr() as usize
     }
 }
 
@@ -87,6 +110,7 @@ mod tests {
             0,
             ptr::NonNull::dangling(),
             TypeId::new_invalid(),
+            TypeId::new_invalid(),
         )));
         let nn = unsafe { ptr::NonNull::new_unchecked(entry) };
         stack.push(nn);
@@ -106,6 +130,7 @@ mod tests {
                     FunctionObject::new_null(),
                     0,
                     ptr::NonNull::dangling(),
+                    TypeId::new_invalid(),
                     TypeId::new_invalid(),
                 )))
             })
@@ -140,11 +165,13 @@ mod tests {
             0,
             ptr::NonNull::dangling(),
             TypeId::new_invalid(),
+            TypeId::new_invalid(),
         )));
         let e2 = Box::into_raw(Box::new(DeferStackEntry::new(
             FunctionObject::new_null(),
             0,
             ptr::NonNull::dangling(),
+            TypeId::new_invalid(),
             TypeId::new_invalid(),
         )));
         let nn1 = unsafe { ptr::NonNull::new_unchecked(e1) };
@@ -168,6 +195,7 @@ mod tests {
             FunctionObject::new_null(),
             42,
             ptr::NonNull::dangling(),
+            TypeId::new_invalid(),
             TypeId::new_invalid(),
         );
         assert_eq!(entry.func(), FunctionObject::new_null());

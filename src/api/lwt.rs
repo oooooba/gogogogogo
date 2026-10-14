@@ -244,6 +244,7 @@ mod tests {
             std::ptr::NonNull::new(args_buf.as_mut_ptr() as *mut WordChunk)
                 .expect("non-null args pointer"),
             crate::type_id::TypeId::new_invalid(),
+            crate::type_id::TypeId::new_invalid(),
         )));
         {
             let frame = ctx.stack_frame_mut::<StackFrameCommon>();

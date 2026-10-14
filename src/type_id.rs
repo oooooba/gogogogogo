@@ -25,11 +25,8 @@ use crate::object::string::StringObject;
 ///                        data and marks the owning closure object.
 ///   GC_SLOT_MAP          a word at `offset` that points at a MapObject; the
 ///                        map's entries are traced by the map's own descriptor.
-///   GC_SLOT_RAW          `size` bytes at `offset` that no Go type describes
-///                        (a frame's common block, an aggregate without an
-///                        enumerator of its own, a channel, ...); the words are
-///                        marked one by one, which is sound because channels
-///                        are registered with the type of what they own.
+///   GC_SLOT_NO_POINTER   `size` bytes at `offset` known to hold no pointer;
+///                        none of the words is looked at.
 pub(crate) const GC_SLOT_POINTER: i32 = 0;
 pub(crate) const GC_SLOT_SLICE: i32 = 1;
 pub(crate) const GC_SLOT_INTERFACE: i32 = 2;
@@ -37,7 +34,7 @@ pub(crate) const GC_SLOT_STRING: i32 = 3;
 pub(crate) const GC_SLOT_FUNCTION: i32 = 4;
 pub(crate) const GC_SLOT_DEFER_STACK: i32 = 5;
 pub(crate) const GC_SLOT_FREE_VARS: i32 = 6;
-pub(crate) const GC_SLOT_RAW: i32 = 7;
+pub(crate) const GC_SLOT_NO_POINTER: i32 = 7;
 pub(crate) const GC_SLOT_MAP: i32 = 8;
 
 /// C signature `TypeOffsetVisitor`:

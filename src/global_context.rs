@@ -201,9 +201,8 @@ mod tests {
         // against the heap budget, so only chunks this size can exhaust it.
         // Every chunk is referenced from a frame, so the collection the last
         // allocation triggers reclaims nothing and the allocation panics. The
-        // frame is a runtime frame, so its recorded extent is registered as an
-        // explicit root and the chunks are reached by the word-by-word scan of
-        // that region.
+        // frame is a runtime frame, so the words holding the chunks are
+        // registered as an explicit pointer root.
         let chunk_size = LARGE_ALLOCATION_THRESHOLD;
         let chunk_count = MAX_TOTAL_ALLOCATED_SIZE / chunk_size;
         let frame_size = mem::size_of::<StackFrameCommon>() + chunk_count * mem::size_of::<usize>();
@@ -216,6 +215,13 @@ mod tests {
             None,
             &[],
             FunctionObject::new_null(),
+        );
+        ctx.push_gc_root(
+            frame as usize,
+            frame as usize + mem::size_of::<StackFrameCommon>(),
+            chunk_count * mem::size_of::<usize>(),
+            TypeId::new_invalid(),
+            crate::type_id::GC_SLOT_POINTER,
         );
         for i in 0..chunk_count {
             let chunk = ctx.allocate(chunk_size, TypeId::new_invalid());

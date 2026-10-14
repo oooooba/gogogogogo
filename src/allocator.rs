@@ -9,6 +9,7 @@ use allocator_api2::alloc::{AllocError, Allocator, Layout};
 
 use crate::ClosureLayout;
 use crate::FUNCTION_OBJECT_CLOSURE_FLAG;
+use crate::defer_stack::DeferStackEntry;
 use crate::light_weight_thread::LightWeightThreadContext;
 use crate::object::channel::ChannelObject;
 use crate::object::interface::Interface;
@@ -20,8 +21,8 @@ use crate::type_id::GC_SLOT_FREE_VARS;
 use crate::type_id::GC_SLOT_FUNCTION;
 use crate::type_id::GC_SLOT_INTERFACE;
 use crate::type_id::GC_SLOT_MAP;
+use crate::type_id::GC_SLOT_NO_POINTER;
 use crate::type_id::GC_SLOT_POINTER;
-use crate::type_id::GC_SLOT_RAW;
 use crate::type_id::GC_SLOT_SLICE;
 use crate::type_id::GC_SLOT_STRING;
 use crate::type_id::TypeId;
@@ -378,10 +379,10 @@ impl ObjectAllocatorInner {
                 get_member_offset_runs(mark_typed_visitor, frame.address, inner);
             }
         }
-        // A runtime frame carries no stack map; the objects it holds are kept
-        // alive through the explicit roots the runtime registered for it.
-        for &(address, size) in context.gc_roots() {
-            self.mark_range_raw(address, address + size);
+        // A runtime frame carries no stack map; the pointer words it holds are
+        // registered as roots, each traced exactly as its own slot kind says.
+        for root in context.gc_roots() {
+            self.mark_typed_offset(root.address, root.size, root.type_id, root.kind);
         }
     }
 
@@ -389,39 +390,6 @@ impl ObjectAllocatorInner {
         self.allocated_objects
             .get(&object_address)
             .map(|object| object.span.ptr as usize + object.span.size)
-    }
-
-    /// Marks every object directly reachable through the raw words of
-    /// [start, end) and traces them conservatively: a plain heap object is
-    /// rescanned word by word, while closures/channels/maps/defer entries use
-    /// their own descriptor. This is the keep-alive path used for the
-    /// explicit roots a runtime frame registers and for untyped contexts.
-    fn mark_range_raw(&mut self, start: usize, end: usize) {
-        let word_size = mem::size_of::<usize>();
-        let pair_size = 2 * word_size;
-        let mut address = start;
-        // The heap hands out every span 16-byte aligned, so the bulk of a range
-        // is walked as pairs of aligned words: an unaligned word is read one
-        // byte at a time, which is most of what a collection of a large span
-        // costs, and a pair of null words keeps nothing alive, so a span that
-        // is mostly zeros is stepped over instead of asked about word by word.
-        while address.is_multiple_of(word_size) && address + pair_size <= end {
-            let pair = unsafe { ptr::read(address as *const [usize; 2]) };
-            if pair != [0; 2] {
-                self.mark_word(pair[0]);
-                self.mark_word(pair[1]);
-            }
-            address += pair_size;
-        }
-        while address + word_size <= end {
-            let word = if address.is_multiple_of(word_size) {
-                unsafe { ptr::read(address as *const usize) }
-            } else {
-                unsafe { ptr::read_unaligned(address as *const usize) }
-            };
-            self.mark_word(word);
-            address += word_size;
-        }
     }
 
     /// Marks a single raw word and everything it resolves to.
@@ -501,17 +469,18 @@ impl ObjectAllocatorInner {
     /// `address` is the target of a pointer, so it is usually but not always
     /// the base of the allocation holding it: it can also be an interior
     /// address (`&s.field`, `&a[i]`) or a goroutine stack address. The value
-    /// is therefore only read when it fits inside the allocation it lives in,
-    /// and the rest of that allocation is scanned conservatively otherwise.
+    /// is read only when it fits inside the allocation it lives in; a value
+    /// that overruns its allocation is not a well-formed object of `typ`, and
+    /// the containing object is already traced through its own descriptor.
     fn mark_value_at(&mut self, address: usize, typ: TypeId) {
         let size = value_size(typ);
         if size == 0 {
             return;
         }
-        match self.allocation_end(address) {
-            Some(end) if address + size <= end => self.mark_value(typ, address),
-            Some(end) => self.mark_range_raw(address, end),
-            None => {}
+        if let Some(end) = self.allocation_end(address)
+            && address + size <= end
+        {
+            self.mark_value(typ, address);
         }
     }
 
@@ -623,6 +592,9 @@ impl ObjectAllocatorInner {
                 }
             }
             TypeKind::StructArray => {
+                // A struct/array type that has no enumerator has no
+                // pointer-bearing member (one is emitted exactly when it does),
+                // so there is nothing to trace.
                 if let Some(get_member_offset_runs) = elem.get_member_offset_runs() {
                     let step = elem.size();
                     let mut addr = start;
@@ -631,8 +603,6 @@ impl ObjectAllocatorInner {
                         get_member_offset_runs(mark_typed_visitor, addr, inner);
                         addr = addr.saturating_add(step);
                     }
-                } else {
-                    self.mark_range_raw(start, end);
                 }
             }
         }
@@ -688,12 +658,11 @@ impl ObjectAllocatorInner {
     }
 
     fn mark_struct_array(&mut self, addr: usize, typ: TypeId) {
+        // A struct/array type with no enumerator holds no pointer, so a value
+        // of it needs no trace.
         if let Some(get_member_offset_runs) = typ.get_member_offset_runs() {
             let inner = self as *mut ObjectAllocatorInner as *mut ffi::c_void;
             get_member_offset_runs(mark_typed_visitor, addr, inner);
-        } else {
-            let end = addr.saturating_add(typ.size());
-            self.mark_range_raw(addr, end);
         }
     }
 
@@ -727,13 +696,11 @@ impl ObjectAllocatorInner {
                     }
                     return;
                 }
+                // An object with no type descriptor holds no pointer the
+                // collector may interpret: only a descriptor tells it which
+                // words are pointers.
                 if record.type_id.is_valid() {
                     self.mark_value(record.type_id, record.span.ptr as usize);
-                } else {
-                    self.mark_range_raw(
-                        record.span.ptr as usize,
-                        record.span.ptr as usize + record.span.size,
-                    );
                 }
             }
             SpecialObject::Closure => self.mark_closure_scan(record.span.ptr as usize),
@@ -762,7 +729,6 @@ impl ObjectAllocatorInner {
         // ClosureLayout { capture_type: TypeId, func: UserFunction, object_ptrs: WordChunk }
         // The captured values are copied right after the layout, starting at
         // base + sizeof(ClosureLayout).
-        let word_size = mem::size_of::<usize>();
         let capture_type_word = unsafe {
             ptr::read_unaligned(
                 (base + mem::offset_of!(ClosureLayout, capture_type)) as *const usize,
@@ -770,21 +736,14 @@ impl ObjectAllocatorInner {
         };
         let capture_start = base + mem::size_of::<ClosureLayout>();
         let capture_type = TypeId::from_raw(capture_type_word);
-        if capture_type != TypeId::new_invalid()
-            && let Some(get_member_offset_runs) = capture_type.get_member_offset_runs()
-        {
+        // The captured values are a single aggregate value, so its descriptor
+        // enumerates them; a descriptor with no enumerator means no captured
+        // value holds a pointer, and an invalid descriptor means there is no
+        // captured value to trace at all.
+        if let Some(get_member_offset_runs) = capture_type.get_member_offset_runs() {
             let inner = self as *mut ObjectAllocatorInner as *mut ffi::c_void;
             get_member_offset_runs(mark_typed_visitor, capture_start, inner);
-            return;
         }
-        // Untyped captures: the extent is the WordChunk count at object_ptrs.
-        let count = unsafe {
-            ptr::read_unaligned(
-                (base + mem::offset_of!(ClosureLayout, object_ptrs)) as *const usize,
-            )
-        };
-        let end = capture_start.saturating_add(count.saturating_mul(word_size));
-        self.mark_range_raw(capture_start, end);
     }
 
     fn mark_channel_scan(&mut self, base: usize) {
@@ -914,6 +873,34 @@ struct MarkRecord {
 }
 
 impl ObjectAllocatorInner {
+    /// Walks one frame's defer stack and traces each entry: the function word
+    /// it holds and the argument words it owns, the latter through the
+    /// enumerator the generated code installed for that call site.
+    fn mark_defer_stack_slot(&mut self, offset: usize) {
+        let mut word = unsafe { ptr::read_unaligned(offset as *const usize) };
+        while word != 0 {
+            let Some(entry_address) = self.resolve_any(word) else {
+                break;
+            };
+            let (func_address, args_address, args_type, next) = {
+                let entry = unsafe { &*(entry_address as *const DeferStackEntry) };
+                (
+                    entry.func_address(),
+                    entry.args_words_address(),
+                    entry.args_type(),
+                    entry.next_address(),
+                )
+            };
+            self.mark_object(entry_address);
+            self.mark_function_field(func_address);
+            if let Some(get_member_offset_runs) = args_type.get_member_offset_runs() {
+                let inner = self as *mut ObjectAllocatorInner as *mut ffi::c_void;
+                get_member_offset_runs(mark_typed_visitor, args_address, inner);
+            }
+            word = next;
+        }
+    }
+
     fn mark_typed_offset(&mut self, offset: usize, size: usize, typ: TypeId, kind: i32) {
         let word_size = mem::size_of::<usize>();
         match kind {
@@ -958,12 +945,7 @@ impl ObjectAllocatorInner {
                     address += word_size;
                 }
             }
-            GC_SLOT_DEFER_STACK => {
-                let word = unsafe { ptr::read_unaligned(offset as *const usize) };
-                if let Some(object_address) = self.resolve_any(word) {
-                    self.mark_object(object_address);
-                }
-            }
+            GC_SLOT_DEFER_STACK => self.mark_defer_stack_slot(offset),
             GC_SLOT_FREE_VARS => {
                 let word = unsafe { ptr::read_unaligned(offset as *const usize) };
                 if word != 0
@@ -980,10 +962,11 @@ impl ObjectAllocatorInner {
                     address += word_size;
                 }
             }
-            GC_SLOT_RAW => self.mark_range_raw(offset, offset + size),
-            // An unknown slot kind is scanned conservatively rather than
-            // skipped: the whole point of a raw run is that nothing is known.
-            _ => self.mark_range_raw(offset, offset + size),
+            GC_SLOT_NO_POINTER => {}
+            // Every slot kind the front end emits is handled above: an unknown
+            // one is a bug, and guessing at its layout could trace a word that
+            // is not a pointer.
+            _ => panic!("unknown GC slot kind: {}", kind),
         }
     }
 }
@@ -1058,7 +1041,7 @@ extern "C" fn pointer_bitmap_visitor(
     };
     let end = offset.saturating_add(size);
     match kind {
-        GC_SLOT_POINTER | GC_SLOT_FUNCTION | GC_SLOT_RAW | GC_SLOT_MAP => {
+        GC_SLOT_POINTER | GC_SLOT_FUNCTION | GC_SLOT_MAP => {
             let mut addr = offset;
             while addr + mem::size_of::<usize>() <= end {
                 set(addr);
@@ -1088,13 +1071,8 @@ extern "C" fn pointer_bitmap_visitor(
             }
         }
         GC_SLOT_DEFER_STACK | GC_SLOT_FREE_VARS => set(offset),
-        _ => {
-            let mut addr = offset;
-            while addr + mem::size_of::<usize>() <= end {
-                set(addr);
-                addr += mem::size_of::<usize>();
-            }
-        }
+        GC_SLOT_NO_POINTER => {}
+        _ => panic!("unknown GC slot kind: {}", kind),
     }
 }
 
@@ -1311,7 +1289,7 @@ mod tests {
             base + 72,
             mem::size_of::<usize>(),
             TypeId::new_invalid(),
-            GC_SLOT_RAW,
+            GC_SLOT_POINTER,
             arg,
         );
     }
@@ -1629,15 +1607,22 @@ mod tests {
     }
 
     #[test]
-    fn test_large_allocation_is_traced_like_a_heap_allocation() {
+    fn test_large_allocation_is_traced_by_its_type() {
         let allocator = ObjectAllocator::new(Rc::new(Pager::new()));
+        let typ = FakeTypeInfo::new_with(
+            TypeKind::StructArray,
+            TypeId::new_invalid(),
+            Some(node_generator),
+            LARGE_ALLOCATION_THRESHOLD + 1,
+        );
         let leaf = alloc_node(&allocator.ptr(), ptr::null_mut());
         let region = allocator
             .ptr()
-            .allocate(LARGE_ALLOCATION_THRESHOLD + 1, TypeId::new_invalid());
-        // The pointer to the leaf sits in the middle of the region, so it is
-        // only found if the interior of a page-backed allocation is scanned.
-        unsafe { (region as *mut usize).add(64).write(leaf as usize) };
+            .allocate(LARGE_ALLOCATION_THRESHOLD + 1, typ.tid());
+        // The pointer to the leaf sits at the first word of the region, which
+        // the node generator reports, so the page-backed allocation is traced
+        // through its descriptor like a heap one.
+        unsafe { (region as *mut usize).write(leaf as usize) };
         let _root = register_root(&allocator.ptr(), types().opaque_ptr.tid(), &word(region));
 
         allocator.ptr().run_gc(&[]);
@@ -1684,11 +1669,11 @@ mod tests {
     }
 
     #[test]
-    fn test_untyped_frame_is_scanned_conservatively() {
+    fn test_untyped_frame_without_a_root_is_not_traced() {
         let (mut ctx, _gc) = create_ctx();
         let allocator = ObjectAllocator::new(Rc::new(Pager::new()));
         let target = alloc_node(&allocator.ptr(), ptr::null_mut());
-        let frame_size = FRAME_LOCAL_OFFSET + 2 * mem::size_of::<usize>();
+        let frame_size = FRAME_LOCAL_OFFSET + mem::size_of::<usize>();
         ctx.push_frame(
             frame_size,
             ctx.stack_pointer(),
@@ -1698,12 +1683,42 @@ mod tests {
         );
         unsafe {
             (ctx.stack_pointer() as *mut usize).write(target as usize);
-        };
+        }
+
+        // A frame the runtime pushed is not read at all: only a registered
+        // pointer word roots an object.
+        allocator.ptr().run_gc(&[&ctx]);
+        assert!(!allocator.ptr().contains(target));
+    }
+
+    #[test]
+    fn test_frame_pointer_root_keeps_the_object() {
+        let (mut ctx, _gc) = create_ctx();
+        let allocator = ObjectAllocator::new(Rc::new(Pager::new()));
+        let frame_size = FRAME_LOCAL_OFFSET + mem::size_of::<usize>();
+        ctx.push_frame(
+            frame_size,
+            ctx.stack_pointer(),
+            None,
+            &[],
+            FunctionObject::new_null(),
+        );
+        let frame_address = ctx.stack_pointer() as usize;
+        let target = alloc_node(&allocator.ptr(), ptr::null_mut());
+        unsafe {
+            (ctx.stack_pointer() as *mut usize).write(target as usize);
+        }
+        ctx.push_gc_root(
+            frame_address,
+            frame_address,
+            mem::size_of::<usize>(),
+            TypeId::new_invalid(),
+            GC_SLOT_POINTER,
+        );
 
         allocator.ptr().run_gc(&[&ctx]);
         assert!(allocator.ptr().contains(target));
     }
-
     #[test]
     fn test_typed_global_pointer_traces_transitively() {
         let allocator = ObjectAllocator::new(Rc::new(Pager::new()));
@@ -2241,19 +2256,29 @@ mod tests {
         let (mut ctx, _gc) = create_ctx();
         let allocator = ObjectAllocator::new(Rc::new(Pager::new()));
         let argument = alloc_node(&allocator.ptr(), ptr::null_mut());
-        // A defer stack entry: next link, function, and the argument words of
-        // the deferred call.
+        // The argument words of the deferred call, as a WordChunk: a count
+        // followed by the words themselves. The entry owns the copy and points
+        // its argument enumerator at the first of them.
+        let args = [1usize, argument as usize];
         let entry = allocator
             .ptr()
-            .allocate(3 * mem::size_of::<usize>(), TypeId::new_invalid());
+            .allocate(mem::size_of::<DeferStackEntry>(), TypeId::new_invalid())
+            as *mut DeferStackEntry;
         unsafe {
-            (entry as *mut usize).write(0);
-            ((entry as *mut usize).add(1)).write(0);
-            ((entry as *mut usize).add(2)).write(argument as usize);
+            ptr::write(
+                entry,
+                DeferStackEntry::new(
+                    FunctionObject::new_null(),
+                    0,
+                    NonNull::new(args.as_ptr() as *mut crate::word_chunk::WordChunk).unwrap(),
+                    TypeId::new_invalid(),
+                    types().node.tid(),
+                ),
+            );
         };
 
-        // The bottom frame links to itself, so the walk ends on it, and the
-        // defer stack of the frame under test hangs its one entry off.
+        // The frame's stack map lists its defer stack, and the stack hangs the
+        // one entry off, so the walk traces the entry and its argument.
         ctx.push_frame(
             mem::size_of::<StackFrameCommon>(),
             ctx.stack_pointer(),
@@ -2269,47 +2294,8 @@ mod tests {
         }
 
         allocator.ptr().run_gc(&[&ctx]);
-        assert!(allocator.ptr().contains(entry));
+        assert!(allocator.ptr().contains(entry as *mut ()));
         assert!(allocator.ptr().contains(argument));
-    }
-
-    /// The conservative scan of a range walks it two words at a time while it
-    /// can and then the word that is left over, stepping over the pairs of null
-    /// words that keep nothing alive. A frame without a stack map is scanned
-    /// that way, so this fills one with three leaves: the first two sit in a
-    /// pair the scan takes at once and the third in the word it has to walk on
-    /// its own.
-    #[test]
-    fn test_conservative_scan_of_a_frame_finds_a_pointer_in_every_word() {
-        let (mut ctx, _gc) = create_ctx();
-        let allocator = ObjectAllocator::new(Rc::new(Pager::new()));
-        // An odd number of words, so the last one is left over by the pairs.
-        let words = 3;
-        let frame_size = FRAME_LOCAL_OFFSET + words * mem::size_of::<usize>();
-        ctx.push_frame(
-            frame_size,
-            ctx.stack_pointer(),
-            None,
-            &[],
-            FunctionObject::new_null(),
-        );
-        let frame = ctx.stack_pointer() as *mut u8;
-        let mut leaves = Vec::new();
-        for index in 0..words {
-            let leaf = alloc_node(&allocator.ptr(), ptr::null_mut());
-            unsafe {
-                ptr::write_unaligned(
-                    frame.add(FRAME_LOCAL_OFFSET + index * mem::size_of::<usize>()) as *mut usize,
-                    leaf as usize,
-                )
-            };
-            leaves.push(leaf);
-        }
-
-        allocator.ptr().run_gc(&[&ctx]);
-        for leaf in leaves {
-            assert!(allocator.ptr().contains(leaf));
-        }
     }
 
     #[test]

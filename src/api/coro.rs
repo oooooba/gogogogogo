@@ -44,6 +44,17 @@ pub extern "C" fn gox5_coro_new(ctx: &mut LightWeightThreadContext) -> FunctionO
         &[coro as *const ()],
         FunctionObject::from_user_function(UserFunction::new(gox5_coro_switch)),
     );
+    // The start frame carries no stack map, so the one pointer it holds is
+    // rooted explicitly: the parked goroutine must keep the CoroObject alive
+    // until gox5_coro_switch reads its slot, even if no Go variable does.
+    let frame_address = new_ctx.stack_pointer() as usize;
+    new_ctx.push_gc_root(
+        frame_address,
+        frame_address + mem::size_of::<StackFrameCommon>(),
+        mem::size_of::<usize>(),
+        TypeId::new_invalid(),
+        crate::type_id::GC_SLOT_POINTER,
+    );
     ctx.global_context().process(|mut gc| {
         gc.park_coro(slot, new_ctx);
     });

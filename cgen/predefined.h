@@ -95,8 +95,8 @@ typedef enum {
 
 // How the collector scans one range a stack map or a member offset enumerator
 // reported. It refines GcTypeKind for the ranges whose words have to be read
-// apart (a pointer, a slice header, ...); GC_SLOT_RAW covers everything the
-// enumerator knows nothing about, which is scanned word by word.
+// apart (a pointer, a slice header, ...). GC_SLOT_NO_POINTER is a range known
+// to hold no pointer: the collector looks at none of its words.
 typedef enum {
     GC_SLOT_POINTER = 0,
     GC_SLOT_SLICE = 1,
@@ -105,7 +105,7 @@ typedef enum {
     GC_SLOT_FUNCTION = 4,
     GC_SLOT_DEFER_STACK = 5,
     GC_SLOT_FREE_VARS = 6,
-    GC_SLOT_RAW = 7,
+    GC_SLOT_NO_POINTER = 7,
     GC_SLOT_MAP = 8,
 } GcStackSlotKind;
 
@@ -113,7 +113,7 @@ typedef enum {
 // frame by calling visit with frame-relative (offset, size) ranges, exactly
 // like the get_member_offset_runs function of a TypeInfo, together with the
 // type and the slot kind the range has to be traced with. A frame that has no
-// such map (the runtime frames) is scanned conservatively over frame_size.
+// such map holds no heap pointer and is not traced.
 typedef void (*TypeOffsetVisitor)(uintptr_t offset, uintptr_t size, TypeId typ,
                                   GcStackSlotKind kind, void *arg);
 
@@ -352,6 +352,7 @@ DECLARE_RUNTIME_API(string_next, StackFrameStringNext);
 typedef struct {
     StackFrameCommon common;
     TypeId arg_type;
+    TypeId entry_arg_type;
     FunctionObject function_object;
     uintptr_t result_size;
     uintptr_t num_arg_buffer_words;

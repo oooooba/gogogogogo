@@ -26,7 +26,26 @@ pub struct LightWeightThreadContext {
     panic_data: Interface,
     initial_stack_pointer: *mut StackFrame,
     coro_slot: Option<usize>,
-    gc_roots: Vec<(usize, usize)>,
+    gc_roots: Vec<GcRoot>,
+}
+
+/// A pointer word a runtime-pushed frame holds. The frame carries no stack map,
+/// so the word is registered as a root; it is one known pointer, not a range
+/// to scan, so the collector marks exactly the object it points at.
+#[derive(Clone, Copy)]
+pub(crate) struct GcRoot {
+    /// Address of the frame that registered the root, used to drop it again
+    /// when that frame is popped.
+    pub(crate) frame_address: usize,
+    /// Address of the pointer word.
+    pub(crate) address: usize,
+    /// Extent in bytes of the value at `address`.
+    pub(crate) size: usize,
+    /// Type the value at `address` is traced with; invalid for a pointer whose
+    /// pointee carries no pointer of its own.
+    pub(crate) type_id: TypeId,
+    /// One of the GC_SLOT_* kinds describing the value at `address`.
+    pub(crate) kind: i32,
 }
 
 impl LightWeightThreadContext {
@@ -60,8 +79,8 @@ impl LightWeightThreadContext {
 
     /// Pushes a new frame at the current stack pointer. `frame_size` is the
     /// total extent of that frame, trailing argument buffer included. The
-    /// frame carries no stack map, so its extent is registered as an explicit
-    /// GC root, which the collector scans word by word.
+    /// frame carries no stack map and is assumed to hold no heap pointer; a
+    /// caller that does put one there registers it with `push_gc_root`.
     pub(crate) fn push_frame(
         &mut self,
         frame_size: usize,
@@ -82,9 +101,8 @@ impl LightWeightThreadContext {
 
     /// Pushes a new frame that carries its own stack map. `frame_type`
     /// describes the pointer-bearing slots of the pushed frame, so the
-    /// collector can trace them precisely instead of scanning the whole
-    /// extent; such a frame is not registered as an explicit root. An invalid
-    /// `frame_type` falls back to the explicit-root path of `push_frame`.
+    /// collector can trace them precisely. An invalid `frame_type` marks a
+    /// frame the collector does not trace at all.
     pub(crate) fn push_frame_typed(
         &mut self,
         frame_size: usize,
@@ -119,11 +137,6 @@ impl LightWeightThreadContext {
         }
 
         self.stack_pointer = next_stack_pointer;
-        // A frame with a stack map is traced through it; only a frame that
-        // carries none needs the conservative root.
-        if !frame_type.is_valid() {
-            self.push_gc_root(next_stack_pointer as usize, frame_size);
-        }
     }
 
     /// Total extent of a frame the runtime pushes itself: the fixed part, the
@@ -150,8 +163,8 @@ impl LightWeightThreadContext {
             )
         };
         self.stack_pointer = prev_stack_pointer;
-        if let Some(&(address, _)) = self.gc_roots.last()
-            && address == frame_address
+        if let Some(root) = self.gc_roots.last()
+            && root.frame_address == frame_address
         {
             self.gc_roots.pop();
         }
@@ -235,11 +248,25 @@ impl LightWeightThreadContext {
         self.stack_pointer
     }
 
-    pub(crate) fn push_gc_root(&mut self, address: usize, size: usize) {
-        self.gc_roots.push((address, size));
+    /// Registers one pointer the frame being pushed holds. See `GcRoot`.
+    pub(crate) fn push_gc_root(
+        &mut self,
+        frame_address: usize,
+        address: usize,
+        size: usize,
+        type_id: TypeId,
+        kind: i32,
+    ) {
+        self.gc_roots.push(GcRoot {
+            frame_address,
+            address,
+            size,
+            type_id,
+            kind,
+        });
     }
 
-    pub(crate) fn gc_roots(&self) -> &[(usize, usize)] {
+    pub(crate) fn gc_roots(&self) -> &[GcRoot] {
         &self.gc_roots
     }
 
@@ -468,21 +495,27 @@ mod tests {
     }
 
     #[test]
-    fn test_push_frame_registers_extent_and_pop_frame_removes_it() {
+    fn test_push_frame_registers_no_root_and_pop_frame_drops_the_frame_root() {
         let (mut ctx, _gc) = create_ctx();
         let prev_sp = ctx.stack_pointer();
         let frame_extent = mem::size_of::<StackFrameCommon>() + 128;
         ctx.grow_stack(frame_extent);
         let frame_address = ctx.stack_pointer() as usize;
-        ctx.push_gc_root(0x1000, 8);
-        assert_eq!(ctx.gc_roots(), &[(0x1000, 8)]);
         ctx.push_frame(frame_extent, prev_sp, None, &[], FunctionObject::new_null());
-        assert_eq!(
-            ctx.gc_roots(),
-            &[(0x1000, 8), (frame_address, frame_extent)]
+        // A frame pushed without a stack map is not rooted by itself.
+        assert!(ctx.gc_roots().is_empty());
+        // A caller that stores a pointer there roots the one word explicitly.
+        ctx.push_gc_root(
+            frame_address,
+            frame_address + 8,
+            mem::size_of::<usize>(),
+            TypeId::new_invalid(),
+            0,
         );
+        assert_eq!(ctx.gc_roots().len(), 1);
+        assert_eq!(ctx.gc_roots()[0].frame_address, frame_address);
         ctx.pop_frame();
-        assert_eq!(ctx.gc_roots(), &[(0x1000, 8)]);
+        assert!(ctx.gc_roots().is_empty());
     }
 
     #[test]

@@ -307,22 +307,32 @@ func (ctx *Context) emitRuntimeArgumentsFrameTypeInfo(instr ssa.Instruction) {
 		argsBase += " + sizeof(void*)"
 	}
 
+	argsTypeInfoName := typeInfoName + "_args"
+	argsBody := runtimeArgumentsSlotRuns(common, "base")
+	fmt.Fprintf(ctx.stream, "static __attribute__((unused)) void get_member_offset_runs_%s_args(TypeOffsetVisitor visit, uintptr_t base, void *arg) { // runtime argument words\n%s}\n\n",
+		typeInfoName, stackMapFunctionBody(argsBody))
+	fmt.Fprintf(ctx.stream, "static __attribute__((unused)) const TypeInfo %s = {\n", argsTypeInfoName)
+	fmt.Fprintf(ctx.stream, "\t.gc_magic = TYPE_INFO_MAGIC,\n")
+	fmt.Fprintf(ctx.stream, "\t.name = (StringObject){.raw = \"%s\", .len = sizeof(\"%s\") - 1},\n", argsTypeInfoName, argsTypeInfoName)
+	fmt.Fprintf(ctx.stream, "\t.num_methods = 0,\n")
+	fmt.Fprintf(ctx.stream, "\t.interface_table = NULL,\n")
+	fmt.Fprintf(ctx.stream, "\t.is_equal = gox5_frame_type_is_equal,\n")
+	fmt.Fprintf(ctx.stream, "\t.hash = gox5_frame_type_hash,\n")
+	fmt.Fprintf(ctx.stream, "\t.size = 0,\n")
+	fmt.Fprintf(ctx.stream, "\t.kind = GC_TYPE_STRUCT_ARRAY,\n")
+	fmt.Fprintf(ctx.stream, "\t.pointed_to = (TypeId){.id = 0},\n")
+	fmt.Fprintf(ctx.stream, "\t.get_member_offset_runs = get_member_offset_runs_%s_args,\n", typeInfoName)
+	fmt.Fprintf(ctx.stream, "};\n\n")
+
 	body := ""
 	body += "\tvisit(base + offsetof(StackFrameCommon, resume_func), sizeof(FunctionObject), (TypeId){.id=0}, GC_SLOT_FUNCTION, arg); // resume_func\n"
 	body += "\tvisit(base + offsetof(StackFrameCommon, free_vars), sizeof(void*), (TypeId){.id=0}, GC_SLOT_FREE_VARS, arg); // free_vars\n"
 	body += "\tvisit(base + offsetof(StackFrameCommon, deferred_list), sizeof(void*), (TypeId){.id=0}, GC_SLOT_DEFER_STACK, arg); // deferred_list\n"
-	offset := "0"
-	for _, arg := range common.Args {
-		if !isNoPointerType(arg.Type()) {
-			offsetExpr := fmt.Sprintf("base + %s + (%s)", argsBase, offset)
-			body += stackMapTypedVisit(offsetExpr, createTypeName(arg.Type()), arg.Type())
-		}
-		offset = fmt.Sprintf("(%s) + (sizeof(%s) + sizeof(void*) - 1) / sizeof(void*) * sizeof(void*)", offset, createTypeName(arg.Type()))
-	}
+	body += runtimeArgumentsSlotRuns(common, fmt.Sprintf("base + %s", argsBase))
 
 	storage := "static __attribute__((unused)) "
 	fmt.Fprintf(ctx.stream, "%svoid get_member_offset_runs_%s(TypeOffsetVisitor visit, uintptr_t base, void *arg) { // runtime argument words\n%s}\n\n",
-		storage, typeInfoName, body)
+		storage, typeInfoName, stackMapFunctionBody(body))
 	fmt.Fprintf(ctx.stream, "%sconst TypeInfo %s = {\n", storage, typeInfoName)
 	fmt.Fprintf(ctx.stream, "\t.gc_magic = TYPE_INFO_MAGIC,\n")
 	fmt.Fprintf(ctx.stream, "\t.name = (StringObject){.raw = \"%s\", .len = sizeof(\"%s\") - 1},\n", typeInfoName, typeInfoName)
@@ -335,6 +345,23 @@ func (ctx *Context) emitRuntimeArgumentsFrameTypeInfo(instr ssa.Instruction) {
 	fmt.Fprintf(ctx.stream, "\t.pointed_to = (TypeId){.id = 0},\n")
 	fmt.Fprintf(ctx.stream, "\t.get_member_offset_runs = get_member_offset_runs_%s,\n", typeInfoName)
 	fmt.Fprintf(ctx.stream, "};\n\n")
+}
+
+func runtimeArgumentsSlotRuns(common *ssa.CallCommon, base string) string {
+	body := ""
+	offset := "0"
+	for _, arg := range common.Args {
+		if !isNoPointerType(arg.Type()) {
+			offsetExpr := fmt.Sprintf("%s + (%s)", base, offset)
+			if isStructOrArrayRoot(arg.Type()) && hasEnumerablePointerMembers(arg.Type()) {
+				body += fmt.Sprintf("\t%s(visit, %s, arg); // %s\n", getMemberOffsetRunsName(arg.Type()), offsetExpr, arg.Type())
+			} else {
+				body += stackMapTypedVisit(offsetExpr, createTypeName(arg.Type()), arg.Type())
+			}
+		}
+		offset = fmt.Sprintf("(%s) + (sizeof(%s) + sizeof(void*) - 1) / sizeof(void*) * sizeof(void*)", offset, createTypeName(arg.Type()))
+	}
+	return body
 }
 
 // isBoundMethodWrapper reports whether function is the "$bound" wrapper ssa

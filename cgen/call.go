@@ -172,6 +172,9 @@ func (ctx *Context) emitCallCommon(instr ssa.Instruction, callCommon *ssa.CallCo
 			if argFrameType != "" {
 				fmt.Fprintf(ctx.stream, "next_frame->arg_type = (TypeId){.info = &%s};\n", argFrameType)
 			}
+			if _, isDefer := instr.(*ssa.Defer); isDefer && argFrameType != "" {
+				fmt.Fprintf(ctx.stream, "next_frame->entry_arg_type = (TypeId){.info = &%s_args};\n", argFrameType)
+			}
 		},
 		paramArgPair{param: "function_object", arg: functionObject},
 		paramArgPair{param: "result_size", arg: resultSize},

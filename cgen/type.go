@@ -289,14 +289,14 @@ func signatureStackMapBody(signatureName string, signature *types.Signature, mak
 	if signature.Results().Len() > 0 {
 		// The result pointer refers to a slot of the caller's frame, but one
 		// word is cheap enough to keep the map a plain mirror of the struct.
-		body += stackMapRawVisit("base", "sizeof(uintptr_t)", "result_ptr")
+		body += stackMapUntypedPointerVisit("base", "result_ptr")
 	}
 
 	base := 0
 	if signature.Recv() != nil && !makesReceiverBound {
 		if makesReceiverInterface {
 			// The receiver is copied through an untyped pointer.
-			body += stackMapRawVisit(fmt.Sprintf("base + offsetof(%s, param0)", signatureName), "sizeof(uintptr_t)", "receiver")
+			body += stackMapUntypedPointerVisit(fmt.Sprintf("base + offsetof(%s, param0)", signatureName), "receiver")
 		} else {
 			body += stackMapMemberRun(signatureName, "param0", signature.Recv().Type())
 		}
@@ -368,30 +368,20 @@ func getMemberOffsetRunsName(typ types.Type) string {
 
 // hasEnumerablePointerMembers reports whether typ has at least one
 // pointer-bearing member the enumerator function can emit. Array roots qualify
-// when their element type holds pointers; a struct qualifies only when it has
-// a non-blank pointer-bearing member AND no blank ("_") member that can hold
-// pointers (blank members cannot be named by a C designator, so their slots
-// are never emitted; to keep the scan sound such structs fall back to the
-// full interior scan via a NULL get_member_offset_runs).
+// when their element type holds pointers; a struct qualifies when it has any
+// pointer-bearing member, blank ("_") members included, because a blank member
+// is named by a C designator too (createFieldName renders it as `_<index>`).
 func hasEnumerablePointerMembers(typ types.Type) bool {
 	switch t := typ.Underlying().(type) {
 	case *types.Array:
-		return !isNoPointerType(t.Elem())
+		return t.Len() > 0 && !isNoPointerType(t.Elem())
 	case *types.Struct:
-		found := false
 		for i := 0; i < t.NumFields(); i++ {
-			field := t.Field(i)
-			if field.Name() == "_" {
-				if !isNoPointerType(field.Type()) {
-					return false
-				}
-				continue
-			}
-			if !isNoPointerType(field.Type()) {
-				found = true
+			if !isNoPointerType(t.Field(i).Type()) {
+				return true
 			}
 		}
-		return found
+		return false
 	}
 	return false
 }
@@ -421,18 +411,25 @@ func (ctx *Context) emitGetMemberOffsetRunsFunctionDefinition(typ types.Type) {
 	if underlyingType := typ.Underlying(); typ == underlyingType {
 		switch t := typ.(type) {
 		case *types.Array:
-			if !isNoPointerType(t.Elem()) {
-				// One range covering the whole array, traced with the element
-				// type: an array has no header, so its elements are laid out
-				// back to back from the first one.
-				body += stackMapTypedVisit("base", typeName, t.Elem())
+			if t.Len() > 0 && !isNoPointerType(t.Elem()) {
+				elemName := createTypeName(t.Elem())
+				if isStructOrArrayRoot(t.Elem()) && hasEnumerablePointerMembers(t.Elem()) {
+					// An aggregate element is enumerated element by element,
+					// each through its own descriptor: a trace type describes
+					// one value, not a run of aggregates, so the collector
+					// cannot be handed the whole array at once.
+					body += fmt.Sprintf("\tfor (uintptr_t i = 0; i < sizeof(%s) / sizeof(%s); i++) { %s(visit, base + i * sizeof(%s), arg); } // %s\n",
+						typeName, elemName, getMemberOffsetRunsName(t.Elem()), elemName, t.Elem())
+				} else {
+					// One range covering the whole array, traced with the
+					// element type: an array has no header, so its elements are
+					// laid out back to back from the first one.
+					body += stackMapTypedVisit("base", typeName, t.Elem())
+				}
 			}
 		case *types.Struct:
 			for i := 0; i < t.NumFields(); i++ {
 				field := t.Field(i)
-				if field.Name() == "_" {
-					continue
-				}
 				name := createFieldName(field, i)
 				if isNoPointerType(field.Type()) {
 					continue
@@ -496,10 +493,9 @@ func gcTypeKindOf(typ types.Type) (kind string, element types.Type) {
 // gcStackSlotOf returns the GC_SLOT_* constant telling the collector how to
 // read the words of one reported range, and the type it has to be traced with:
 // the pointee for a pointer run, the element type for a slice run, nothing for
-// the slots whose words are traced on their own. Everything the type does not
-// describe (a channel, an aggregate without an enumerator of its own) becomes
-// a raw run, which is sound because reaching the object is enough: channels
-// are registered with the type of what they own.
+// the slots whose words are traced on their own. A range whose type holds no
+// pointer at all is reported as a no-op, so the collector is never asked to
+// scan a range word by word.
 func gcStackSlotOf(typ types.Type) (slot string, traceType types.Type) {
 	kind, element := gcTypeKindOf(typ)
 	switch kind {
@@ -516,7 +512,7 @@ func gcStackSlotOf(typ types.Type) (slot string, traceType types.Type) {
 	case "GC_TYPE_FUNCTION":
 		return "GC_SLOT_FUNCTION", nil
 	}
-	return "GC_SLOT_RAW", nil
+	return "GC_SLOT_NO_POINTER", nil
 }
 
 // gcTraceTypeOf returns the descriptor a run of pointers or slice elements is
@@ -537,8 +533,12 @@ func gcTraceTypeOf(typ types.Type) types.Type {
 }
 
 // stackMapTypedVisit emits one visit call reporting the cTypeName-typed value
-// at offsetExpr, traced as a value of typ.
+// at offsetExpr, traced as a value of typ. A type that holds no pointer is not
+// worth a visit at all.
 func stackMapTypedVisit(offsetExpr string, cTypeName string, typ types.Type) string {
+	if isNoPointerType(typ) {
+		return ""
+	}
 	slot, traceType := gcStackSlotOf(typ)
 	traceId := "(TypeId){.id = 0}"
 	if traceType != nil {
@@ -547,10 +547,12 @@ func stackMapTypedVisit(offsetExpr string, cTypeName string, typ types.Type) str
 	return fmt.Sprintf("\tvisit(%s, sizeof(%s), %s, %s, arg); // %s\n", offsetExpr, cTypeName, traceId, slot, typ)
 }
 
-// stackMapRawVisit emits one visit call reporting a range that has to be
-// scanned word by word, because no type describes the words in it.
-func stackMapRawVisit(offsetExpr string, sizeExpr string, comment string) string {
-	return fmt.Sprintf("\tvisit(%s, %s, (TypeId){.id = 0}, GC_SLOT_RAW, arg); // %s\n", offsetExpr, sizeExpr, comment)
+// stackMapUntypedPointerVisit emits one visit call reporting a single pointer
+// word whose pointee has no descriptor: the collector marks the object the
+// word points at (and traces that object through its own type) but does not
+// read the word as a value of any particular type.
+func stackMapUntypedPointerVisit(offsetExpr string, comment string) string {
+	return fmt.Sprintf("\tvisit(%s, sizeof(uintptr_t), (TypeId){.id = 0}, GC_SLOT_POINTER, arg); // %s\n", offsetExpr, comment)
 }
 
 func isNoPointerType(typ types.Type) bool {
