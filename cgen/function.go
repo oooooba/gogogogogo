@@ -216,8 +216,6 @@ func (ctx *Context) emitFrameStackMap(function *ssa.Function, frameName string, 
 	body += fmt.Sprintf("\t%s(visit, base + offsetof(%s, signature), arg); // signature\n", getSignatureOffsetRunsName(signatureName), frameCName)
 	for _, member := range members {
 		if member.typ == nil {
-			// A bare FunctionObject word: one word that always can hold a
-			// pointer to the object of a function value.
 			body += fmt.Sprintf("\tvisit(base + offsetof(%s, %s), sizeof(FunctionObject), (TypeId){.id = 0}, GC_SLOT_FUNCTION, arg); // pointer word\n", frameCName, member.name)
 			continue
 		}

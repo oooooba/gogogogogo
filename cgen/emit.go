@@ -484,6 +484,8 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 	case *ssa.ChangeType:
 		if t, ok := instr.Type().Underlying().(*types.Basic); ok && (t.Kind() == types.String || t.Kind() == types.UntypedString) {
 			fmt.Fprintf(ctx.stream, "%s = %s;\n", createValueRelName(instr), createValueRelName(instr.X))
+		} else if _, ok := instr.Type().Underlying().(*types.Signature); ok {
+			fmt.Fprintf(ctx.stream, "%s = %s;\n", createValueRelName(instr), createValueRelName(instr.X))
 		} else {
 			s := wrapInObject(fmt.Sprintf("%s.raw", createValueRelName(instr.X)), instr.Type())
 			fmt.Fprintf(ctx.stream, "%s = %s;\n", createValueRelName(instr), s)
