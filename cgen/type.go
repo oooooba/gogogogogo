@@ -796,7 +796,7 @@ func (ctx *Context) emitInterfaceTableDefinition(typ types.Type, allowSet map[st
 		var methodName, method string
 		if _, ok := typ.Underlying().(*types.Interface); ok {
 			methodName = sel.Obj().Name()
-			method = "(FunctionObject){.raw=NULL}"
+			method = "(FunctionObject){.func={NULL},.env=NULL}"
 		} else {
 			function := ctx.program.MethodValue(sel)
 			methodName = function.Name()

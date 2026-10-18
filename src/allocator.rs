@@ -9,7 +9,7 @@ use std::slice;
 use allocator_api2::alloc::{AllocError, Allocator, Layout};
 
 use crate::ClosureLayout;
-use crate::FUNCTION_OBJECT_CLOSURE_FLAG;
+use crate::FunctionObject;
 use crate::defer_stack::DeferStackEntry;
 use crate::light_weight_thread::LightWeightThreadContext;
 use crate::object::channel::ChannelObject;
@@ -198,11 +198,18 @@ extern "C" fn pointer_bitmap_visitor(
     let bitmap = unsafe { slice::from_raw_parts_mut(arg as *mut usize, POINTER_BITMAP_WORDS) };
     let end = offset.saturating_add(size);
     match kind {
-        GC_SLOT_POINTER | GC_SLOT_FUNCTION | GC_SLOT_MAP => {
+        GC_SLOT_POINTER | GC_SLOT_MAP => {
             let mut addr = offset;
             while addr + WORD_SIZE <= end {
                 set_bit(bitmap, addr / WORD_SIZE);
                 addr += WORD_SIZE;
+            }
+        }
+        GC_SLOT_FUNCTION => {
+            let mut addr = offset;
+            while addr + mem::size_of::<FunctionObject>() <= end {
+                set_bit(bitmap, addr / WORD_SIZE + 1);
+                addr += mem::size_of::<FunctionObject>();
             }
         }
         GC_SLOT_SLICE => {
@@ -253,9 +260,9 @@ fn build_slot_pointer_bitmap(
         TypeKind::String
         | TypeKind::Slice
         | TypeKind::Pointer
-        | TypeKind::Function
         | TypeKind::Map
         | TypeKind::Interface => set_bit(bitmap, slot_offset / WORD_SIZE),
+        TypeKind::Function => set_bit(bitmap, slot_offset / WORD_SIZE + 1),
         TypeKind::StructArray => {
             if let Some(get_member_offset_runs) = type_id.get_member_offset_runs() {
                 get_member_offset_runs(
@@ -613,13 +620,7 @@ impl ObjectAllocatorInner {
         if word == 0 {
             return;
         }
-        if (word & FUNCTION_OBJECT_CLOSURE_FLAG) != 0 {
-            if let Some(closure_address) =
-                self.containing_closure(word & !FUNCTION_OBJECT_CLOSURE_FLAG)
-            {
-                self.mark_object(closure_address);
-            }
-        } else if let Some(object_address) = self.resolve_any(word) {
+        if let Some(object_address) = self.resolve_any(word) {
             self.mark_object(object_address);
         }
     }
@@ -648,14 +649,6 @@ impl ObjectAllocatorInner {
     fn mark_pointer_field(&mut self, addr: usize, pointed_to: TypeId) {
         let word = unsafe { ptr::read_unaligned(addr as *const usize) };
         if word == 0 {
-            return;
-        }
-        if (word & FUNCTION_OBJECT_CLOSURE_FLAG) != 0 {
-            if let Some(closure_address) =
-                self.containing_closure(word & !FUNCTION_OBJECT_CLOSURE_FLAG)
-            {
-                self.mark_object(closure_address);
-            }
             return;
         }
         if let Some(object_address) = self.resolve_any(word) {
@@ -766,9 +759,9 @@ impl ObjectAllocatorInner {
             }
             TypeKind::Function => {
                 let mut addr = start;
-                while addr < end {
+                while addr + mem::size_of::<FunctionObject>() <= end {
                     self.mark_function_field(addr);
-                    addr += mem::size_of::<usize>();
+                    addr += mem::size_of::<FunctionObject>();
                 }
             }
             TypeKind::Map => {
@@ -798,14 +791,6 @@ impl ObjectAllocatorInner {
         if receiver == 0 {
             return;
         }
-        if (receiver & FUNCTION_OBJECT_CLOSURE_FLAG) != 0 {
-            if let Some(closure_address) =
-                self.containing_closure(receiver & !FUNCTION_OBJECT_CLOSURE_FLAG)
-            {
-                self.mark_object(closure_address);
-            }
-            return;
-        }
         let Some(object_address) = self.resolve_any(receiver) else {
             return;
         };
@@ -818,10 +803,11 @@ impl ObjectAllocatorInner {
     }
 
     fn mark_function_field(&mut self, addr: usize) {
-        let word = unsafe { ptr::read_unaligned(addr as *const usize) };
-        if (word & FUNCTION_OBJECT_CLOSURE_FLAG) != 0
-            && let Some(closure_address) =
-                self.containing_closure(word & !FUNCTION_OBJECT_CLOSURE_FLAG)
+        let env = unsafe {
+            ptr::read_unaligned((addr + mem::offset_of!(FunctionObject, 1)) as *const usize)
+        };
+        if env != 0
+            && let Some(closure_address) = self.containing_closure(env)
         {
             self.mark_object(closure_address);
         }
@@ -1149,9 +1135,9 @@ impl ObjectAllocatorInner {
             GC_SLOT_FUNCTION => {
                 let mut address = offset;
                 let end = offset.saturating_add(size);
-                while address + word_size <= end {
+                while address + mem::size_of::<FunctionObject>() <= end {
                     self.mark_function_field(address);
-                    address += word_size;
+                    address += mem::size_of::<FunctionObject>();
                 }
             }
             GC_SLOT_DEFER_STACK => self.mark_defer_stack_slot(offset),
@@ -1381,13 +1367,13 @@ mod tests {
         );
         visit(
             base + 64,
-            mem::size_of::<usize>(),
+            mem::size_of::<FunctionObject>(),
             TypeId::new_invalid(),
             GC_SLOT_FUNCTION,
             arg,
         );
         visit(
-            base + 72,
+            base + 80,
             mem::size_of::<usize>(),
             TypeId::new_invalid(),
             GC_SLOT_POINTER,
@@ -1919,13 +1905,14 @@ mod tests {
             TypeKind::StructArray,
             TypeId::new_invalid(),
             Some(mixed_generator),
-            80,
+            88,
         );
-        let object = allocator.ptr().allocate(80, typ.tid());
+        let object = allocator.ptr().allocate(88, typ.tid());
         let first = alloc_node(&allocator.ptr(), ptr::null_mut());
         let buffer = allocator.ptr().allocate(8, TypeId::new_invalid());
         let data = allocator.ptr().allocate(8, TypeId::new_invalid());
         let receiver = alloc_node(&allocator.ptr(), ptr::null_mut());
+        let closure = allocator.ptr().allocate_closure(32);
         let raw = alloc_node(&allocator.ptr(), ptr::null_mut());
         unsafe {
             let words = object as *mut usize;
@@ -1938,7 +1925,8 @@ mod tests {
             words.add(6).write(receiver as usize);
             words.add(7).write(0);
             words.add(8).write(0);
-            words.add(9).write(raw as usize);
+            words.add(9).write(closure as usize);
+            words.add(10).write(raw as usize);
         }
         let _root = register_root(&allocator.ptr(), types().opaque_ptr.tid(), &word(object));
 
@@ -1948,6 +1936,7 @@ mod tests {
         assert!(allocator.ptr().contains(buffer));
         assert!(allocator.ptr().contains(data));
         assert!(allocator.ptr().contains(receiver));
+        assert!(allocator.ptr().contains_closure(closure));
         assert!(allocator.ptr().contains(raw));
     }
 
@@ -2063,11 +2052,10 @@ mod tests {
         };
 
         let function = FunctionObject::from_closure_layout_ptr(layout as *const ());
-        let _root = register_root(
-            &allocator.ptr(),
-            types().function.tid(),
-            &raw_word(function.0 as usize),
-        );
+        let mut root = [0u8; 16];
+        root[..8].copy_from_slice(&raw_word(function.func_address()));
+        root[8..16].copy_from_slice(&raw_word(function.env_address()));
+        let _root = register_root(&allocator.ptr(), types().function.tid(), &root);
 
         allocator.ptr().run_gc(&[]);
         assert!(allocator.ptr().contains_closure(layout as *mut ()));

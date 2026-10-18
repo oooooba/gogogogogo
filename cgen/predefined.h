@@ -56,7 +56,8 @@ typedef struct {
 } ChannelObject;
 
 typedef struct {
-    const void *raw;
+    UserFunction func;
+    void *env;
 } FunctionObject;
 
 typedef struct {

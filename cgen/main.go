@@ -94,10 +94,13 @@ func encode(str string) string {
 }
 
 func wrapInFunctionObject(s string) string {
-	return fmt.Sprintf("(FunctionObject){.raw=%s}", s)
+	return fmt.Sprintf("(FunctionObject){.func=(UserFunction){.func_ptr=%s},.env=NULL}", s)
 }
 
 func wrapInObject(s string, t types.Type) string {
+	if _, ok := t.Underlying().(*types.Signature); ok {
+		return wrapInFunctionObject(s)
+	}
 	return fmt.Sprintf("(%s){.raw=%s}", createTypeName(t), s)
 }
 

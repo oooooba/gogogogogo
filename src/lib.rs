@@ -19,11 +19,9 @@ use light_weight_thread::LightWeightThreadContext;
 use light_weight_thread::STACK_PAGES;
 use type_id::TypeId;
 
-pub(crate) const FUNCTION_OBJECT_CLOSURE_FLAG: usize = 1usize << (usize::BITS - 1);
-
 #[derive(Clone, PartialEq, Eq, Debug)]
 #[repr(C)]
-pub struct FunctionObject(*const ());
+pub struct FunctionObject(UserFunction, Option<ptr::NonNull<ClosureLayout>>);
 
 #[repr(C)]
 struct ClosureLayout {
@@ -36,43 +34,63 @@ struct ClosureLayout {
     object_ptrs: word_chunk::WordChunk,
 }
 
+unsafe extern "C" fn null_user_function(_ctx: &mut LightWeightThreadContext) -> FunctionObject {
+    unreachable!()
+}
+
+static NULL_USER_FUNCTION: UserFunctionInner = null_user_function;
+
 impl FunctionObject {
     pub fn from_user_function(user_function: UserFunction) -> Self {
-        FunctionObject(user_function.0 as *const ())
+        FunctionObject(user_function, None)
     }
 
     pub fn from_closure_layout_ptr(closure_layout_ptr: *const ()) -> Self {
-        let addr = closure_layout_ptr as usize;
-        let flag = FUNCTION_OBJECT_CLOSURE_FLAG;
-        assert_eq!(addr & flag, 0);
-        FunctionObject((addr | flag) as *const ())
+        let env = ptr::NonNull::new(closure_layout_ptr as *mut ClosureLayout).unwrap();
+        let func = unsafe { env.as_ref() }.func.clone();
+        FunctionObject(func, Some(env))
     }
 
     pub fn new_null() -> Self {
-        FunctionObject(ptr::null_mut())
+        FunctionObject::from_user_function(UserFunction::new(NULL_USER_FUNCTION))
     }
 
     pub fn extract_user_function(&self) -> (UserFunction, Option<*mut ()>) {
-        let addr = self.0 as usize;
-        let flag = FUNCTION_OBJECT_CLOSURE_FLAG;
-        if (addr & flag) == 0 {
-            let func = unsafe { mem::transmute::<*const (), UserFunction>(self.0) };
-            return (func, None);
-        }
-        let ptr = (addr & !flag) as *mut () as *mut ClosureLayout;
-        let closure_layout = unsafe { &mut *ptr };
-        let func = closure_layout.func.clone();
+        let Some(env) = self.1 else {
+            return (self.0.clone(), None);
+        };
+        let closure_layout = unsafe { env.as_ref() };
         let wc_ptr = ptr::addr_of!(closure_layout.object_ptrs) as *const u8;
         let object_ptrs = unsafe { wc_ptr.add(mem::size_of::<usize>()) as *mut () };
-        (func, Some(object_ptrs))
+        (closure_layout.func.clone(), Some(object_ptrs))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn func_address(&self) -> usize {
+        self.0.0 as *const () as usize
+    }
+
+    #[cfg(test)]
+    pub(crate) fn env_address(&self) -> usize {
+        self.1.map_or(0, |env| env.as_ptr() as usize)
     }
 }
 
 type UserFunctionInner = unsafe extern "C" fn(&mut LightWeightThreadContext) -> FunctionObject;
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 #[repr(C)]
 pub struct UserFunction(UserFunctionInner);
+
+impl PartialEq for UserFunction {
+    fn eq(&self, other: &Self) -> bool {
+        let lhs = self.0 as *const ();
+        let rhs = other.0 as *const ();
+        lhs == rhs
+    }
+}
+
+impl Eq for UserFunction {}
 
 impl UserFunction {
     pub fn new(user_function: UserFunctionInner) -> Self {

@@ -16,9 +16,9 @@ use crate::object::string::StringObject;
 ///                        the pointed-to type is read from the value itself.
 ///   GC_SLOT_STRING       a 16-byte string value at `offset`; `typ` unused, the
 ///                        raw word is marked so the string buffer stays alive.
-///   GC_SLOT_FUNCTION     `size` bytes at `offset` are FunctionObject words; a
-///                        tagged word resolves a closure (traced with the
-///                        closure's own capture descriptor).
+///   GC_SLOT_FUNCTION     `size` bytes at `offset` are FunctionObject values;
+///                        the environment word of a closure resolves it
+///                        (traced with the closure's own capture descriptor).
 ///   GC_SLOT_DEFER_STACK  a word at `offset` that points at the head of a
 ///                        DeferStackEntry chain (traced by walking `next`).
 ///   GC_SLOT_FREE_VARS    a word at `offset` that points at closure capture
@@ -235,9 +235,9 @@ impl FakeTypeInfo {
         Self::new_with(TypeKind::Interface, TypeId::new_invalid(), None, 16)
     }
 
-    /// 8 bytes: a FunctionObject word.
+    /// 16 bytes: a code pointer and an environment pointer.
     pub(crate) fn function() -> Self {
-        Self::new_with(TypeKind::Function, TypeId::new_invalid(), None, 8)
+        Self::new_with(TypeKind::Function, TypeId::new_invalid(), None, 16)
     }
 
     /// 24 bytes: a data pointer, a length and a capacity.

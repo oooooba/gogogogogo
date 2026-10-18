@@ -461,7 +461,7 @@ func (ctx *Context) emitSpecialRuntimeCall(callee *ssa.Function, instr *ssa.Call
 			arg := createValueRelName(callCommon.Args[0])
 			fmt.Fprintf(ctx.stream, "memset(&%s, 0, sizeof(%s));\n", result, result)
 			fmt.Fprintf(ctx.stream, "if (%s.receiver != NULL) {\n", arg)
-			fmt.Fprintf(ctx.stream, "\t%s.ptr.raw = (void*)((FunctionObject*)%s.receiver)->raw;\n", result, arg)
+			fmt.Fprintf(ctx.stream, "\t%s.ptr.raw = (void*)((FunctionObject*)%s.receiver)->func.func_ptr;\n", result, arg)
 			fmt.Fprintf(ctx.stream, "}\n")
 			fmt.Fprintf(ctx.stream, "\treturn %s;\n", wrapInFunctionObject(createInstructionName(instr)))
 			return true
@@ -674,7 +674,7 @@ func (ctx *Context) emitBuiltinPrintWrapper(name string, callCommon *ssa.CallCom
 	emitInlinePrintBody(&ctx.builtinPrintWrapperBuf, name == "print", callCommon.Args, rawExprs, lenExprs)
 
 	fmt.Fprintf(&ctx.builtinPrintWrapperBuf, "\tctx->stack_pointer = prev;\n")
-	fmt.Fprintf(&ctx.builtinPrintWrapperBuf, "\treturn (FunctionObject){.raw = gox5_defer_execute};\n")
+	fmt.Fprintf(&ctx.builtinPrintWrapperBuf, "\treturn %s;\n", wrapInFunctionObject("gox5_defer_execute"))
 	fmt.Fprintf(&ctx.builtinPrintWrapperBuf, "}\n")
 
 	return wrapperName
