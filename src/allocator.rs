@@ -85,12 +85,6 @@ fn size_class_of(size: usize) -> usize {
     size.max(1).next_power_of_two().max(8).trailing_zeros() as usize
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum ArenaKind {
-    Object,
-    Closure,
-}
-
 struct Arena {
     region: *mut (),
     bitmaps: *mut (),
@@ -100,7 +94,6 @@ struct Arena {
     pointer_bitmap: NonNull<[usize; POINTER_BITMAP_WORDS]>,
     bitmap_pages: usize,
     allocation_pos: usize,
-    kind: ArenaKind,
 }
 
 impl Arena {
@@ -129,9 +122,9 @@ struct ObjectAllocatorInner {
     pager: Rc<Pager>,
     arenas: BTreeMap<usize, Arena>,
     allocated_objects: BTreeMap<usize, LargeAllocation>,
-    large_closures: BTreeMap<usize, LargeAllocation>,
     allocated_channels: BTreeMap<usize, TypeId>,
     allocated_maps: BTreeSet<usize>,
+    allocated_closures: BTreeSet<usize>,
     global_spans: Vec<GlobalSpan>,
     total_size: usize,
 }
@@ -325,9 +318,9 @@ impl ObjectAllocatorInner {
             pager,
             arenas: BTreeMap::new(),
             allocated_objects: BTreeMap::new(),
-            large_closures: BTreeMap::new(),
             allocated_channels: BTreeMap::new(),
             allocated_maps: BTreeSet::new(),
+            allocated_closures: BTreeSet::new(),
             global_spans: Vec::new(),
             total_size: 0,
         }
@@ -337,7 +330,7 @@ impl ObjectAllocatorInner {
         if size > LARGE_ALLOCATION_THRESHOLD {
             return self.allocate_pages(size, type_id);
         }
-        self.allocate_slot(size_class_of(size), type_id, ArenaKind::Object)
+        self.allocate_slot(size_class_of(size), type_id)
     }
 
     fn allocate_channel(&mut self, size: usize, elem_type: TypeId) -> *mut () {
@@ -349,27 +342,11 @@ impl ObjectAllocatorInner {
     }
 
     fn allocate_closure(&mut self, size: usize) -> *mut () {
-        if size > LARGE_ALLOCATION_THRESHOLD {
-            let num_pages = size.div_ceil(PAGE_SIZE);
-            let ptr = self.pager.allocate(num_pages, None);
-            self.large_closures.insert(
-                ptr as usize,
-                LargeAllocation {
-                    span: Span {
-                        ptr,
-                        size: PAGE_SIZE * num_pages,
-                    },
-                    marked: false,
-                    type_id: TypeId::new_invalid(),
-                },
-            );
-            return ptr;
+        let ptr = self.allocate(size, TypeId::new_invalid());
+        if !ptr.is_null() {
+            self.allocated_closures.insert(ptr as usize);
         }
-        self.allocate_slot(
-            size_class_of(size),
-            TypeId::new_invalid(),
-            ArenaKind::Closure,
-        )
+        ptr
     }
 
     fn allocate_map(&mut self, size: usize) -> *mut () {
@@ -380,7 +357,7 @@ impl ObjectAllocatorInner {
         ptr
     }
 
-    fn allocate_slot(&mut self, class: usize, type_id: TypeId, kind: ArenaKind) -> *mut () {
+    fn allocate_slot(&mut self, class: usize, type_id: TypeId) -> *mut () {
         let slot_size = 1usize << class;
         if self.total_size.saturating_add(slot_size) > MAX_TOTAL_ALLOCATED_SIZE {
             return ptr::null_mut();
@@ -388,7 +365,7 @@ impl ObjectAllocatorInner {
         let slot_count = ARENA_SIZE >> class;
         let mut free_base = None;
         for (&base, arena) in self.arenas.iter() {
-            if arena.class == class && arena.kind == kind {
+            if arena.class == class {
                 let pos = arena.allocation_pos;
                 if find_first_zero(arena.allocation_words(), pos, slot_count).is_some() {
                     free_base = Some(base);
@@ -402,12 +379,12 @@ impl ObjectAllocatorInner {
             let index = find_first_zero(arena.allocation_words(), pos, slot_count).unwrap();
             return reserve_slot(arena, base, index, type_id, &mut self.total_size);
         }
-        let base = self.create_arena(class, kind);
+        let base = self.create_arena(class);
         let arena = self.arenas.get_mut(&base).unwrap();
         reserve_slot(arena, base, 0, type_id, &mut self.total_size)
     }
 
-    fn create_arena(&mut self, class: usize, kind: ArenaKind) -> usize {
+    fn create_arena(&mut self, class: usize) -> usize {
         let region = self.pager.allocate(ARENA_PAGES, Some(ARENA_SIZE));
         let base = region as usize;
         let alloc_words = bitmap_words_for_class(class);
@@ -432,7 +409,6 @@ impl ObjectAllocatorInner {
                 pointer_bitmap: NonNull::from(pointer_bitmap),
                 bitmap_pages,
                 allocation_pos: 0,
-                kind,
             },
         );
         base
@@ -478,19 +454,6 @@ impl ObjectAllocatorInner {
                 }
             })
             .collect();
-        let closures = mem::take(&mut self.large_closures);
-        self.large_closures = closures
-            .into_iter()
-            .filter_map(|(address, object)| {
-                if object.marked {
-                    Some((address, object))
-                } else {
-                    self.free_large(&object);
-                    None
-                }
-            })
-            .collect();
-
         let mut freed = Vec::new();
         for (&base, arena) in self.arenas.iter_mut() {
             let slot_size = 1usize << arena.class;
@@ -526,6 +489,8 @@ impl ObjectAllocatorInner {
             .retain(|address, _| slot_is_allocated(arenas, large, *address));
         self.allocated_maps
             .retain(|address| slot_is_allocated(arenas, large, *address));
+        self.allocated_closures
+            .retain(|address| slot_is_allocated(arenas, large, *address));
     }
 
     fn register_global_object(&mut self, address: *mut (), size: usize, type_id: TypeId) {
@@ -543,9 +508,6 @@ impl ObjectAllocatorInner {
         for object in self.allocated_objects.values_mut() {
             object.marked = false;
         }
-        for object in self.large_closures.values_mut() {
-            object.marked = false;
-        }
         self.sweep();
         assert!(
             self.total_size == 0,
@@ -554,7 +516,7 @@ impl ObjectAllocatorInner {
         );
     }
 
-    fn class_has_no_free_slot(&self, size: usize, kind: ArenaKind) -> bool {
+    fn class_has_no_free_slot(&self, size: usize) -> bool {
         if size > LARGE_ALLOCATION_THRESHOLD {
             return false;
         }
@@ -562,7 +524,7 @@ impl ObjectAllocatorInner {
         let slot_count = ARENA_SIZE >> class;
         let mut saw_arena = false;
         for arena in self.arenas.values() {
-            if arena.class == class && arena.kind == kind {
+            if arena.class == class {
                 saw_arena = true;
                 let pos = arena.allocation_pos;
                 if find_first_zero(arena.allocation_words(), pos, slot_count).is_some() {
@@ -578,9 +540,6 @@ impl ObjectAllocatorInner {
             arena.mark_words_mut().fill(0);
         }
         for object in self.allocated_objects.values_mut() {
-            object.marked = false;
-        }
-        for object in self.large_closures.values_mut() {
             object.marked = false;
         }
         let global_spans = mem::take(&mut self.global_spans);
@@ -620,14 +579,9 @@ impl ObjectAllocatorInner {
         if word == 0 {
             return;
         }
-        if let Some(object_address) = self.resolve_any(word) {
+        if let Some(object_address) = self.containing_object(word) {
             self.mark_object(object_address);
         }
-    }
-
-    fn resolve_any(&self, address: usize) -> Option<usize> {
-        self.containing_object(address)
-            .or_else(|| self.containing_closure(address))
     }
 
     fn mark_value(&mut self, typ: TypeId, addr: usize) {
@@ -651,7 +605,7 @@ impl ObjectAllocatorInner {
         if word == 0 {
             return;
         }
-        if let Some(object_address) = self.resolve_any(word) {
+        if let Some(object_address) = self.containing_object(word) {
             self.mark_object(object_address);
             if pointed_to != TypeId::new_invalid() {
                 self.mark_value_at(word, pointed_to);
@@ -682,11 +636,6 @@ impl ObjectAllocatorInner {
             return None;
         }
         if let Some((&base, object)) = self.allocated_objects.range(..=address).next_back()
-            && address < base + object.span.size
-        {
-            return Some(base + object.span.size);
-        }
-        if let Some((&base, object)) = self.large_closures.range(..=address).next_back()
             && address < base + object.span.size
         {
             return Some(base + object.span.size);
@@ -791,7 +740,7 @@ impl ObjectAllocatorInner {
         if receiver == 0 {
             return;
         }
-        let Some(object_address) = self.resolve_any(receiver) else {
+        let Some(object_address) = self.containing_object(receiver) else {
             return;
         };
         self.mark_object(object_address);
@@ -807,7 +756,7 @@ impl ObjectAllocatorInner {
             ptr::read_unaligned((addr + mem::offset_of!(FunctionObject, 1)) as *const usize)
         };
         if env != 0
-            && let Some(closure_address) = self.containing_closure(env)
+            && let Some(closure_address) = self.containing_object(env)
         {
             self.mark_object(closure_address);
         }
@@ -851,15 +800,11 @@ impl ObjectAllocatorInner {
 
     fn mark_object(&mut self, object_address: usize) {
         let arena_base = object_address & !(ARENA_SIZE - 1);
-        let arena_info = self.arenas.get(&arena_base).map(|arena| {
-            (
-                arena.class,
-                arena.kind,
-                arena.pointer_bitmap,
-                arena.mark_bitmap,
-            )
-        });
-        if let Some((class, kind, pointer_bitmap, mut mark_bitmap)) = arena_info {
+        let arena_info = self
+            .arenas
+            .get(&arena_base)
+            .map(|arena| (arena.class, arena.pointer_bitmap, arena.mark_bitmap));
+        if let Some((class, pointer_bitmap, mut mark_bitmap)) = arena_info {
             let slot_size = 1usize << class;
             let slot_count = ARENA_SIZE >> class;
             let index = (object_address - arena_base) / slot_size;
@@ -882,19 +827,11 @@ impl ObjectAllocatorInner {
                 self.mark_map_scan(slot_base);
                 return;
             }
-            if kind == ArenaKind::Closure {
+            if self.allocated_closures.contains(&slot_base) {
                 self.mark_closure_scan(slot_base);
                 return;
             }
             self.mark_slot_pointer_bitmap(pointer_bitmap, index, slot_size, slot_base);
-            return;
-        }
-        if let Some(object) = self.large_closures.get_mut(&object_address) {
-            if object.marked {
-                return;
-            }
-            object.marked = true;
-            self.mark_closure_scan(object_address);
             return;
         }
         if let Some(object) = self.allocated_objects.get_mut(&object_address) {
@@ -909,6 +846,10 @@ impl ObjectAllocatorInner {
             }
             if self.allocated_maps.contains(&object_address) {
                 self.mark_map_scan(object_address);
+                return;
+            }
+            if self.allocated_closures.contains(&object_address) {
+                self.mark_closure_scan(object_address);
                 return;
             }
             if type_id.is_valid() {
@@ -928,8 +869,6 @@ impl ObjectAllocatorInner {
             return;
         }
         if let Some(object) = self.allocated_objects.get_mut(&object_address) {
-            object.marked = true;
-        } else if let Some(object) = self.large_closures.get_mut(&object_address) {
             object.marked = true;
         }
     }
@@ -996,36 +935,14 @@ impl ObjectAllocatorInner {
     fn containing_object(&self, address: usize) -> Option<usize> {
         let arena_base = address & !(ARENA_SIZE - 1);
         if let Some(arena) = self.arenas.get(&arena_base) {
-            if arena.kind == ArenaKind::Object {
-                let slot_size = 1usize << arena.class;
-                let index = (address - arena_base) / slot_size;
-                if index < (ARENA_SIZE >> arena.class) && get_bit(arena.allocation_words(), index) {
-                    return Some(arena_base + index * slot_size);
-                }
+            let slot_size = 1usize << arena.class;
+            let index = (address - arena_base) / slot_size;
+            if index < (ARENA_SIZE >> arena.class) && get_bit(arena.allocation_words(), index) {
+                return Some(arena_base + index * slot_size);
             }
             return None;
         }
         if let Some((&base, object)) = self.allocated_objects.range(..=address).next_back()
-            && address < base + object.span.size
-        {
-            return Some(base);
-        }
-        None
-    }
-
-    fn containing_closure(&self, address: usize) -> Option<usize> {
-        let arena_base = address & !(ARENA_SIZE - 1);
-        if let Some(arena) = self.arenas.get(&arena_base) {
-            if arena.kind == ArenaKind::Closure {
-                let slot_size = 1usize << arena.class;
-                let index = (address - arena_base) / slot_size;
-                if index < (ARENA_SIZE >> arena.class) && get_bit(arena.allocation_words(), index) {
-                    return Some(arena_base + index * slot_size);
-                }
-            }
-            return None;
-        }
-        if let Some((&base, object)) = self.large_closures.range(..=address).next_back()
             && address < base + object.span.size
         {
             return Some(base);
@@ -1039,27 +956,7 @@ impl ObjectAllocatorInner {
             return true;
         }
         let arena_base = address & !(ARENA_SIZE - 1);
-        if let Some(arena) = self.arenas.get(&arena_base)
-            && arena.kind == ArenaKind::Object
-        {
-            let slot_size = 1usize << arena.class;
-            if (address - arena_base).is_multiple_of(slot_size) {
-                let index = (address - arena_base) / slot_size;
-                return get_bit(arena.allocation_words(), index);
-            }
-        }
-        false
-    }
-
-    #[cfg(test)]
-    fn contains_closure(&self, address: usize) -> bool {
-        if self.large_closures.contains_key(&address) {
-            return true;
-        }
-        let arena_base = address & !(ARENA_SIZE - 1);
-        if let Some(arena) = self.arenas.get(&arena_base)
-            && arena.kind == ArenaKind::Closure
-        {
+        if let Some(arena) = self.arenas.get(&arena_base) {
             let slot_size = 1usize << arena.class;
             if (address - arena_base).is_multiple_of(slot_size) {
                 let index = (address - arena_base) / slot_size;
@@ -1074,7 +971,7 @@ impl ObjectAllocatorInner {
     fn mark_defer_stack_slot(&mut self, offset: usize) {
         let mut word = unsafe { ptr::read_unaligned(offset as *const usize) };
         while word != 0 {
-            let Some(entry_address) = self.resolve_any(word) else {
+            let Some(entry_address) = self.containing_object(word) else {
                 break;
             };
             let (func_address, args_address, args_type, next) = {
@@ -1144,7 +1041,7 @@ impl ObjectAllocatorInner {
             GC_SLOT_FREE_VARS => {
                 let word = unsafe { ptr::read_unaligned(offset as *const usize) };
                 if word != 0
-                    && let Some(closure_address) = self.containing_closure(word)
+                    && let Some(closure_address) = self.containing_object(word)
                 {
                     self.mark_object(closure_address);
                 }
@@ -1196,13 +1093,8 @@ impl ObjectAllocatorPtr {
         unsafe { &mut *self.0 }.allocate_map(size)
     }
 
-    pub(crate) fn class_has_no_free_slot(&self, size: usize, closure: bool) -> bool {
-        let kind = if closure {
-            ArenaKind::Closure
-        } else {
-            ArenaKind::Object
-        };
-        unsafe { &*self.0 }.class_has_no_free_slot(size, kind)
+    pub(crate) fn class_has_no_free_slot(&self, size: usize) -> bool {
+        unsafe { &*self.0 }.class_has_no_free_slot(size)
     }
 
     pub(crate) fn register_global_object(&self, address: *mut (), size: usize, type_id: TypeId) {
@@ -1229,11 +1121,6 @@ impl ObjectAllocatorPtr {
     }
 
     #[cfg(test)]
-    pub(crate) fn contains_closure(&self, ptr: *mut ()) -> bool {
-        unsafe { &*self.0 }.contains_closure(ptr as usize)
-    }
-
-    #[cfg(test)]
     pub(crate) fn registered_channels_len(&self) -> usize {
         unsafe { &*self.0 }.allocated_channels.len()
     }
@@ -1241,6 +1128,11 @@ impl ObjectAllocatorPtr {
     #[cfg(test)]
     pub(crate) fn registered_maps_len(&self) -> usize {
         unsafe { &*self.0 }.allocated_maps.len()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn registered_closures_len(&self) -> usize {
+        unsafe { &*self.0 }.allocated_closures.len()
     }
 }
 
@@ -1723,7 +1615,6 @@ mod tests {
         let ptr = allocator.ptr().allocate(1, TypeId::new_invalid());
         assert!(!ptr.is_null());
         assert!(allocator.ptr().contains(ptr));
-        assert!(!allocator.ptr().contains_closure(ptr));
     }
 
     #[test]
@@ -1758,16 +1649,16 @@ mod tests {
     }
 
     #[test]
-    fn test_allocate_closure_is_registered_apart_from_ordinary_objects() {
+    fn test_allocate_closure_shares_the_object_heap_and_is_registered() {
         let allocator = ObjectAllocator::new(Rc::new(Pager::new()));
         let closure = allocator.ptr().allocate_closure(32);
         assert!(!closure.is_null());
-        assert!(!allocator.ptr().contains(closure));
-        assert!(allocator.ptr().contains_closure(closure));
+        assert!(allocator.ptr().contains(closure));
+        assert_eq!(allocator.ptr().registered_closures_len(), 1);
 
         let ordinary = allocator.ptr().allocate(32, TypeId::new_invalid());
         assert!(allocator.ptr().contains(ordinary));
-        assert!(!allocator.ptr().contains_closure(ordinary));
+        assert_eq!(allocator.ptr().registered_closures_len(), 1);
     }
 
     #[test]
@@ -1936,7 +1827,7 @@ mod tests {
         assert!(allocator.ptr().contains(buffer));
         assert!(allocator.ptr().contains(data));
         assert!(allocator.ptr().contains(receiver));
-        assert!(allocator.ptr().contains_closure(closure));
+        assert!(allocator.ptr().contains(closure));
         assert!(allocator.ptr().contains(raw));
     }
 
@@ -2058,9 +1949,40 @@ mod tests {
         let _root = register_root(&allocator.ptr(), types().function.tid(), &root);
 
         allocator.ptr().run_gc(&[]);
-        assert!(allocator.ptr().contains_closure(layout as *mut ()));
+        assert!(allocator.ptr().contains(layout as *mut ()));
         assert!(allocator.ptr().contains(captured));
         // The captured value is a *Node, so its own member is traced too.
+        assert!(allocator.ptr().contains(leaf));
+    }
+
+    #[test]
+    fn test_large_closure_is_traced_through_the_object_map() {
+        let allocator = ObjectAllocator::new(Rc::new(Pager::new()));
+        let leaf = alloc_node(&allocator.ptr(), ptr::null_mut());
+        let captured = alloc_node(&allocator.ptr(), leaf);
+        let layout = allocator
+            .ptr()
+            .allocate_closure(LARGE_ALLOCATION_THRESHOLD + 1)
+            as *mut ClosureLayout;
+        unsafe {
+            ptr::addr_of_mut!((*layout).capture_type).write(types().node.tid());
+            ptr::addr_of_mut!((*layout).func).write(UserFunction::new(dummy_func));
+            ptr::addr_of_mut!((*layout).object_ptrs)
+                .cast::<usize>()
+                .write(1);
+            let capture_data = (layout as *mut u8).add(mem::size_of::<ClosureLayout>());
+            (capture_data as *mut usize).write(captured as usize);
+        };
+
+        let function = FunctionObject::from_closure_layout_ptr(layout as *const ());
+        let mut root = [0u8; 16];
+        root[..8].copy_from_slice(&raw_word(function.func_address()));
+        root[8..16].copy_from_slice(&raw_word(function.env_address()));
+        let _root = register_root(&allocator.ptr(), types().function.tid(), &root);
+
+        allocator.ptr().run_gc(&[]);
+        assert!(allocator.ptr().contains(layout as *mut ()));
+        assert!(allocator.ptr().contains(captured));
         assert!(allocator.ptr().contains(leaf));
     }
 
@@ -2171,7 +2093,7 @@ mod tests {
     }
 
     #[test]
-    fn test_sweep_prunes_channel_and_map_registrations() {
+    fn test_sweep_prunes_channel_map_and_closure_registrations() {
         let allocator = ObjectAllocator::new(Rc::new(Pager::new()));
         let channel = allocator
             .ptr()
@@ -2183,14 +2105,18 @@ mod tests {
             .ptr()
             .allocate(mem::size_of::<MapObject>(), TypeId::new_invalid());
         allocator.ptr().allocate_map(mem::size_of::<MapObject>());
+        let closure = allocator.ptr().allocate_closure(32);
         assert_eq!(allocator.ptr().registered_channels_len(), 1);
         assert_eq!(allocator.ptr().registered_maps_len(), 1);
+        assert_eq!(allocator.ptr().registered_closures_len(), 1);
 
         allocator.ptr().run_gc(&[]);
         assert_eq!(allocator.ptr().registered_channels_len(), 0);
         assert_eq!(allocator.ptr().registered_maps_len(), 0);
+        assert_eq!(allocator.ptr().registered_closures_len(), 0);
         assert!(!allocator.ptr().contains(channel));
         assert!(!allocator.ptr().contains(map));
+        assert!(!allocator.ptr().contains(closure));
     }
 
     /// A pointer does not have to be the base of the allocation it points
