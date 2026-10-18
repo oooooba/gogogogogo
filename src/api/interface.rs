@@ -456,35 +456,42 @@ mod tests {
         // threshold: a larger allocation is mapped from pages and never counts
         // against the heap budget, so it could never fill it up.
         let chunk_size = 65536;
+        let capacity = MAX_TOTAL_ALLOCATED_SIZE.div_ceil(chunk_size) + 1;
+        let frame_size = mem::size_of::<StackFrameCommon>() + capacity * mem::size_of::<usize>();
+        ctx.grow_stack(frame_size);
+        let root_frame = ctx.stack_pointer() as *mut u8;
+        let prev_stack_pointer = ctx.stack_pointer();
+        ctx.push_frame(
+            frame_size,
+            prev_stack_pointer,
+            None,
+            &[],
+            FunctionObject::new_null(),
+        );
+        let locals = unsafe { root_frame.add(mem::size_of::<StackFrameCommon>()) as *mut usize };
+        ctx.push_gc_root(
+            root_frame as usize,
+            locals as usize,
+            capacity * mem::size_of::<usize>(),
+            TypeId::new_invalid(),
+            crate::type_id::GC_SLOT_POINTER,
+        );
         let mut referenced: *mut () = ptr::null_mut();
         let mut budget = MAX_TOTAL_ALLOCATED_SIZE;
+        let mut chunks = 0;
         while budget > 0 {
             let chunk = ctx.allocate(budget.min(chunk_size), TypeId::new_invalid());
             assert!(!chunk.is_null());
             if referenced.is_null() {
                 referenced = chunk;
             }
+            unsafe { locals.add(chunks).write(chunk as usize) };
             budget -= chunk_size.min(budget);
+            chunks += 1;
         }
-        // The GC scans the live frames one by one, so the big chunk is
-        // referenced from a real frame rather than from the unused bottom of
-        // the stack region.
-        ctx.grow_stack(mem::size_of::<StackFrameCommon>() + mem::size_of::<usize>());
-        let root_frame = ctx.stack_pointer() as *mut u8;
-        let prev_stack_pointer = ctx.stack_pointer();
-        ctx.push_frame(
-            mem::size_of::<StackFrameCommon>() + mem::size_of::<usize>(),
-            prev_stack_pointer,
-            None,
-            &[],
-            FunctionObject::new_null(),
-        );
-        unsafe {
-            ptr::write(
-                root_frame.add(mem::size_of::<StackFrameCommon>()) as *mut usize,
-                referenced as usize,
-            )
-        };
+        for index in 1..chunks {
+            unsafe { locals.add(index).write(0) };
+        }
         let total_before = gc.process(|mut gc| gc.allocator().total_size());
         assert_eq!(total_before, MAX_TOTAL_ALLOCATED_SIZE);
 

@@ -197,22 +197,21 @@ impl LightWeightThreadContext {
     }
 
     pub(crate) fn allocate(&mut self, size: usize, type_id: TypeId) -> *mut () {
-        self.allocate_with(size, |allocator| allocator.allocate(size, type_id))
+        self.allocate_with(size, false, |allocator| allocator.allocate(size, type_id))
     }
 
     pub(crate) fn allocate_closure(&mut self, size: usize) -> *mut () {
-        self.allocate_with(size, |allocator| allocator.allocate_closure(size))
+        self.allocate_with(size, true, |allocator| allocator.allocate_closure(size))
     }
 
     pub(crate) fn allocate_channel(&mut self, size: usize, elem_type: TypeId) -> *mut () {
-        self.global_context().process(|mut global_context| {
-            global_context.allocator().allocate_channel(size, elem_type)
+        self.allocate_with(size, false, |allocator| {
+            allocator.allocate_channel(size, elem_type)
         })
     }
 
     pub(crate) fn allocate_map(&mut self, size: usize) -> *mut () {
-        self.global_context()
-            .process(|mut global_context| global_context.allocator().allocate_map(size))
+        self.allocate_with(size, false, |allocator| allocator.allocate_map(size))
     }
 
     /// Runs a collection synchronously, with this goroutine as an additional
@@ -225,15 +224,20 @@ impl LightWeightThreadContext {
     fn allocate_with(
         &mut self,
         size: usize,
+        closure: bool,
         allocate: impl Fn(ObjectAllocatorPtr) -> *mut (),
     ) -> *mut () {
         self.global_context().process(|mut global_context| {
-            let ptr = allocate(global_context.allocator());
+            let allocator = global_context.allocator();
+            if allocator.class_has_no_free_slot(size, closure) {
+                global_context.run_gc(&*self);
+            }
+            let ptr = allocate(allocator.clone());
             if !ptr.is_null() {
                 return ptr;
             }
             global_context.run_gc(&*self);
-            let ptr = allocate(global_context.allocator());
+            let ptr = allocate(allocator.clone());
             if ptr.is_null() {
                 panic!(
                     "out of memory: failed to allocate {} bytes even after garbage collection",
@@ -296,7 +300,7 @@ impl LightWeightThreadContext {
     /// nothing may read the stack. The region was never an allocation of the
     /// object allocator, so no collector can unmap it a second time.
     pub(crate) fn reclaim_stack_pages(&self) {
-        let stack_base = self.stack_base() as *mut ();
+        let stack_base = self.initial_stack_pointer as *mut ();
         self.global_context().process(|global_context| {
             global_context.pager().deallocate(stack_base, STACK_PAGES);
         });

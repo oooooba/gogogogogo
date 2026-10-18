@@ -4,6 +4,7 @@ use std::mem;
 use std::ptr;
 use std::ptr::NonNull;
 use std::rc::Rc;
+use std::slice;
 
 use allocator_api2::alloc::{AllocError, Allocator, Layout};
 
@@ -51,22 +52,85 @@ impl Drop for ObjectAllocator {
     }
 }
 
+const ARENA_SIZE: usize = 1 << 18;
+const ARENA_PAGES: usize = ARENA_SIZE / PAGE_SIZE;
+const WORD_SIZE: usize = mem::size_of::<usize>();
+const BITMAP_SIZE: usize = ARENA_SIZE / WORD_SIZE / 8;
+const POINTER_BITMAP_WORDS: usize = BITMAP_SIZE / WORD_SIZE;
+
+fn bitmap_words_for_class(class: usize) -> usize {
+    (ARENA_SIZE >> class).div_ceil(usize::BITS as usize)
+}
+
+fn bitmap_pages_for_class(class: usize) -> usize {
+    (BITMAP_SIZE + 2 * bitmap_words_for_class(class) * WORD_SIZE).div_ceil(PAGE_SIZE)
+}
+
+const SLICE_HEADER_SIZE: usize = 3 * WORD_SIZE;
+const STRING_SIZE: usize = 2 * WORD_SIZE;
+pub(crate) const MAX_TOTAL_ALLOCATED_SIZE: usize = 1 << 20;
+pub(crate) const LARGE_ALLOCATION_THRESHOLD: usize = 128 * 1024;
+
+fn value_size(typ: TypeId) -> usize {
+    match typ.kind() {
+        TypeKind::None => 0,
+        TypeKind::String => STRING_SIZE,
+        TypeKind::Slice => SLICE_HEADER_SIZE,
+        TypeKind::Interface => mem::size_of::<Interface>(),
+        _ => typ.size(),
+    }
+}
+
+fn size_class_of(size: usize) -> usize {
+    size.max(1).next_power_of_two().max(8).trailing_zeros() as usize
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum ArenaKind {
+    Object,
+    Closure,
+}
+
+struct Arena {
+    region: *mut (),
+    bitmaps: *mut (),
+    class: usize,
+    allocation_bitmap: NonNull<[usize]>,
+    mark_bitmap: NonNull<[usize]>,
+    pointer_bitmap: NonNull<[usize; POINTER_BITMAP_WORDS]>,
+    bitmap_pages: usize,
+    allocation_pos: usize,
+    kind: ArenaKind,
+}
+
+impl Arena {
+    fn allocation_words(&self) -> &[usize] {
+        unsafe { self.allocation_bitmap.as_ref() }
+    }
+
+    fn allocation_words_mut(&mut self) -> &mut [usize] {
+        unsafe { self.allocation_bitmap.as_mut() }
+    }
+
+    fn mark_words(&self) -> &[usize] {
+        unsafe { self.mark_bitmap.as_ref() }
+    }
+
+    fn mark_words_mut(&mut self) -> &mut [usize] {
+        unsafe { self.mark_bitmap.as_mut() }
+    }
+
+    fn pointer_words_mut(&mut self) -> &mut [usize] {
+        unsafe { self.pointer_bitmap.as_mut() }
+    }
+}
+
 struct ObjectAllocatorInner {
     pager: Rc<Pager>,
-    allocated_objects: BTreeMap<usize, AllocatedObject>,
-    /// Closure allocations live apart from ordinary objects: a closure is
-    /// referenced through a `FunctionObject` whose address has the most
-    /// significant bit set, so the GC must distinguish tagged words from plain
-    /// pointers. Membership in this map is what makes that call, and the
-    /// closure object's own capture descriptor (stored in ClosureLayout)
-    /// tells the collector how to trace the captured variables.
-    allocated_closures: BTreeMap<usize, AllocatedObject>,
-    /// Channel objects self-describe through their element type, which is
-    /// registered here when the channel is created.
+    arenas: BTreeMap<usize, Arena>,
+    allocated_objects: BTreeMap<usize, LargeAllocation>,
+    large_closures: BTreeMap<usize, LargeAllocation>,
     allocated_channels: BTreeMap<usize, TypeId>,
-    /// Map objects are ordinary allocations whose entries are boxed with the
-    /// map's key/value types; membership makes the collector dispatch to the
-    /// entry scan instead of the plain-object conservative scan.
     allocated_maps: BTreeSet<usize>,
     global_spans: Vec<GlobalSpan>,
     total_size: usize,
@@ -78,9 +142,6 @@ struct Span {
     size: usize,
 }
 
-/// A root that is not an object on the heap: usually a package-level Go
-/// variable. It is scanned as a value of `type_id`, or conservatively over
-/// its span when the type is unknown (TypeId 0).
 #[derive(Clone, Copy)]
 struct GlobalSpan {
     ptr: *mut (),
@@ -88,58 +149,176 @@ struct GlobalSpan {
     type_id: TypeId,
 }
 
-struct AllocatedObject {
+struct LargeAllocation {
     span: Span,
-    kind: AllocationKind,
     marked: bool,
     type_id: TypeId,
-    pointer_bitmap: Option<NonNull<usize>>,
 }
 
-#[derive(Clone, Copy, PartialEq, Debug)]
-enum AllocationKind {
-    Heap,
-    Pages,
+fn get_bit(words: &[usize], index: usize) -> bool {
+    let bits = usize::BITS as usize;
+    (words[index / bits] >> (index % bits)) & 1 != 0
 }
 
-/// What `mark_object` has to do with an object that is not a plain heap
-/// allocation when it is first reached: closures, channels and maps carry
-/// their own trace description.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum SpecialObject {
-    None,
-    Closure,
-    Channel,
-    Map,
+fn set_bit(words: &mut [usize], index: usize) {
+    let bits = usize::BITS as usize;
+    words[index / bits] |= 1usize << (index % bits);
 }
 
-const ALLOCATION_ALIGNMENT: usize = mem::size_of::<u128>();
-/// A slice header is three words (data, len, cap) in the C and Rust layouts.
-const SLICE_HEADER_SIZE: usize = 3 * mem::size_of::<usize>();
+fn clear_bit(words: &mut [usize], index: usize) {
+    let bits = usize::BITS as usize;
+    words[index / bits] &= !(1usize << (index % bits));
+}
 
-/// A string value is two words (data pointer, length).
-const STRING_SIZE: usize = 2 * mem::size_of::<usize>();
-pub(crate) const MAX_TOTAL_ALLOCATED_SIZE: usize = 1 << 20;
-pub(crate) const LARGE_ALLOCATION_THRESHOLD: usize = 128 * 1024;
+fn find_first_zero(words: &[usize], start: usize, count: usize) -> Option<usize> {
+    (start..count).find(|&index| !get_bit(words, index))
+}
 
-/// The number of bytes a value of type `typ` occupies, so a collector can
-/// check that the storage it is about to read really holds the whole value.
-fn value_size(typ: TypeId) -> usize {
-    match typ.kind() {
-        TypeKind::None => 0,
-        TypeKind::String => STRING_SIZE,
-        TypeKind::Slice => SLICE_HEADER_SIZE,
-        TypeKind::Interface => mem::size_of::<Interface>(),
-        _ => typ.size(),
+fn popcount(words: &[usize], count: usize) -> usize {
+    let bits = usize::BITS as usize;
+    let full = count / bits;
+    let rem = count % bits;
+    let mut total: usize = words[..full]
+        .iter()
+        .map(|word| word.count_ones() as usize)
+        .sum();
+    if rem > 0 {
+        total += (words[full] & ((1usize << rem) - 1)).count_ones() as usize;
     }
+    total
+}
+
+extern "C" fn pointer_bitmap_visitor(
+    offset: usize,
+    size: usize,
+    _typ: TypeId,
+    kind: i32,
+    arg: *mut ffi::c_void,
+) {
+    let bitmap = unsafe { slice::from_raw_parts_mut(arg as *mut usize, POINTER_BITMAP_WORDS) };
+    let end = offset.saturating_add(size);
+    match kind {
+        GC_SLOT_POINTER | GC_SLOT_FUNCTION | GC_SLOT_MAP => {
+            let mut addr = offset;
+            while addr + WORD_SIZE <= end {
+                set_bit(bitmap, addr / WORD_SIZE);
+                addr += WORD_SIZE;
+            }
+        }
+        GC_SLOT_SLICE => {
+            let mut addr = offset;
+            while addr + SLICE_HEADER_SIZE <= end {
+                set_bit(bitmap, addr / WORD_SIZE);
+                addr += SLICE_HEADER_SIZE;
+            }
+        }
+        GC_SLOT_INTERFACE => {
+            let mut addr = offset;
+            while addr + mem::size_of::<Interface>() <= end {
+                set_bit(bitmap, addr / WORD_SIZE);
+                set_bit(bitmap, addr / WORD_SIZE + 1);
+                addr += mem::size_of::<Interface>();
+            }
+        }
+        GC_SLOT_STRING => {
+            let mut addr = offset;
+            while addr + STRING_SIZE <= end {
+                set_bit(bitmap, addr / WORD_SIZE);
+                addr += STRING_SIZE;
+            }
+        }
+        GC_SLOT_DEFER_STACK | GC_SLOT_FREE_VARS => set_bit(bitmap, offset / WORD_SIZE),
+        GC_SLOT_NO_POINTER => {}
+        _ => panic!("unknown GC slot kind: {}", kind),
+    }
+}
+
+fn build_slot_pointer_bitmap(
+    bitmap: &mut [usize],
+    slot_offset: usize,
+    slot_size: usize,
+    type_id: TypeId,
+) {
+    let first = slot_offset / WORD_SIZE;
+    let last = first + slot_size / WORD_SIZE;
+    let mut index = first;
+    while index < last {
+        clear_bit(bitmap, index);
+        index += 1;
+    }
+    if !type_id.is_valid() {
+        return;
+    }
+    match type_id.kind() {
+        TypeKind::String
+        | TypeKind::Slice
+        | TypeKind::Pointer
+        | TypeKind::Function
+        | TypeKind::Map
+        | TypeKind::Interface => set_bit(bitmap, slot_offset / WORD_SIZE),
+        TypeKind::StructArray => {
+            if let Some(get_member_offset_runs) = type_id.get_member_offset_runs() {
+                get_member_offset_runs(
+                    pointer_bitmap_visitor,
+                    slot_offset,
+                    bitmap.as_mut_ptr() as *mut ffi::c_void,
+                );
+            }
+        }
+        TypeKind::None | TypeKind::NoPointer => {}
+    }
+}
+
+fn reserve_slot(
+    arena: &mut Arena,
+    base: usize,
+    index: usize,
+    type_id: TypeId,
+    total_size: &mut usize,
+) -> *mut () {
+    let slot_size = 1usize << arena.class;
+    set_bit(arena.allocation_words_mut(), index);
+    let slot = (base + index * slot_size) as *mut u8;
+    unsafe {
+        ptr::write_bytes(slot, 0, slot_size);
+    }
+    build_slot_pointer_bitmap(
+        arena.pointer_words_mut(),
+        index * slot_size,
+        slot_size,
+        type_id,
+    );
+    arena.allocation_pos = index + 1;
+    *total_size += slot_size;
+    slot as *mut ()
+}
+
+fn slot_is_allocated(
+    arenas: &BTreeMap<usize, Arena>,
+    large: &BTreeMap<usize, LargeAllocation>,
+    address: usize,
+) -> bool {
+    if large.contains_key(&address) {
+        return true;
+    }
+    let arena_base = address & !(ARENA_SIZE - 1);
+    if let Some(arena) = arenas.get(&arena_base) {
+        let slot_size = 1usize << arena.class;
+        let index = (address - arena_base) / slot_size;
+        if index < (ARENA_SIZE >> arena.class) {
+            return get_bit(arena.allocation_words(), index);
+        }
+    }
+    false
 }
 
 impl ObjectAllocatorInner {
     fn new(pager: Rc<Pager>) -> Self {
         ObjectAllocatorInner {
             pager,
+            arenas: BTreeMap::new(),
             allocated_objects: BTreeMap::new(),
-            allocated_closures: BTreeMap::new(),
+            large_closures: BTreeMap::new(),
             allocated_channels: BTreeMap::new(),
             allocated_maps: BTreeSet::new(),
             global_spans: Vec::new(),
@@ -151,12 +330,7 @@ impl ObjectAllocatorInner {
         if size > LARGE_ALLOCATION_THRESHOLD {
             return self.allocate_pages(size, type_id);
         }
-        Self::allocate_span(
-            &mut self.total_size,
-            size,
-            &mut self.allocated_objects,
-            type_id,
-        )
+        self.allocate_slot(size_class_of(size), type_id, ArenaKind::Object)
     }
 
     fn allocate_channel(&mut self, size: usize, elem_type: TypeId) -> *mut () {
@@ -168,11 +342,26 @@ impl ObjectAllocatorInner {
     }
 
     fn allocate_closure(&mut self, size: usize) -> *mut () {
-        Self::allocate_span(
-            &mut self.total_size,
-            size,
-            &mut self.allocated_closures,
+        if size > LARGE_ALLOCATION_THRESHOLD {
+            let num_pages = size.div_ceil(PAGE_SIZE);
+            let ptr = self.pager.allocate(num_pages, None);
+            self.large_closures.insert(
+                ptr as usize,
+                LargeAllocation {
+                    span: Span {
+                        ptr,
+                        size: PAGE_SIZE * num_pages,
+                    },
+                    marked: false,
+                    type_id: TypeId::new_invalid(),
+                },
+            );
+            return ptr;
+        }
+        self.allocate_slot(
+            size_class_of(size),
             TypeId::new_invalid(),
+            ArenaKind::Closure,
         )
     }
 
@@ -184,139 +373,152 @@ impl ObjectAllocatorInner {
         ptr
     }
 
-    /// Allocates a zero-initialized, 16-byte-aligned heap span and records it
-    /// in `destinations` (either the ordinary objects or the closures map).
-    fn allocate_span(
-        total_size: &mut usize,
-        size: usize,
-        destinations: &mut BTreeMap<usize, AllocatedObject>,
-        type_id: TypeId,
-    ) -> *mut () {
-        let size = size.div_ceil(ALLOCATION_ALIGNMENT) * ALLOCATION_ALIGNMENT;
-        if total_size.saturating_add(size) > MAX_TOTAL_ALLOCATED_SIZE {
+    fn allocate_slot(&mut self, class: usize, type_id: TypeId, kind: ArenaKind) -> *mut () {
+        let slot_size = 1usize << class;
+        if self.total_size.saturating_add(slot_size) > MAX_TOTAL_ALLOCATED_SIZE {
             return ptr::null_mut();
         }
-        // The span is raw storage for an object whose bytes the caller writes,
-        // so it is asked for zeroed rather than built out of a vector.
-        let ptr = if size == 0 {
-            // A zero-sized object is still recorded, and still answers with a
-            // non-null address, so it gets the dangling pointer of the span
-            // alignment: allocating a zero-sized layout is undefined behaviour.
-            NonNull::<u128>::dangling().as_ptr() as *mut ()
-        } else {
-            let Ok(layout) = Layout::from_size_align(size, ALLOCATION_ALIGNMENT) else {
-                return ptr::null_mut();
-            };
-            // SAFETY: the layout is non-zero sized and carries the alignment
-            // `free` hands the span back with.
-            let ptr = unsafe { std::alloc::alloc_zeroed(layout) };
-            if ptr.is_null() {
-                return ptr::null_mut();
+        let slot_count = ARENA_SIZE >> class;
+        let mut free_base = None;
+        for (&base, arena) in self.arenas.iter() {
+            if arena.class == class && arena.kind == kind {
+                let pos = arena.allocation_pos;
+                if find_first_zero(arena.allocation_words(), pos, slot_count).is_some() {
+                    free_base = Some(base);
+                    break;
+                }
             }
-            ptr as *mut ()
-        };
-        let pointer_bitmap = if type_id.is_valid() && !ptr.is_null() {
-            build_pointer_bitmap(type_id, size)
-        } else {
-            None
-        };
-        destinations.insert(
-            ptr as usize,
-            AllocatedObject {
-                span: Span { ptr, size },
-                kind: AllocationKind::Heap,
-                marked: false,
-                type_id,
-                pointer_bitmap,
+        }
+        if let Some(base) = free_base {
+            let arena = self.arenas.get_mut(&base).unwrap();
+            let pos = arena.allocation_pos;
+            let index = find_first_zero(arena.allocation_words(), pos, slot_count).unwrap();
+            return reserve_slot(arena, base, index, type_id, &mut self.total_size);
+        }
+        let base = self.create_arena(class, kind);
+        let arena = self.arenas.get_mut(&base).unwrap();
+        reserve_slot(arena, base, 0, type_id, &mut self.total_size)
+    }
+
+    fn create_arena(&mut self, class: usize, kind: ArenaKind) -> usize {
+        let region = self.pager.allocate(ARENA_PAGES, Some(ARENA_SIZE));
+        let base = region as usize;
+        let alloc_words = bitmap_words_for_class(class);
+        let bitmap_pages = bitmap_pages_for_class(class);
+        let bitmaps_region = self.pager.allocate(bitmap_pages, None);
+        let bitmaps = bitmaps_region as *mut usize;
+        let words: &mut [usize] =
+            unsafe { slice::from_raw_parts_mut(bitmaps, bitmap_pages * PAGE_SIZE / WORD_SIZE) };
+        words.fill(0);
+        let (pointer_bitmap, rest) = words.split_at_mut(POINTER_BITMAP_WORDS);
+        let (allocation_bitmap, mark_and_padding) = rest.split_at_mut(alloc_words);
+        let mark_bitmap = &mut mark_and_padding[..alloc_words];
+        let pointer_bitmap: &mut [usize; POINTER_BITMAP_WORDS] = pointer_bitmap.try_into().unwrap();
+        self.arenas.insert(
+            base,
+            Arena {
+                region,
+                bitmaps: bitmaps_region,
+                class,
+                allocation_bitmap: NonNull::from(allocation_bitmap),
+                mark_bitmap: NonNull::from(mark_bitmap),
+                pointer_bitmap: NonNull::from(pointer_bitmap),
+                bitmap_pages,
+                allocation_pos: 0,
+                kind,
             },
         );
-        *total_size += size;
-        ptr
+        base
     }
 
     fn allocate_pages(&mut self, size: usize, type_id: TypeId) -> *mut () {
         let num_pages = size.div_ceil(PAGE_SIZE);
-        let ptr = self.pager.allocate(num_pages);
+        let ptr = self.pager.allocate(num_pages, None);
         self.allocated_objects.insert(
             ptr as usize,
-            AllocatedObject {
+            LargeAllocation {
                 span: Span {
                     ptr,
                     size: PAGE_SIZE * num_pages,
                 },
-                kind: AllocationKind::Pages,
                 marked: false,
                 type_id,
-                pointer_bitmap: None,
             },
         );
         ptr
     }
 
-    fn free(&mut self, object: &AllocatedObject) {
-        match object.kind {
-            AllocationKind::Heap => {
-                self.total_size = self
-                    .total_size
-                    .checked_sub(object.span.size)
-                    .expect("total allocated size underflow while freeing an object");
-                // A zero-sized span has no storage to hand back.
-                if object.span.size > 0 {
-                    unsafe {
-                        std::alloc::dealloc(
-                            object.span.ptr as *mut u8,
-                            Layout::from_size_align_unchecked(
-                                object.span.size,
-                                ALLOCATION_ALIGNMENT,
-                            ),
-                        );
-                    }
-                }
-                if let Some(bitmap) = object.pointer_bitmap {
-                    free_pointer_bitmap(bitmap, object.span.size);
-                }
-            }
-            AllocationKind::Pages => {
-                self.pager
-                    .deallocate(object.span.ptr, object.span.size / PAGE_SIZE);
-            }
-        }
+    fn free_large(&mut self, object: &LargeAllocation) {
+        self.pager
+            .deallocate(object.span.ptr, object.span.size / PAGE_SIZE);
+    }
+
+    fn free_arena(&mut self, arena: &Arena) {
+        self.pager.deallocate(arena.bitmaps, arena.bitmap_pages);
+        self.pager.deallocate(arena.region, ARENA_PAGES);
     }
 
     fn sweep(&mut self) {
         let objects = mem::take(&mut self.allocated_objects);
-        let kept: BTreeMap<usize, AllocatedObject> = objects
+        self.allocated_objects = objects
             .into_iter()
             .filter_map(|(address, object)| {
                 if object.marked {
                     Some((address, object))
                 } else {
-                    self.free(&object);
+                    self.free_large(&object);
                     None
                 }
             })
             .collect();
-        self.allocated_objects = kept;
-        let closures = mem::take(&mut self.allocated_closures);
-        let kept_closures: BTreeMap<usize, AllocatedObject> = closures
+        let closures = mem::take(&mut self.large_closures);
+        self.large_closures = closures
             .into_iter()
             .filter_map(|(address, object)| {
                 if object.marked {
                     Some((address, object))
                 } else {
-                    self.free(&object);
+                    self.free_large(&object);
                     None
                 }
             })
             .collect();
-        self.allocated_closures = kept_closures;
 
-        // The self-describing registries only make sense while the object that
-        // owns the descriptor is still alive.
+        let mut freed = Vec::new();
+        for (&base, arena) in self.arenas.iter_mut() {
+            let slot_size = 1usize << arena.class;
+            let slot_count = ARENA_SIZE >> arena.class;
+            let alloc_count = popcount(arena.allocation_words(), slot_count);
+            let mark_count = popcount(arena.mark_words(), slot_count);
+            if mark_count == 0 {
+                freed.push(base);
+            } else {
+                mem::swap(&mut arena.allocation_bitmap, &mut arena.mark_bitmap);
+                arena.allocation_pos = 0;
+                self.total_size = self
+                    .total_size
+                    .checked_sub((alloc_count - mark_count) * slot_size)
+                    .expect("total allocated size underflow while sweeping an arena");
+            }
+        }
+        for base in freed {
+            let arena = self.arenas.remove(&base).unwrap();
+            let slot_size = 1usize << arena.class;
+            let slot_count = ARENA_SIZE >> arena.class;
+            let alloc_count = popcount(arena.allocation_words(), slot_count);
+            self.total_size = self
+                .total_size
+                .checked_sub(alloc_count * slot_size)
+                .expect("total allocated size underflow while freeing an arena");
+            self.free_arena(&arena);
+        }
+
+        let arenas = &self.arenas;
+        let large = &self.allocated_objects;
         self.allocated_channels
-            .retain(|address, _| self.allocated_objects.contains_key(address));
+            .retain(|address, _| slot_is_allocated(arenas, large, *address));
         self.allocated_maps
-            .retain(|address| self.allocated_objects.contains_key(address));
+            .retain(|address| slot_is_allocated(arenas, large, *address));
     }
 
     fn register_global_object(&mut self, address: *mut (), size: usize, type_id: TypeId) {
@@ -328,10 +530,13 @@ impl ObjectAllocatorInner {
     }
 
     fn free_all_allocated_objects(&mut self) {
+        for arena in self.arenas.values_mut() {
+            arena.mark_words_mut().fill(0);
+        }
         for object in self.allocated_objects.values_mut() {
             object.marked = false;
         }
-        for object in self.allocated_closures.values_mut() {
+        for object in self.large_closures.values_mut() {
             object.marked = false;
         }
         self.sweep();
@@ -342,11 +547,33 @@ impl ObjectAllocatorInner {
         );
     }
 
+    fn class_has_no_free_slot(&self, size: usize, kind: ArenaKind) -> bool {
+        if size > LARGE_ALLOCATION_THRESHOLD {
+            return false;
+        }
+        let class = size_class_of(size);
+        let slot_count = ARENA_SIZE >> class;
+        let mut saw_arena = false;
+        for arena in self.arenas.values() {
+            if arena.class == class && arena.kind == kind {
+                saw_arena = true;
+                let pos = arena.allocation_pos;
+                if find_first_zero(arena.allocation_words(), pos, slot_count).is_some() {
+                    return false;
+                }
+            }
+        }
+        saw_arena
+    }
+
     pub(crate) fn run_gc(&mut self, contexts: &[&LightWeightThreadContext]) {
+        for arena in self.arenas.values_mut() {
+            arena.mark_words_mut().fill(0);
+        }
         for object in self.allocated_objects.values_mut() {
             object.marked = false;
         }
-        for object in self.allocated_closures.values_mut() {
+        for object in self.large_closures.values_mut() {
             object.marked = false;
         }
         let global_spans = mem::take(&mut self.global_spans);
@@ -365,42 +592,23 @@ impl ObjectAllocatorInner {
         self.sweep();
     }
 
-    /// Marks everything reachable from one goroutine's stack. The live frames
-    /// are walked from the innermost one down to the bottom frame and each one
-    /// is scanned through its own stack map, so only the slots that can hold a
-    /// heap pointer are looked at.
     fn mark_stack(&mut self, context: &LightWeightThreadContext) {
-        // The stack region is not an allocation of the heap: its pages come
-        // from the pager and the goroutine that ran on it gives them back when
-        // it dies, so there is nothing to keep alive here.
         for frame in context.stack_frames() {
             if let Some(get_member_offset_runs) = frame.frame_type.get_member_offset_runs() {
                 let inner = self as *mut ObjectAllocatorInner as *mut ffi::c_void;
                 get_member_offset_runs(mark_typed_visitor, frame.address, inner);
             }
         }
-        // A runtime frame carries no stack map; the pointer words it holds are
-        // registered as roots, each traced exactly as its own slot kind says.
         for root in context.gc_roots() {
             self.mark_typed_offset(root.address, root.size, root.type_id, root.kind);
         }
     }
 
-    fn object_end(&self, object_address: usize) -> Option<usize> {
-        self.allocated_objects
-            .get(&object_address)
-            .map(|object| object.span.ptr as usize + object.span.size)
-    }
-
-    /// Marks a single raw word and everything it resolves to.
     fn mark_raw_word(&mut self, address: usize) {
         let word = unsafe { ptr::read_unaligned(address as *const usize) };
         self.mark_word(word);
     }
 
-    /// Marks the object a raw word points at. A null word is nothing to mark:
-    /// it is not a tagged closure and lies in no allocation, so a span of
-    /// zeros is answered without asking the maps about every one of its words.
     fn mark_word(&mut self, word: usize) {
         if word == 0 {
             return;
@@ -416,17 +624,11 @@ impl ObjectAllocatorInner {
         }
     }
 
-    /// Marks the object a heap word points at, if any. `containing_object`
-    /// covers ordinary allocations and `containing_closure` covers interiors
-    /// of closure objects (a frame's `free_vars` and interface receivers).
     fn resolve_any(&self, address: usize) -> Option<usize> {
         self.containing_object(address)
             .or_else(|| self.containing_closure(address))
     }
 
-    /// Traces a value of Go type `typ` stored at `addr`. This is the typed
-    /// path of the root-driven scan: the type is handed down from stack maps,
-    /// globals, slice headers, map entries and interfaces.
     fn mark_value(&mut self, typ: TypeId, addr: usize) {
         match typ.kind() {
             TypeKind::None | TypeKind::NoPointer => {}
@@ -464,14 +666,6 @@ impl ObjectAllocatorInner {
         }
     }
 
-    /// Marks the value of type `typ` whose storage starts at `address`.
-    ///
-    /// `address` is the target of a pointer, so it is usually but not always
-    /// the base of the allocation holding it: it can also be an interior
-    /// address (`&s.field`, `&a[i]`) or a goroutine stack address. The value
-    /// is read only when it fits inside the allocation it lives in; a value
-    /// that overruns its allocation is not a well-formed object of `typ`, and
-    /// the containing object is already traced through its own descriptor.
     fn mark_value_at(&mut self, address: usize, typ: TypeId) {
         let size = value_size(typ);
         if size == 0 {
@@ -484,25 +678,29 @@ impl ObjectAllocatorInner {
         }
     }
 
-    /// The end of the allocation (heap object, closure, or goroutine stack)
-    /// that contains `address`, if any.
     fn allocation_end(&self, address: usize) -> Option<usize> {
-        if let Some(base) = self.containing_object(address) {
-            return self.object_end(base);
+        let arena_base = address & !(ARENA_SIZE - 1);
+        if let Some(arena) = self.arenas.get(&arena_base) {
+            let slot_size = 1usize << arena.class;
+            let index = (address - arena_base) / slot_size;
+            if index < (ARENA_SIZE >> arena.class) && get_bit(arena.allocation_words(), index) {
+                return Some(arena_base + (index + 1) * slot_size);
+            }
+            return None;
         }
-        if let Some(base) = self.containing_closure(address) {
-            return self
-                .allocated_closures
-                .get(&base)
-                .map(|object| object.span.ptr as usize + object.span.size);
+        if let Some((&base, object)) = self.allocated_objects.range(..=address).next_back()
+            && address < base + object.span.size
+        {
+            return Some(base + object.span.size);
+        }
+        if let Some((&base, object)) = self.large_closures.range(..=address).next_back()
+            && address < base + object.span.size
+        {
+            return Some(base + object.span.size);
         }
         None
     }
 
-    /// Marks the backing buffer of a slice whose header is at `addr` and
-    /// scans the accessible prefix [data, data + len * size(elem)) element by
-    /// element with the element type. Elements beyond `len` are never looked
-    /// at, which is what bounds the scan by the length known at trace time.
     fn mark_slice_header(&mut self, addr: usize, elem_type: TypeId) {
         let word_size = mem::size_of::<usize>();
         let data = unsafe { ptr::read_unaligned(addr as *const usize) };
@@ -510,17 +708,9 @@ impl ObjectAllocatorInner {
         if data == 0 || len == 0 {
             return;
         }
-        // Only a buffer that is an allocation of its own is traced from here.
-        // A buffer inside the goroutine stack is already reached through the
-        // frame slot of the `*[N]T` temporary that made it, a buffer in static
-        // data holds no pointers at all, and a buffer that is no allocation is
-        // a frame slot that was never written (frames are reused), which must
-        // not be interpreted as a slice.
         let Some(object_address) = self.containing_object(data) else {
             return;
         };
-        // Keep the buffer itself alive; its interior is scanned precisely
-        // below, so it does not get a full-span rescan as well.
         self.mark_object_without_interior(object_address);
         let elem_size = if elem_type == TypeId::new_invalid() {
             word_size
@@ -532,9 +722,7 @@ impl ObjectAllocatorInner {
         }
         let span = len.saturating_mul(elem_size);
         let mut end = data.saturating_add(span);
-        // The buffer never holds more than its own allocation, so the
-        // accessible prefix is clamped to it.
-        if let Some(allocation_end) = self.object_end(object_address) {
+        if let Some(allocation_end) = self.allocation_end(object_address) {
             end = end.min(allocation_end);
         }
         if end <= data {
@@ -543,7 +731,6 @@ impl ObjectAllocatorInner {
         self.scan_value_range(elem_type, data, end);
     }
 
-    /// Scans [start, end) as a run of values of type `elem`.
     fn scan_value_range(&mut self, elem: TypeId, start: usize, end: usize) {
         match elem.kind() {
             TypeKind::None | TypeKind::NoPointer => {}
@@ -592,9 +779,6 @@ impl ObjectAllocatorInner {
                 }
             }
             TypeKind::StructArray => {
-                // A struct/array type that has no enumerator has no
-                // pointer-bearing member (one is emitted exactly when it does),
-                // so there is nothing to trace.
                 if let Some(get_member_offset_runs) = elem.get_member_offset_runs() {
                     let step = elem.size();
                     let mut addr = start;
@@ -627,9 +811,6 @@ impl ObjectAllocatorInner {
         };
         self.mark_object(object_address);
         let type_word = unsafe { ptr::read_unaligned((addr + word_size) as *const usize) };
-        // The type word is only a type word if the value really is an
-        // interface; a slot the collector was told holds one can still be
-        // read before it was written, so it is validated before use.
         let concrete = TypeId::from_raw(type_word);
         if concrete.is_valid() {
             self.mark_value_at(receiver, concrete);
@@ -646,7 +827,6 @@ impl ObjectAllocatorInner {
         }
     }
 
-    /// Marks the MapObject referenced by a `map[..]` value at `addr`.
     fn mark_map_slot(&mut self, addr: usize) {
         let word = unsafe { ptr::read_unaligned(addr as *const usize) };
         if word == 0 {
@@ -658,77 +838,117 @@ impl ObjectAllocatorInner {
     }
 
     fn mark_struct_array(&mut self, addr: usize, typ: TypeId) {
-        // A struct/array type with no enumerator holds no pointer, so a value
-        // of it needs no trace.
         if let Some(get_member_offset_runs) = typ.get_member_offset_runs() {
             let inner = self as *mut ObjectAllocatorInner as *mut ffi::c_void;
             get_member_offset_runs(mark_typed_visitor, addr, inner);
         }
     }
 
-    fn mark_object(&mut self, object_address: usize) {
-        let record = match self.lookup_record(object_address) {
-            Some(record) => record,
-            None => return,
-        };
-        if record.marked {
-            return;
-        }
-        self.mark_object_as_marked(object_address);
-        match record.special {
-            SpecialObject::None => {
-                if let Some(bitmap) = record.pointer_bitmap {
-                    let base = record.span.ptr as usize;
-                    let ws = std::mem::size_of::<usize>();
-                    let bits = usize::BITS as usize;
-                    let words = unsafe {
-                        std::slice::from_raw_parts(
-                            bitmap.as_ptr(),
-                            bitmap_word_count(record.span.size),
-                        )
-                    };
-                    let mut i = 0;
-                    while i < record.span.size / ws {
-                        if (words[i / bits] & (1usize << (i % bits))) != 0 {
-                            self.mark_raw_word(base + i * ws);
-                        }
-                        i += 1;
-                    }
-                    return;
-                }
-                // An object with no type descriptor holds no pointer the
-                // collector may interpret: only a descriptor tells it which
-                // words are pointers.
-                if record.type_id.is_valid() {
-                    self.mark_value(record.type_id, record.span.ptr as usize);
-                }
+    fn mark_slot_pointer_bitmap(
+        &mut self,
+        pointer_bitmap: NonNull<[usize; POINTER_BITMAP_WORDS]>,
+        index: usize,
+        slot_size: usize,
+        slot_base: usize,
+    ) {
+        let pointer_bitmap = unsafe { pointer_bitmap.as_ref() };
+        let words = slot_size / WORD_SIZE;
+        let first = index * words;
+        let mut k = 0;
+        while k < words {
+            if get_bit(pointer_bitmap, first + k) {
+                self.mark_raw_word(slot_base + k * WORD_SIZE);
             }
-            SpecialObject::Closure => self.mark_closure_scan(record.span.ptr as usize),
-            SpecialObject::Channel => self.mark_channel_scan(record.span.ptr as usize),
-            SpecialObject::Map => self.mark_map_scan(record.span.ptr as usize),
+            k += 1;
         }
     }
 
-    /// Marks an object without scanning its interior, used when the referrer
-    /// (a slice header) has already traced the exact accessible region.
-    fn mark_object_without_interior(&mut self, object_address: usize) {
-        let record = match self.lookup_record(object_address) {
-            Some(record) => record,
-            None => return,
-        };
-        if record.marked {
+    fn mark_object(&mut self, object_address: usize) {
+        let arena_base = object_address & !(ARENA_SIZE - 1);
+        let arena_info = self.arenas.get(&arena_base).map(|arena| {
+            (
+                arena.class,
+                arena.kind,
+                arena.pointer_bitmap,
+                arena.mark_bitmap,
+            )
+        });
+        if let Some((class, kind, pointer_bitmap, mut mark_bitmap)) = arena_info {
+            let slot_size = 1usize << class;
+            let slot_count = ARENA_SIZE >> class;
+            let index = (object_address - arena_base) / slot_size;
+            if index >= slot_count {
+                return;
+            }
+            {
+                let mark_bitmap = unsafe { mark_bitmap.as_mut() };
+                if get_bit(mark_bitmap, index) {
+                    return;
+                }
+                set_bit(mark_bitmap, index);
+            }
+            let slot_base = arena_base + index * slot_size;
+            if self.allocated_channels.contains_key(&slot_base) {
+                self.mark_channel_scan(slot_base);
+                return;
+            }
+            if self.allocated_maps.contains(&slot_base) {
+                self.mark_map_scan(slot_base);
+                return;
+            }
+            if kind == ArenaKind::Closure {
+                self.mark_closure_scan(slot_base);
+                return;
+            }
+            self.mark_slot_pointer_bitmap(pointer_bitmap, index, slot_size, slot_base);
             return;
         }
-        self.mark_object_as_marked(object_address);
-        // The interior is deliberately not scanned: the caller (a slice
-        // header) has already traced the exact accessible prefix.
-        let _ = record;
+        if let Some(object) = self.large_closures.get_mut(&object_address) {
+            if object.marked {
+                return;
+            }
+            object.marked = true;
+            self.mark_closure_scan(object_address);
+            return;
+        }
+        if let Some(object) = self.allocated_objects.get_mut(&object_address) {
+            if object.marked {
+                return;
+            }
+            object.marked = true;
+            let type_id = object.type_id;
+            if self.allocated_channels.contains_key(&object_address) {
+                self.mark_channel_scan(object_address);
+                return;
+            }
+            if self.allocated_maps.contains(&object_address) {
+                self.mark_map_scan(object_address);
+                return;
+            }
+            if type_id.is_valid() {
+                self.mark_value(type_id, object_address);
+            }
+        }
+    }
+
+    fn mark_object_without_interior(&mut self, object_address: usize) {
+        let arena_base = object_address & !(ARENA_SIZE - 1);
+        if let Some(arena) = self.arenas.get_mut(&arena_base) {
+            let slot_size = 1usize << arena.class;
+            let index = (object_address - arena_base) / slot_size;
+            if index < (ARENA_SIZE >> arena.class) {
+                set_bit(arena.mark_words_mut(), index);
+            }
+            return;
+        }
+        if let Some(object) = self.allocated_objects.get_mut(&object_address) {
+            object.marked = true;
+        } else if let Some(object) = self.large_closures.get_mut(&object_address) {
+            object.marked = true;
+        }
     }
 
     fn mark_closure_scan(&mut self, base: usize) {
-        // ClosureLayout { capture_type: TypeId, func: UserFunction, object_ptrs: WordChunk }
-        // The captured values are copied right after the layout, starting at
-        // base + sizeof(ClosureLayout).
         let capture_type_word = unsafe {
             ptr::read_unaligned(
                 (base + mem::offset_of!(ClosureLayout, capture_type)) as *const usize,
@@ -736,10 +956,6 @@ impl ObjectAllocatorInner {
         };
         let capture_start = base + mem::size_of::<ClosureLayout>();
         let capture_type = TypeId::from_raw(capture_type_word);
-        // The captured values are a single aggregate value, so its descriptor
-        // enumerates them; a descriptor with no enumerator means no captured
-        // value holds a pointer, and an invalid descriptor means there is no
-        // captured value to trace at all.
         if let Some(get_member_offset_runs) = capture_type.get_member_offset_runs() {
             let inner = self as *mut ObjectAllocatorInner as *mut ffi::c_void;
             get_member_offset_runs(mark_typed_visitor, capture_start, inner);
@@ -753,9 +969,6 @@ impl ObjectAllocatorInner {
             .copied()
             .unwrap_or(TypeId::new_invalid());
         let channel = unsafe { &*(base as *const ChannelObject) };
-        // A channel object holds exactly one pointer of its own, the ring array
-        // of a buffered channel; scanning the object's words instead would read
-        // the padding behind `is_closed`.
         if let Some(buffer) = channel.buffer()
             && let Some(object_address) = self.containing_object(buffer)
         {
@@ -773,25 +986,18 @@ impl ObjectAllocatorInner {
     }
 
     fn mark_map_scan(&mut self, base: usize) {
-        // Keep the table the map owns: it is allocated through this allocator
-        // and no other word leads to it. The map records an address inside it,
-        // because the hash table header has bytes that are never written and
-        // scanning the struct itself would read them.
         let map = unsafe { &*(base as *const MapObject) };
         if let Some(address) = map.table_address()
             && let Some(object_address) = self.containing_object(address)
         {
             self.mark_object(object_address);
         }
-        // The boxed keys and values live in their own allocations, so they are
-        // reached through the entries rather than through the table itself.
         map.gc_keep(|key_type, key_address, value_type, value_address| {
             self.mark_box_with_type(key_address, key_type);
             self.mark_box_with_type(value_address, value_type);
         });
     }
 
-    /// Marks a boxed value of type `typ` (resolving `address` to the box).
     fn mark_box_with_type(&mut self, address: usize, typ: TypeId) {
         if let Some(object_address) = self.containing_object(address) {
             self.mark_object(object_address);
@@ -802,80 +1008,83 @@ impl ObjectAllocatorInner {
     }
 
     fn containing_object(&self, address: usize) -> Option<usize> {
-        let (object_address, object) = self.allocated_objects.range(..=address).next_back()?;
-        let object_address = *object_address;
-        if address < object_address + object.span.size {
-            Some(object_address)
-        } else {
-            None
+        let arena_base = address & !(ARENA_SIZE - 1);
+        if let Some(arena) = self.arenas.get(&arena_base) {
+            if arena.kind == ArenaKind::Object {
+                let slot_size = 1usize << arena.class;
+                let index = (address - arena_base) / slot_size;
+                if index < (ARENA_SIZE >> arena.class) && get_bit(arena.allocation_words(), index) {
+                    return Some(arena_base + index * slot_size);
+                }
+            }
+            return None;
         }
-    }
-
-    fn containing_closure(&self, address: usize) -> Option<usize> {
-        let (closure_address, closure) = self.allocated_closures.range(..=address).next_back()?;
-        let closure_address = *closure_address;
-        if address < closure_address + closure.span.size {
-            Some(closure_address)
-        } else {
-            None
-        }
-    }
-
-    fn lookup_record(&self, object_address: usize) -> Option<MarkRecord> {
-        if let Some(object) = self.allocated_objects.get(&object_address) {
-            let special = if self.allocated_channels.contains_key(&object_address) {
-                SpecialObject::Channel
-            } else if self.allocated_maps.contains(&object_address) {
-                SpecialObject::Map
-            } else {
-                SpecialObject::None
-            };
-            return Some(MarkRecord {
-                span: object.span,
-                marked: object.marked,
-                special,
-                type_id: object.type_id,
-                pointer_bitmap: object.pointer_bitmap,
-            });
-        }
-        if let Some(object) = self.allocated_closures.get(&object_address) {
-            return Some(MarkRecord {
-                span: object.span,
-                marked: object.marked,
-                special: SpecialObject::Closure,
-                type_id: object.type_id,
-                pointer_bitmap: object.pointer_bitmap,
-            });
+        if let Some((&base, object)) = self.allocated_objects.range(..=address).next_back()
+            && address < base + object.span.size
+        {
+            return Some(base);
         }
         None
     }
 
-    fn mark_object_as_marked(&mut self, object_address: usize) {
-        if let Some(object) = self.allocated_objects.get_mut(&object_address) {
-            object.marked = true;
-        } else if let Some(object) = self.allocated_closures.get_mut(&object_address) {
-            object.marked = true;
+    fn containing_closure(&self, address: usize) -> Option<usize> {
+        let arena_base = address & !(ARENA_SIZE - 1);
+        if let Some(arena) = self.arenas.get(&arena_base) {
+            if arena.kind == ArenaKind::Closure {
+                let slot_size = 1usize << arena.class;
+                let index = (address - arena_base) / slot_size;
+                if index < (ARENA_SIZE >> arena.class) && get_bit(arena.allocation_words(), index) {
+                    return Some(arena_base + index * slot_size);
+                }
+            }
+            return None;
         }
+        if let Some((&base, object)) = self.large_closures.range(..=address).next_back()
+            && address < base + object.span.size
+        {
+            return Some(base);
+        }
+        None
+    }
+
+    #[cfg(test)]
+    fn contains_object(&self, address: usize) -> bool {
+        if self.allocated_objects.contains_key(&address) {
+            return true;
+        }
+        let arena_base = address & !(ARENA_SIZE - 1);
+        if let Some(arena) = self.arenas.get(&arena_base)
+            && arena.kind == ArenaKind::Object
+        {
+            let slot_size = 1usize << arena.class;
+            if (address - arena_base).is_multiple_of(slot_size) {
+                let index = (address - arena_base) / slot_size;
+                return get_bit(arena.allocation_words(), index);
+            }
+        }
+        false
+    }
+
+    #[cfg(test)]
+    fn contains_closure(&self, address: usize) -> bool {
+        if self.large_closures.contains_key(&address) {
+            return true;
+        }
+        let arena_base = address & !(ARENA_SIZE - 1);
+        if let Some(arena) = self.arenas.get(&arena_base)
+            && arena.kind == ArenaKind::Closure
+        {
+            let slot_size = 1usize << arena.class;
+            if (address - arena_base).is_multiple_of(slot_size) {
+                let index = (address - arena_base) / slot_size;
+                return get_bit(arena.allocation_words(), index);
+            }
+        }
+        false
     }
 }
 
-/// Placeholder so the compiler and readers keep the strided sizes consistent
-/// with the C lay-out: a slice header is 3 words, a string is 2 words.
-/// A snapshot of an allocation taken before it is marked, so that the mark
-/// can continue without holding a borrow of the allocation map.
-#[derive(Clone, Copy)]
-struct MarkRecord {
-    span: Span,
-    marked: bool,
-    special: SpecialObject,
-    type_id: TypeId,
-    pointer_bitmap: Option<NonNull<usize>>,
-}
-
 impl ObjectAllocatorInner {
-    /// Walks one frame's defer stack and traces each entry: the function word
-    /// it holds and the argument words it owns, the latter through the
-    /// enumerator the generated code installed for that call site.
     fn mark_defer_stack_slot(&mut self, offset: usize) {
         let mut word = unsafe { ptr::read_unaligned(offset as *const usize) };
         while word != 0 {
@@ -963,122 +1172,11 @@ impl ObjectAllocatorInner {
                 }
             }
             GC_SLOT_NO_POINTER => {}
-            // Every slot kind the front end emits is handled above: an unknown
-            // one is a bug, and guessing at its layout could trace a word that
-            // is not a pointer.
             _ => panic!("unknown GC slot kind: {}", kind),
         }
     }
 }
 
-/// The word buffer a pointer bitmap is built into. It has one `usize` of bits
-/// per `usize::BITS` words of the object, so bit `n` (n = byte offset / word
-/// size) records whether word `n` holds a pointer the collector must trace.
-#[repr(C)]
-struct PointerBitmapBuilder {
-    words: *mut usize,
-    count: usize,
-}
-
-/// Number of `usize` words needed to hold one bit per word of a `size`-byte
-/// object.
-fn bitmap_word_count(size: usize) -> usize {
-    (size / mem::size_of::<usize>()).div_ceil(usize::BITS as usize)
-}
-
-/// Builds the pointer bitmap of an object of `type_id` and `size` bytes. The
-/// bitmap is a fresh allocation the caller owns; it is `None` when the type
-/// carries no enumerator or reports no pointer word at all.
-fn build_pointer_bitmap(type_id: TypeId, size: usize) -> Option<NonNull<usize>> {
-    let runs = type_id.get_member_offset_runs()?;
-    let count = bitmap_word_count(size);
-    if count == 0 {
-        return None;
-    }
-    let mut words = vec![0usize; count].into_boxed_slice();
-    let mut builder = PointerBitmapBuilder {
-        words: words.as_mut_ptr(),
-        count,
-    };
-    runs(
-        pointer_bitmap_visitor,
-        0,
-        &mut builder as *mut PointerBitmapBuilder as *mut ffi::c_void,
-    );
-    if words.iter().all(|word| *word == 0) {
-        return None;
-    }
-    NonNull::new(Box::into_raw(words) as *mut usize)
-}
-
-/// Hands a bitmap built by `build_pointer_bitmap` back.
-fn free_pointer_bitmap(bitmap: NonNull<usize>, size: usize) {
-    let slice = ptr::slice_from_raw_parts_mut(bitmap.as_ptr(), bitmap_word_count(size));
-    unsafe {
-        drop(Box::from_raw(slice));
-    }
-}
-
-/// Records, in the bitmap being built, every word the enumerator reports as
-/// pointer-bearing. The builder's `count` bounds every write.
-extern "C" fn pointer_bitmap_visitor(
-    offset: usize,
-    size: usize,
-    _typ: TypeId,
-    kind: i32,
-    arg: *mut ffi::c_void,
-) {
-    let builder = unsafe { &mut *(arg as *mut PointerBitmapBuilder) };
-    let word_size = mem::size_of::<usize>();
-    let bits = usize::BITS as usize;
-    let set = |addr: usize| {
-        let bit = addr / word_size;
-        let index = bit / bits;
-        if index < builder.count {
-            let word = unsafe { &mut *builder.words.add(index) };
-            *word |= 1usize << (bit % bits);
-        }
-    };
-    let end = offset.saturating_add(size);
-    match kind {
-        GC_SLOT_POINTER | GC_SLOT_FUNCTION | GC_SLOT_MAP => {
-            let mut addr = offset;
-            while addr + mem::size_of::<usize>() <= end {
-                set(addr);
-                addr += mem::size_of::<usize>();
-            }
-        }
-        GC_SLOT_SLICE => {
-            let mut addr = offset;
-            while addr + SLICE_HEADER_SIZE <= end {
-                set(addr);
-                addr += SLICE_HEADER_SIZE;
-            }
-        }
-        GC_SLOT_INTERFACE => {
-            let mut addr = offset;
-            while addr + mem::size_of::<Interface>() <= end {
-                set(addr);
-                set(addr + mem::size_of::<usize>());
-                addr += mem::size_of::<Interface>();
-            }
-        }
-        GC_SLOT_STRING => {
-            let mut addr = offset;
-            while addr + STRING_SIZE <= end {
-                set(addr);
-                addr += STRING_SIZE;
-            }
-        }
-        GC_SLOT_DEFER_STACK | GC_SLOT_FREE_VARS => set(offset),
-        GC_SLOT_NO_POINTER => {}
-        _ => panic!("unknown GC slot kind: {}", kind),
-    }
-}
-
-/// Visitor passed to a generated get_member_offset_runs function: it marks the
-/// reported typed slot. `kind` is a GCSlotKind and `typ` its accompanying
-/// TypeId (the pointee for pointer runs, the element type for slice runs).
 extern "C" fn mark_typed_visitor(
     offset: usize,
     size: usize,
@@ -1090,8 +1188,6 @@ extern "C" fn mark_typed_visitor(
     inner.mark_typed_offset(offset, size, typ, kind);
 }
 
-// Keep the compiler honest about the visitor signature (a null fn item). The
-// real signature is declared in type_id.rs and mirrored in predefined.h.
 const _: TypeOffsetVisitor = mark_typed_visitor;
 
 #[derive(Clone)]
@@ -1114,6 +1210,15 @@ impl ObjectAllocatorPtr {
         unsafe { &mut *self.0 }.allocate_map(size)
     }
 
+    pub(crate) fn class_has_no_free_slot(&self, size: usize, closure: bool) -> bool {
+        let kind = if closure {
+            ArenaKind::Closure
+        } else {
+            ArenaKind::Object
+        };
+        unsafe { &*self.0 }.class_has_no_free_slot(size, kind)
+    }
+
     pub(crate) fn register_global_object(&self, address: *mut (), size: usize, type_id: TypeId) {
         unsafe { &mut *self.0 }.register_global_object(address, size, type_id);
     }
@@ -1134,16 +1239,12 @@ impl ObjectAllocatorPtr {
 
     #[cfg(test)]
     pub(crate) fn contains(&self, ptr: *mut ()) -> bool {
-        unsafe { &*self.0 }
-            .allocated_objects
-            .contains_key(&(ptr as usize))
+        unsafe { &*self.0 }.contains_object(ptr as usize)
     }
 
     #[cfg(test)]
     pub(crate) fn contains_closure(&self, ptr: *mut ()) -> bool {
-        unsafe { &*self.0 }
-            .allocated_closures
-            .contains_key(&(ptr as usize))
+        unsafe { &*self.0 }.contains_closure(ptr as usize)
     }
 
     #[cfg(test)]
@@ -1159,7 +1260,7 @@ impl ObjectAllocatorPtr {
 
 unsafe impl Allocator for ObjectAllocatorPtr {
     fn allocate(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
-        let ptr = if layout.align() <= ALLOCATION_ALIGNMENT {
+        let ptr = if layout.align() <= WORD_SIZE {
             let ptr = self.allocate(layout.size(), TypeId::new_invalid());
             if ptr.is_null() {
                 return Err(AllocError);
@@ -1637,6 +1738,21 @@ mod tests {
         assert!(!ptr.is_null());
         assert!(allocator.ptr().contains(ptr));
         assert!(!allocator.ptr().contains_closure(ptr));
+    }
+
+    #[test]
+    fn test_arena_bitmaps_share_one_pager_allocation_and_are_freed_together() {
+        let pager = Rc::new(Pager::new());
+        let allocator = ObjectAllocator::new(pager.clone());
+        let size = 8;
+        let ptr = allocator.ptr().allocate(size, TypeId::new_invalid());
+        assert!(!ptr.is_null());
+        assert_eq!(
+            pager.allocated_pages(),
+            ARENA_PAGES + bitmap_pages_for_class(size_class_of(size))
+        );
+        allocator.ptr().run_gc(&[]);
+        assert_eq!(pager.allocated_pages(), 0);
     }
 
     #[test]

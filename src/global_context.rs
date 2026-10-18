@@ -176,6 +176,13 @@ mod tests {
             );
             ptr::write(kept as *mut u8, 0xAB);
         }
+        ctx.push_gc_root(
+            root as usize,
+            unsafe { root.add(mem::size_of::<StackFrameCommon>()) as usize },
+            mem::size_of::<usize>(),
+            TypeId::new_invalid(),
+            crate::type_id::GC_SLOT_POINTER,
+        );
         for _ in 0..10 {
             let ptr = ctx.allocate(65536, TypeId::new_invalid());
             assert!(!ptr.is_null());
@@ -291,7 +298,7 @@ mod tests {
     #[test]
     fn test_pager_access() {
         let gc = make_gc();
-        let ptr = gc.process(|gc| gc.pager().allocate(1));
+        let ptr = gc.process(|gc| gc.pager().allocate(1, None));
         assert!(!ptr.is_null());
         gc.process(|gc| gc.pager().deallocate(ptr, 1));
     }

@@ -6,6 +6,7 @@ use std::ptr;
 pub(crate) const PAGE_SIZE: usize = 4096;
 
 /// The number of guard pages a region carries, one below it and one above it.
+#[cfg(not(miri))]
 const GUARD_PAGES: usize = 2;
 
 /// Allocates and deallocates pages of `PAGE_SIZE` bytes. A region of pages has
@@ -34,44 +35,92 @@ impl Pager {
 
     /// Maps `num_pages` writable pages between two guard pages and returns the
     /// address of the first page that can be used.
-    pub(crate) fn allocate(&self, num_pages: usize) -> *mut () {
-        unsafe {
-            #[cfg(miri)]
-            let protection = libc::PROT_READ | libc::PROT_WRITE;
-            #[cfg(not(miri))]
-            let protection = libc::PROT_NONE;
-
-            let stack_area_addr = libc::mmap(
-                ptr::null_mut(),
-                PAGE_SIZE * (num_pages + GUARD_PAGES),
-                protection,
-                libc::MAP_ANONYMOUS | libc::MAP_PRIVATE,
-                -1,
-                0,
-            );
-            if stack_area_addr == libc::MAP_FAILED {
-                let message = ffi::CString::new("allocate stack area").unwrap();
-                libc::perror(message.as_ptr());
-                panic!();
+    pub(crate) fn allocate(&self, num_pages: usize, align: Option<usize>) -> *mut () {
+        #[cfg(miri)]
+        let region = {
+            let align = align.unwrap_or(PAGE_SIZE).max(PAGE_SIZE);
+            let total_pages = num_pages + align / PAGE_SIZE;
+            unsafe {
+                let base_addr = libc::mmap(
+                    ptr::null_mut(),
+                    PAGE_SIZE * total_pages,
+                    libc::PROT_READ | libc::PROT_WRITE,
+                    libc::MAP_ANONYMOUS | libc::MAP_PRIVATE,
+                    -1,
+                    0,
+                );
+                if base_addr == libc::MAP_FAILED {
+                    let message = ffi::CString::new("allocate region").unwrap();
+                    libc::perror(message.as_ptr());
+                    panic!();
+                }
+                let usable_start = ((base_addr as usize + PAGE_SIZE + align - 1) & !(align - 1))
+                    as *mut libc::c_void;
+                let metadata = (usable_start as usize - PAGE_SIZE) as *mut usize;
+                metadata.write(base_addr as usize);
+                metadata.add(1).write(total_pages);
+                usable_start
             }
-            let stack_start_addr = ((stack_area_addr as usize) + PAGE_SIZE) as *mut libc::c_void;
-            #[cfg(not(miri))]
-            {
+        };
+        #[cfg(not(miri))]
+        let region = {
+            let (total_pages, align) = match align {
+                None => (num_pages + GUARD_PAGES, PAGE_SIZE),
+                Some(align) => {
+                    assert!(align != 0, "an aligned region needs a nonzero alignment");
+                    assert!(
+                        align.is_power_of_two(),
+                        "an aligned region needs a power-of-two alignment"
+                    );
+                    assert_eq!(
+                        align % PAGE_SIZE,
+                        0,
+                        "an aligned region needs an alignment that is a multiple of the page size"
+                    );
+                    (num_pages + GUARD_PAGES + align / PAGE_SIZE - 1, align)
+                }
+            };
+            unsafe {
+                let base_addr = libc::mmap(
+                    ptr::null_mut(),
+                    PAGE_SIZE * total_pages,
+                    libc::PROT_NONE,
+                    libc::MAP_ANONYMOUS | libc::MAP_PRIVATE,
+                    -1,
+                    0,
+                );
+                if base_addr == libc::MAP_FAILED {
+                    let message = ffi::CString::new("allocate region").unwrap();
+                    libc::perror(message.as_ptr());
+                    panic!();
+                }
+                let usable_start = ((base_addr as usize + PAGE_SIZE + align - 1) & !(align - 1))
+                    as *mut libc::c_void;
+                let lower_slack = usable_start as usize - base_addr as usize - PAGE_SIZE;
+                if lower_slack > 0 {
+                    libc::munmap(base_addr, lower_slack);
+                }
+                let guard_end = usable_start as usize + PAGE_SIZE * (num_pages + 1);
+                let map_end = base_addr as usize + PAGE_SIZE * total_pages;
+                if guard_end < map_end {
+                    libc::munmap(guard_end as *mut libc::c_void, map_end - guard_end);
+                }
                 let ret = libc::mprotect(
-                    stack_start_addr,
+                    usable_start,
                     PAGE_SIZE * num_pages,
                     libc::PROT_READ | libc::PROT_WRITE,
                 );
                 if ret != 0 {
-                    let message = ffi::CString::new("stack protection mode").unwrap();
+                    let message = ffi::CString::new("region protection mode").unwrap();
                     libc::perror(message.as_ptr());
                     panic!();
                 }
+                usable_start
             }
-            self.allocated_pages
-                .set(self.allocated_pages.get() + num_pages);
-            stack_start_addr as *mut ()
-        }
+        };
+        self.allocated_pages
+            .set(self.allocated_pages.get() + num_pages);
+        region as *mut ()
     }
 
     /// Gives the region of `num_pages` pages returned by `allocate` back to the
@@ -83,11 +132,19 @@ impl Pager {
             .get()
             .checked_sub(num_pages)
             .expect("a region of pages was given back twice");
-        self.allocated_pages.set(remaining);
-        let base_addr = (ptr as usize - PAGE_SIZE) as *mut libc::c_void;
+        #[cfg(miri)]
         unsafe {
+            let metadata = (ptr as usize - PAGE_SIZE) as *const usize;
+            let base_addr = metadata.read();
+            let total_pages = metadata.add(1).read();
+            libc::munmap(base_addr as *mut libc::c_void, PAGE_SIZE * total_pages);
+        }
+        #[cfg(not(miri))]
+        unsafe {
+            let base_addr = (ptr as usize - PAGE_SIZE) as *mut libc::c_void;
             libc::munmap(base_addr, PAGE_SIZE * (num_pages + GUARD_PAGES));
         }
+        self.allocated_pages.set(remaining);
     }
 
     /// The number of pages handed out and not given back yet.
@@ -104,7 +161,7 @@ mod tests {
     #[test]
     fn test_allocate_returns_writable_pages() {
         let pager = Pager::new();
-        let ptr = pager.allocate(2);
+        let ptr = pager.allocate(2, None);
         assert!(!ptr.is_null());
         assert_eq!(ptr as usize % PAGE_SIZE, 0);
         unsafe {
@@ -135,7 +192,7 @@ mod tests {
         assert!(pid >= 0, "fork failed");
         if pid == 0 {
             let pager = Pager::new();
-            let ptr = pager.allocate(num_pages);
+            let ptr = pager.allocate(num_pages, None);
             pager.deallocate(ptr, num_pages);
             let ret = unsafe {
                 libc::mprotect(
@@ -184,7 +241,7 @@ mod tests {
     #[cfg(not(miri))]
     fn test_allocate_guards_the_pages_above_and_below_the_region() {
         let pager = Pager::new();
-        let region = pager.allocate(1) as usize;
+        let region = pager.allocate(1, None) as usize;
         assert!(
             write_traps((region - 1) as *mut u8),
             "the page below the region is writable"
@@ -203,8 +260,8 @@ mod tests {
     fn test_allocate_counts_the_pages_and_deallocate_gives_them_back() {
         let pager = Pager::new();
         assert_eq!(pager.allocated_pages(), 0);
-        let first = pager.allocate(2);
-        let second = pager.allocate(3);
+        let first = pager.allocate(2, None);
+        let second = pager.allocate(3, None);
         assert_eq!(pager.allocated_pages(), 5);
         pager.deallocate(first, 2);
         assert_eq!(pager.allocated_pages(), 3);
@@ -216,17 +273,83 @@ mod tests {
     #[should_panic(expected = "given back twice")]
     fn test_deallocate_refuses_more_pages_than_were_allocated() {
         let pager = Pager::new();
-        let ptr = pager.allocate(1);
+        let ptr = pager.allocate(1, None);
         pager.deallocate(ptr, 2);
     }
 
     #[test]
     fn test_allocate_hands_out_distinct_regions() {
         let pager = Pager::new();
-        let first = pager.allocate(1);
-        let second = pager.allocate(1);
+        let first = pager.allocate(1, None);
+        let second = pager.allocate(1, None);
         assert_ne!(first, second);
         pager.deallocate(first, 1);
         pager.deallocate(second, 1);
+    }
+
+    #[test]
+    fn test_allocate_with_alignment_returns_aligned_writable_pages() {
+        let pager = Pager::new();
+        let align = 4 * PAGE_SIZE;
+        let ptr = pager.allocate(2, Some(align));
+        assert!(!ptr.is_null());
+        assert_eq!(ptr as usize % align, 0);
+        unsafe {
+            (ptr as *mut usize).write(1234);
+            assert_eq!((ptr as *const usize).read(), 1234);
+            let last = (ptr as *mut u8).add(PAGE_SIZE) as *mut usize;
+            last.write(5678);
+            assert_eq!(last.read(), 5678);
+        }
+        pager.deallocate(ptr, 2);
+    }
+
+    #[test]
+    fn test_allocate_with_alignment_counts_the_pages_and_deallocate_gives_them_back() {
+        let pager = Pager::new();
+        assert_eq!(pager.allocated_pages(), 0);
+        let first = pager.allocate(3, Some(8 * PAGE_SIZE));
+        let second = pager.allocate(1, Some(PAGE_SIZE));
+        assert_eq!(pager.allocated_pages(), 4);
+        pager.deallocate(first, 3);
+        assert_eq!(pager.allocated_pages(), 1);
+        pager.deallocate(second, 1);
+        assert_eq!(pager.allocated_pages(), 0);
+    }
+
+    #[test]
+    fn test_allocate_with_alignment_hands_out_distinct_regions() {
+        let pager = Pager::new();
+        let first = pager.allocate(1, Some(PAGE_SIZE));
+        let second = pager.allocate(1, Some(PAGE_SIZE));
+        assert_ne!(first, second);
+        pager.deallocate(first, 1);
+        pager.deallocate(second, 1);
+    }
+
+    #[test]
+    #[should_panic(expected = "given back twice")]
+    fn test_deallocate_refuses_an_aligned_region_twice() {
+        let pager = Pager::new();
+        let ptr = pager.allocate(1, Some(PAGE_SIZE));
+        pager.deallocate(ptr, 1);
+        pager.deallocate(ptr, 1);
+    }
+
+    #[test]
+    #[cfg(not(miri))]
+    fn test_allocate_with_alignment_guards_the_region() {
+        let pager = Pager::new();
+        let region = pager.allocate(1, Some(4 * PAGE_SIZE)) as usize;
+        assert!(
+            write_traps((region - 1) as *mut u8),
+            "the page below the aligned region is writable"
+        );
+        assert!(
+            write_traps((region + PAGE_SIZE) as *mut u8),
+            "the page above the aligned region is writable"
+        );
+        assert!(!write_traps(region as *mut u8));
+        pager.deallocate(region as *mut (), 1);
     }
 }
