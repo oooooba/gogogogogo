@@ -35,7 +35,7 @@ jobs:
           cache-dependency-path: 'cgen/go.sum' 
 
       - name: Install Go tool
-        run: go install golang.org/x/tools/gopls@latest
+        run: go install golang.org/x/tools/gopls@v0.23.0
 
       - name: Install Go packages
         run: go mod tidy
