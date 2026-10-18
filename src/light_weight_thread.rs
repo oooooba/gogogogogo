@@ -197,21 +197,21 @@ impl LightWeightThreadContext {
     }
 
     pub(crate) fn allocate(&mut self, size: usize, type_id: TypeId) -> *mut () {
-        self.allocate_with(size, false, |allocator| allocator.allocate(size, type_id))
+        self.allocate_with(size, |allocator| allocator.allocate(size, type_id))
     }
 
     pub(crate) fn allocate_closure(&mut self, size: usize) -> *mut () {
-        self.allocate_with(size, true, |allocator| allocator.allocate_closure(size))
+        self.allocate_with(size, |allocator| allocator.allocate_closure(size))
     }
 
     pub(crate) fn allocate_channel(&mut self, size: usize, elem_type: TypeId) -> *mut () {
-        self.allocate_with(size, false, |allocator| {
+        self.allocate_with(size, |allocator| {
             allocator.allocate_channel(size, elem_type)
         })
     }
 
     pub(crate) fn allocate_map(&mut self, size: usize) -> *mut () {
-        self.allocate_with(size, false, |allocator| allocator.allocate_map(size))
+        self.allocate_with(size, |allocator| allocator.allocate_map(size))
     }
 
     /// Runs a collection synchronously, with this goroutine as an additional
@@ -224,12 +224,11 @@ impl LightWeightThreadContext {
     fn allocate_with(
         &mut self,
         size: usize,
-        closure: bool,
         allocate: impl Fn(ObjectAllocatorPtr) -> *mut (),
     ) -> *mut () {
         self.global_context().process(|mut global_context| {
             let allocator = global_context.allocator();
-            if allocator.class_has_no_free_slot(size, closure) {
+            if allocator.class_has_no_free_slot(size) {
                 global_context.run_gc(&*self);
             }
             let ptr = allocate(allocator.clone());
