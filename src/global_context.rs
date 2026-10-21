@@ -171,14 +171,15 @@ mod tests {
         assert!(!kept.is_null());
         unsafe {
             ptr::write(
-                root.add(mem::size_of::<StackFrameCommon>()) as *mut usize,
-                kept as usize,
+                root.add(mem::size_of::<StackFrameCommon>())
+                    .cast::<*mut ()>(),
+                kept,
             );
             ptr::write(kept as *mut u8, 0xAB);
         }
         ctx.push_gc_root(
             root as usize,
-            unsafe { root.add(mem::size_of::<StackFrameCommon>()) as usize },
+            unsafe { root.add(mem::size_of::<StackFrameCommon>()) },
             mem::size_of::<usize>(),
             TypeId::new_invalid(),
             crate::type_id::GC_SLOT_POINTER,
@@ -225,7 +226,7 @@ mod tests {
         );
         ctx.push_gc_root(
             frame as usize,
-            frame as usize + mem::size_of::<StackFrameCommon>(),
+            frame.with_addr(frame.addr() + mem::size_of::<StackFrameCommon>()),
             chunk_count * mem::size_of::<usize>(),
             TypeId::new_invalid(),
             crate::type_id::GC_SLOT_POINTER,

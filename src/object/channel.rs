@@ -200,9 +200,9 @@ impl ChannelObject {
     /// channel (which has no array of its own). The collector keeps this
     /// allocation alive through it; the rest of a channel object holds no
     /// pointers, so it does not have to be scanned word by word.
-    pub(crate) fn buffer(&self) -> Option<usize> {
+    pub(crate) fn buffer(&self) -> Option<*mut u8> {
         match &self.channel_type {
-            ChannelType::Buffered(channel) => Some(channel.buffer as usize),
+            ChannelType::Buffered(channel) => Some(channel.buffer.cast::<u8>()),
             ChannelType::Rendezvous(_) => None,
         }
     }

@@ -282,7 +282,7 @@ mod tests {
     }
 
     fn test_type_id() -> TypeId {
-        TypeId::from_raw(test_type_info() as *const TypeInfo as usize)
+        TypeId::from_ptr(test_type_info())
     }
 
     fn create_ctx() -> (

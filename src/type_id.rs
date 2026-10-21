@@ -40,14 +40,14 @@ pub(crate) const GC_SLOT_MAP: i32 = 8;
 /// C signature `TypeOffsetVisitor`:
 /// `void (*)(uintptr_t offset, uintptr_t size, TypeId type, int kind, void *arg)`.
 pub(crate) type TypeOffsetVisitor =
-    extern "C" fn(offset: usize, size: usize, typ: TypeId, kind: i32, arg: *mut ffi::c_void);
+    extern "C" fn(offset: *mut u8, size: usize, typ: TypeId, kind: i32, arg: *mut ffi::c_void);
 
 /// C signature of the per-type enumerator function stored in `TypeInfo`: it
 /// reports every pointer-bearing member of an object by calling `visit` with
 /// `base`-relative member information, mirroring the generated
 /// `get_member_offset_runs_<type>` functions.
 pub(crate) type GetMemberOffsetRunsFunc =
-    extern "C" fn(visit: TypeOffsetVisitor, base: usize, arg: *mut ffi::c_void);
+    extern "C" fn(visit: TypeOffsetVisitor, base: *mut u8, arg: *mut ffi::c_void);
 
 /// The layout class of a value of a type, carried in `TypeInfo`. It tells the
 /// collector how to trace a value of this type when it is reached during a
@@ -95,22 +95,32 @@ pub(crate) const TYPE_INFO_SIZE: usize = std::mem::size_of::<TypeInfo>();
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(C)]
-pub(crate) struct TypeId(usize);
+pub(crate) struct TypeId(*const TypeInfo);
+
+// A TypeId only ever points at a TypeInfo (or is null), and TypeInfo itself
+// is Send+Sync, so sharing or moving the pointer around is safe.
+unsafe impl Send for TypeId {}
+unsafe impl Sync for TypeId {}
 
 impl TypeId {
     pub(crate) fn new_invalid() -> Self {
-        TypeId(0)
+        TypeId(std::ptr::null())
     }
 
-    /// The raw word representation of this TypeId (the `TypeInfo` pointer), the
-    /// inverse of `from_raw`.
+    /// A type descriptor the caller already holds as a pointer; the pointer's
+    /// provenance is what later dereferences of the descriptor rely on.
+    pub(crate) fn from_ptr(info: *const TypeInfo) -> Self {
+        TypeId(info)
+    }
+
+    pub(crate) fn is_null(self) -> bool {
+        self.0.is_null()
+    }
+
+    /// The raw word representation of this TypeId (the `TypeInfo` pointer).
     #[cfg(test)]
     pub(crate) fn to_raw(self) -> usize {
-        self.0
-    }
-
-    pub(crate) fn from_raw(val: usize) -> Self {
-        TypeId(val)
+        self.0.expose_provenance()
     }
 
     /// Whether the word really is a type descriptor. A value that the
@@ -121,14 +131,14 @@ impl TypeId {
     /// sit at any address, and a misaligned typed dereference is undefined
     /// behaviour (and aborts a debug build).
     pub(crate) fn is_valid(&self) -> bool {
-        if self.0 == 0 || !self.0.is_multiple_of(mem::align_of::<u64>()) {
+        if self.0.is_null() || !self.0.addr().is_multiple_of(mem::align_of::<u64>()) {
             return false;
         }
-        unsafe { std::ptr::read_unaligned(self.0 as *const u64) == TYPE_INFO_MAGIC }
+        unsafe { std::ptr::read_unaligned(self.0.cast::<u64>()) == TYPE_INFO_MAGIC }
     }
 
     fn type_info(&self) -> &TypeInfo {
-        unsafe { &*(self.0 as *const TypeInfo) }
+        unsafe { &*self.0 }
     }
 
     pub fn interface_table(&self) -> &[InterfaceTableEntry] {
@@ -144,7 +154,7 @@ impl TypeId {
     /// The layout class of values of this type; `TypeKind::None` for the
     /// invalid TypeId 0 and for values the collector must not interpret.
     pub(crate) fn kind(&self) -> TypeKind {
-        if self.0 == 0 {
+        if self.0.is_null() {
             return TypeKind::None;
         }
         match self.type_info().kind {
@@ -163,14 +173,14 @@ impl TypeId {
     /// The pointee / element type of Pointer and Slice kinds; TypeId 0 when
     /// the type carries no pointee or the TypeId is invalid.
     pub(crate) fn pointed_to(&self) -> TypeId {
-        if self.0 == 0 {
-            return TypeId(0);
+        if self.0.is_null() {
+            return TypeId(std::ptr::null());
         }
         self.type_info().pointed_to
     }
 
     pub(crate) fn get_member_offset_runs(&self) -> Option<GetMemberOffsetRunsFunc> {
-        if self.0 == 0 {
+        if self.0.is_null() {
             return None;
         }
         self.type_info().get_member_offset_runs
@@ -298,7 +308,7 @@ impl FakeTypeInfo {
         }
         let holder = leaked as *mut [u64];
         FakeTypeInfo {
-            tid: TypeId::from_raw(leaked.as_ptr() as usize),
+            tid: TypeId::from_ptr(leaked.as_ptr().cast::<TypeInfo>()),
             holder,
         }
     }
@@ -324,34 +334,34 @@ mod tests {
     #[test]
     fn test_type_id_new_invalid() {
         let id = TypeId::new_invalid();
-        assert_eq!(id.0, 0);
+        assert!(id.0.is_null());
     }
 
     #[test]
     fn test_type_id_from_raw_roundtrip() {
-        let id = TypeId::from_raw(42);
-        assert_eq!(id.0, 42);
+        let id = TypeId::from_ptr(std::ptr::without_provenance::<TypeInfo>(42));
+        assert_eq!(id.to_raw(), 42);
     }
 
     #[test]
     fn test_type_id_clone_copy() {
-        let id = TypeId::from_raw(99);
+        let id = TypeId::from_ptr(std::ptr::without_provenance::<TypeInfo>(99));
         let id2 = id;
         assert_eq!(id, id2);
     }
 
     #[test]
     fn test_type_id_partial_eq() {
-        let a = TypeId::from_raw(10);
-        let b = TypeId::from_raw(10);
-        let c = TypeId::from_raw(20);
+        let a = TypeId::from_ptr(std::ptr::without_provenance::<TypeInfo>(10));
+        let b = TypeId::from_ptr(std::ptr::without_provenance::<TypeInfo>(10));
+        let c = TypeId::from_ptr(std::ptr::without_provenance::<TypeInfo>(20));
         assert_eq!(a, b);
         assert_ne!(a, c);
     }
 
     #[test]
     fn test_type_id_debug() {
-        let id = TypeId::from_raw(7);
+        let id = TypeId::from_ptr(std::ptr::without_provenance::<TypeInfo>(7));
         let debug_str = format!("{:?}", id);
         assert!(debug_str.contains("7"));
     }
@@ -396,7 +406,7 @@ mod tests {
 
     extern "C" fn test_probe_get_member_offset_runs(
         _visit: TypeOffsetVisitor,
-        _base: usize,
+        _base: *mut u8,
         _arg: *mut std::ffi::c_void,
     ) {
     }
@@ -435,7 +445,7 @@ mod tests {
         }
         let leaked: &'static mut [u64] = Box::leak(raw);
         let blob = leaked as *mut [u64];
-        let tid = TypeId::from_raw(leaked.as_ptr() as usize);
+        let tid = TypeId::from_ptr(leaked.as_ptr().cast::<TypeInfo>());
         assert_eq!(tid.name().to_str().unwrap(), "IntObject");
         unsafe {
             drop(Box::from_raw(blob));

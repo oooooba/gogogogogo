@@ -217,7 +217,7 @@ mod tests {
     }
 
     fn test_type_id() -> TypeId {
-        TypeId::from_raw(test_type_info() as *const TypeInfo as usize)
+        TypeId::from_ptr(test_type_info())
     }
 
     fn create_ctx() -> (
@@ -337,7 +337,7 @@ mod tests {
             pointed_to: TypeId::new_invalid(),
             get_member_offset_runs: None,
         });
-        TypeId::from_raw(info as *const TypeInfo as usize)
+        TypeId::from_ptr(info)
     }
 
     fn test_interface() -> (Interface, isize) {
@@ -414,7 +414,10 @@ mod tests {
     fn test_gox5_interface_invoke_pushes_callee_frame_with_args() {
         let (mut ctx, _gc) = create_ctx();
         let (interface, _receiver) = test_interface();
-        let args: Vec<*const ()> = vec![0x1111 as *const (), 0x2222 as *const ()];
+        let args: Vec<*const ()> = vec![
+            std::ptr::without_provenance::<()>(0x1111),
+            std::ptr::without_provenance::<()>(0x2222),
+        ];
         let resume_func = push_invoke_frame(&mut ctx, &interface, None, &args);
 
         let result = gox5_interface_invoke(&mut ctx);
@@ -471,7 +474,7 @@ mod tests {
         let locals = unsafe { root_frame.add(mem::size_of::<StackFrameCommon>()) as *mut usize };
         ctx.push_gc_root(
             root_frame as usize,
-            locals as usize,
+            locals.cast::<u8>(),
             capacity * mem::size_of::<usize>(),
             TypeId::new_invalid(),
             crate::type_id::GC_SLOT_POINTER,
@@ -496,7 +499,7 @@ mod tests {
         assert_eq!(total_before, MAX_TOTAL_ALLOCATED_SIZE);
 
         let (interface, _receiver) = test_interface();
-        let args: Vec<*const ()> = vec![0x3333 as *const ()];
+        let args: Vec<*const ()> = vec![std::ptr::without_provenance::<()>(0x3333)];
         push_invoke_frame(&mut ctx, &interface, None, &args);
 
         let result = gox5_interface_invoke(&mut ctx);
