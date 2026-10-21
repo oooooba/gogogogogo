@@ -1,8 +1,11 @@
 use std::ffi;
 use std::mem;
+use std::ptr;
 use std::slice;
+use std::sync::OnceLock;
 
 use super::ObjectPtr;
+use crate::ClosureLayout;
 use crate::object::interface::InterfaceTableEntry;
 use crate::object::string::StringObject;
 
@@ -89,6 +92,53 @@ pub(crate) struct TypeInfo {
 
 unsafe impl Send for TypeInfo {}
 unsafe impl Sync for TypeInfo {}
+
+/// The collector-side descriptor of a closure object. A closure's capture
+/// layout is not implied by its size: `ClosureLayout::capture_type` names the
+/// `FreeVars` struct stored behind the header, so the member runs read that
+/// word back from the object and delegate to it. Arena-allocated closures bake
+/// their pointer bits from the capture type at allocation time instead; this
+/// descriptor is what traces a closure held in the object map.
+pub(crate) fn closure_type() -> TypeId {
+    static INSTANCE: OnceLock<TypeInfo> = OnceLock::new();
+    static CLOSURE_NAME: [u8; 8] = *b"closure\0";
+    let info = INSTANCE.get_or_init(|| TypeInfo {
+        gc_magic: TYPE_INFO_MAGIC,
+        name: StringObject::new(CLOSURE_NAME.as_ptr(), 7),
+        num_methods: 0,
+        interface_table: ptr::null(),
+        is_equal: closure_is_equal,
+        hash: closure_hash,
+        // Variable-sized: never stepped as an array element.
+        size: 0,
+        kind: TypeKind::StructArray as i32,
+        pointed_to: TypeId::new_invalid(),
+        get_member_offset_runs: Some(closure_member_runs),
+    });
+    TypeId::from_ptr(info)
+}
+
+extern "C" fn closure_is_equal(_lhs: ObjectPtr, _rhs: ObjectPtr) -> bool {
+    false
+}
+
+extern "C" fn closure_hash(_object: ObjectPtr) -> usize {
+    0
+}
+
+extern "C" fn closure_member_runs(visit: TypeOffsetVisitor, base: *mut u8, arg: *mut ffi::c_void) {
+    let capture_type = unsafe {
+        ptr::read_unaligned(
+            base.add(mem::offset_of!(ClosureLayout, capture_type))
+                .cast::<TypeId>(),
+        )
+    };
+    if let Some(get_member_offset_runs) = capture_type.get_member_offset_runs() {
+        unsafe {
+            get_member_offset_runs(visit, base.add(mem::size_of::<ClosureLayout>()), arg);
+        }
+    }
+}
 
 #[allow(dead_code)]
 pub(crate) const TYPE_INFO_SIZE: usize = std::mem::size_of::<TypeInfo>();

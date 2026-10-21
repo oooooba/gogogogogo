@@ -29,6 +29,7 @@ use crate::type_id::GC_SLOT_STRING;
 use crate::type_id::TypeId;
 use crate::type_id::TypeKind;
 use crate::type_id::TypeOffsetVisitor;
+use crate::type_id::closure_type;
 
 pub(crate) struct ObjectAllocator(ObjectAllocatorPtr);
 
@@ -124,7 +125,6 @@ struct ObjectAllocatorInner {
     allocated_objects: BTreeMap<usize, LargeAllocation>,
     allocated_channels: BTreeMap<usize, TypeId>,
     allocated_maps: BTreeSet<usize>,
-    allocated_closures: BTreeSet<usize>,
     global_spans: Vec<GlobalSpan>,
     total_size: usize,
 }
@@ -146,6 +146,9 @@ struct LargeAllocation {
     span: Span,
     marked: bool,
     type_id: TypeId,
+    /// The element type of a slice buffer: the whole span holds an array of
+    /// `element_type` values, which is what traces the buffer's elements.
+    element_type: TypeId,
 }
 
 fn get_bit(words: &[usize], index: usize) -> bool {
@@ -243,13 +246,7 @@ extern "C" fn pointer_bitmap_visitor(
     }
 }
 
-fn build_slot_pointer_bitmap(
-    bitmap: &mut [usize],
-    region: *mut u8,
-    slot_offset: usize,
-    slot_size: usize,
-    type_id: TypeId,
-) {
+fn clear_pointer_bits(bitmap: &mut [usize], slot_offset: usize, slot_size: usize) {
     let first = slot_offset / WORD_SIZE;
     let last = first + slot_size / WORD_SIZE;
     let mut index = first;
@@ -257,6 +254,9 @@ fn build_slot_pointer_bitmap(
         clear_bit(bitmap, index);
         index += 1;
     }
+}
+
+fn bake_value_pointer_bits(bitmap: &mut [usize], region: *mut u8, offset: usize, type_id: TypeId) {
     if !type_id.is_valid() {
         return;
     }
@@ -265,8 +265,8 @@ fn build_slot_pointer_bitmap(
         | TypeKind::Slice
         | TypeKind::Pointer
         | TypeKind::Map
-        | TypeKind::Interface => set_bit(bitmap, slot_offset / WORD_SIZE),
-        TypeKind::Function => set_bit(bitmap, slot_offset / WORD_SIZE + 1),
+        | TypeKind::Interface => set_bit(bitmap, offset / WORD_SIZE),
+        TypeKind::Function => set_bit(bitmap, offset / WORD_SIZE + 1),
         TypeKind::StructArray => {
             if let Some(get_member_offset_runs) = type_id.get_member_offset_runs() {
                 let mut arg = BitmapVisitorArg {
@@ -275,13 +275,24 @@ fn build_slot_pointer_bitmap(
                 };
                 get_member_offset_runs(
                     pointer_bitmap_visitor,
-                    region.with_addr(region.addr() + slot_offset),
+                    region.with_addr(region.addr() + offset),
                     &mut arg as *mut BitmapVisitorArg as *mut ffi::c_void,
                 );
             }
         }
         TypeKind::None | TypeKind::NoPointer => {}
     }
+}
+
+fn build_slot_pointer_bitmap(
+    bitmap: &mut [usize],
+    region: *mut u8,
+    slot_offset: usize,
+    slot_size: usize,
+    type_id: TypeId,
+) {
+    clear_pointer_bits(bitmap, slot_offset, slot_size);
+    bake_value_pointer_bits(bitmap, region, slot_offset, type_id);
 }
 
 fn reserve_slot(
@@ -336,7 +347,6 @@ impl ObjectAllocatorInner {
             allocated_objects: BTreeMap::new(),
             allocated_channels: BTreeMap::new(),
             allocated_maps: BTreeSet::new(),
-            allocated_closures: BTreeSet::new(),
             global_spans: Vec::new(),
             total_size: 0,
         }
@@ -357,12 +367,86 @@ impl ObjectAllocatorInner {
         ptr
     }
 
-    fn allocate_closure(&mut self, size: usize) -> *mut () {
-        let ptr = self.allocate(size, TypeId::new_invalid());
+    fn allocate_closure(&mut self, size: usize, capture_type: TypeId) -> *mut () {
+        let ptr = self.allocate(size, closure_type());
         if !ptr.is_null() {
-            self.allocated_closures.insert(ptr as usize);
+            self.bake_closure_pointer_bitmap(ptr, capture_type);
         }
         ptr
+    }
+
+    fn allocate_buffer(&mut self, size: usize, element_type: TypeId) -> *mut () {
+        if size > LARGE_ALLOCATION_THRESHOLD {
+            let ptr = self.allocate_pages(size, TypeId::new_invalid());
+            if !ptr.is_null() {
+                let object = self
+                    .allocated_objects
+                    .get_mut(&(ptr as usize))
+                    .expect("large buffer is registered in the object map");
+                object.element_type = element_type;
+            }
+            return ptr;
+        }
+        let ptr = self.allocate_slot(size_class_of(size), TypeId::new_invalid());
+        if !ptr.is_null() {
+            self.bake_slice_buffer_pointer_bitmap(ptr, size, element_type);
+        }
+        ptr
+    }
+
+    fn bake_closure_pointer_bitmap(&mut self, ptr: *mut (), capture_type: TypeId) {
+        let addr = (ptr as *mut u8).addr();
+        let arena_base = addr & !(ARENA_SIZE - 1);
+        let Some(arena) = self.arenas.get_mut(&arena_base) else {
+            return;
+        };
+        let slot_size = 1usize << arena.class;
+        let slot_offset = addr - arena_base;
+        let region = arena.region.cast::<u8>();
+        let bitmap = arena.pointer_words_mut();
+        clear_pointer_bits(bitmap, slot_offset, slot_size);
+        bake_value_pointer_bits(
+            bitmap,
+            region,
+            slot_offset + mem::size_of::<ClosureLayout>(),
+            capture_type,
+        );
+    }
+
+    fn bake_slice_buffer_pointer_bitmap(
+        &mut self,
+        ptr: *mut (),
+        size: usize,
+        element_type: TypeId,
+    ) {
+        let addr = (ptr as *mut u8).addr();
+        let arena_base = addr & !(ARENA_SIZE - 1);
+        let Some(arena) = self.arenas.get_mut(&arena_base) else {
+            return;
+        };
+        let slot_size = 1usize << arena.class;
+        let slot_offset = addr - arena_base;
+        let region = arena.region.cast::<u8>();
+        let bitmap = arena.pointer_words_mut();
+        clear_pointer_bits(bitmap, slot_offset, slot_size);
+        if !element_type.is_valid() {
+            return;
+        }
+        let elem_size = element_type.size();
+        if elem_size == 0 {
+            return;
+        }
+        let count = size / elem_size;
+        let mut index = 0;
+        while index < count {
+            bake_value_pointer_bits(
+                bitmap,
+                region,
+                slot_offset + index * elem_size,
+                element_type,
+            );
+            index += 1;
+        }
     }
 
     fn allocate_map(&mut self, size: usize) -> *mut () {
@@ -442,6 +526,7 @@ impl ObjectAllocatorInner {
                 },
                 marked: false,
                 type_id,
+                element_type: TypeId::new_invalid(),
             },
         );
         ptr
@@ -504,8 +589,6 @@ impl ObjectAllocatorInner {
         self.allocated_channels
             .retain(|address, _| slot_is_allocated(arenas, large, *address));
         self.allocated_maps
-            .retain(|address| slot_is_allocated(arenas, large, *address));
-        self.allocated_closures
             .retain(|address| slot_is_allocated(arenas, large, *address));
     }
 
@@ -855,10 +938,6 @@ impl ObjectAllocatorInner {
                 self.mark_map_scan(slot_base);
                 return;
             }
-            if self.allocated_closures.contains(&slot_base.addr()) {
-                self.mark_closure_scan(slot_base);
-                return;
-            }
             self.mark_slot_pointer_bitmap(pointer_bitmap, index, slot_size, slot_base);
             return;
         }
@@ -868,6 +947,8 @@ impl ObjectAllocatorInner {
             }
             object.marked = true;
             let type_id = object.type_id;
+            let element_type = object.element_type;
+            let span_size = object.span.size;
             if self.allocated_channels.contains_key(&addr) {
                 self.mark_channel_scan(object_address);
                 return;
@@ -876,8 +957,9 @@ impl ObjectAllocatorInner {
                 self.mark_map_scan(object_address);
                 return;
             }
-            if self.allocated_closures.contains(&addr) {
-                self.mark_closure_scan(object_address);
+            if element_type.is_valid() {
+                let end = object_address.with_addr(object_address.addr() + span_size);
+                self.scan_value_range(element_type, object_address, end);
                 return;
             }
             if type_id.is_valid() {
@@ -899,21 +981,6 @@ impl ObjectAllocatorInner {
         }
         if let Some(object) = self.allocated_objects.get_mut(&addr) {
             object.marked = true;
-        }
-    }
-
-    fn mark_closure_scan(&mut self, base: *mut u8) {
-        let capture_type = unsafe {
-            ptr::read_unaligned(
-                base.cast::<u8>()
-                    .add(mem::offset_of!(ClosureLayout, capture_type))
-                    .cast::<TypeId>(),
-            )
-        };
-        let capture_start = base.with_addr(base.addr() + mem::size_of::<ClosureLayout>());
-        if let Some(get_member_offset_runs) = capture_type.get_member_offset_runs() {
-            let inner = self as *mut ObjectAllocatorInner as *mut ffi::c_void;
-            get_member_offset_runs(mark_typed_visitor, capture_start, inner);
         }
     }
 
@@ -1117,8 +1184,12 @@ impl ObjectAllocatorPtr {
         unsafe { &mut *self.0 }.allocate_channel(size, elem_type)
     }
 
-    pub(crate) fn allocate_closure(&self, size: usize) -> *mut () {
-        unsafe { &mut *self.0 }.allocate_closure(size)
+    pub(crate) fn allocate_closure(&self, size: usize, capture_type: TypeId) -> *mut () {
+        unsafe { &mut *self.0 }.allocate_closure(size, capture_type)
+    }
+
+    pub(crate) fn allocate_buffer(&self, size: usize, element_type: TypeId) -> *mut () {
+        unsafe { &mut *self.0 }.allocate_buffer(size, element_type)
     }
 
     pub(crate) fn allocate_map(&self, size: usize) -> *mut () {
@@ -1160,11 +1231,6 @@ impl ObjectAllocatorPtr {
     #[cfg(test)]
     pub(crate) fn registered_maps_len(&self) -> usize {
         unsafe { &*self.0 }.allocated_maps.len()
-    }
-
-    #[cfg(test)]
-    pub(crate) fn registered_closures_len(&self) -> usize {
-        unsafe { &*self.0 }.allocated_closures.len()
     }
 }
 
@@ -1525,6 +1591,12 @@ mod tests {
         node
     }
 
+    fn alloc_typed_node(allocator: &ObjectAllocatorPtr, child: *mut (), typ: TypeId) -> *mut () {
+        let node = allocator.allocate(16, typ);
+        unsafe { (node as *mut usize).write(child as usize) };
+        node
+    }
+
     /// The size of every global root slot used by these tests.
     const ROOT_SLOT_SIZE: usize = 32;
 
@@ -1716,16 +1788,14 @@ mod tests {
     }
 
     #[test]
-    fn test_allocate_closure_shares_the_object_heap_and_is_registered() {
+    fn test_allocate_closure_shares_the_object_heap() {
         let allocator = ObjectAllocator::new(Rc::new(Pager::new()));
-        let closure = allocator.ptr().allocate_closure(32);
+        let closure = allocator.ptr().allocate_closure(32, TypeId::new_invalid());
         assert!(!closure.is_null());
         assert!(allocator.ptr().contains(closure));
-        assert_eq!(allocator.ptr().registered_closures_len(), 1);
 
         let ordinary = allocator.ptr().allocate(32, TypeId::new_invalid());
         assert!(allocator.ptr().contains(ordinary));
-        assert_eq!(allocator.ptr().registered_closures_len(), 1);
     }
 
     #[test]
@@ -1871,7 +1941,7 @@ mod tests {
         let buffer = allocator.ptr().allocate(8, TypeId::new_invalid());
         let data = allocator.ptr().allocate(8, TypeId::new_invalid());
         let receiver = alloc_node(&allocator.ptr(), ptr::null_mut());
-        let closure = allocator.ptr().allocate_closure(32);
+        let closure = allocator.ptr().allocate_closure(32, TypeId::new_invalid());
         let raw = alloc_node(&allocator.ptr(), ptr::null_mut());
         unsafe {
             let words = object as *mut usize;
@@ -1999,11 +2069,11 @@ mod tests {
     fn test_function_global_marks_closure_with_typed_captures() {
         let allocator = ObjectAllocator::new(Rc::new(Pager::new()));
         let leaf = alloc_node(&allocator.ptr(), ptr::null_mut());
-        let captured = alloc_node(&allocator.ptr(), leaf);
-        let layout = allocator
-            .ptr()
-            .allocate_closure(mem::size_of::<ClosureLayout>() + mem::size_of::<usize>())
-            as *mut ClosureLayout;
+        let captured = alloc_typed_node(&allocator.ptr(), leaf, types().node.tid());
+        let layout = allocator.ptr().allocate_closure(
+            mem::size_of::<ClosureLayout>() + mem::size_of::<usize>(),
+            types().node.tid(),
+        ) as *mut ClosureLayout;
         unsafe {
             ptr::addr_of_mut!((*layout).capture_type).write(types().node.tid());
             ptr::addr_of_mut!((*layout).func).write(UserFunction::new(dummy_func));
@@ -2034,7 +2104,7 @@ mod tests {
         let captured = alloc_node(&allocator.ptr(), leaf);
         let layout = allocator
             .ptr()
-            .allocate_closure(LARGE_ALLOCATION_THRESHOLD + 1)
+            .allocate_closure(LARGE_ALLOCATION_THRESHOLD + 1, types().node.tid())
             as *mut ClosureLayout;
         unsafe {
             ptr::addr_of_mut!((*layout).capture_type).write(types().node.tid());
@@ -2056,6 +2126,121 @@ mod tests {
         assert!(allocator.ptr().contains(layout as *mut ()));
         assert!(allocator.ptr().contains(captured));
         assert!(allocator.ptr().contains(leaf));
+    }
+
+    /// A `struct { s []*Node }` capture descriptor: one slice header at the
+    /// start of the capture region.
+    extern "C" fn slice_capture_generator(
+        visit: TypeOffsetVisitor,
+        base: *mut u8,
+        arg: *mut ffi::c_void,
+    ) {
+        visit(
+            base,
+            SLICE_HEADER_SIZE,
+            *NODE_TID.get().unwrap(),
+            GC_SLOT_SLICE,
+            arg,
+        );
+    }
+
+    #[test]
+    fn test_closure_captured_slice_keeps_its_elements() {
+        let allocator = ObjectAllocator::new(Rc::new(Pager::new()));
+        let count = 4;
+        let buffer = allocator
+            .ptr()
+            .allocate_buffer(count * mem::size_of::<usize>(), types().node_ptr.tid());
+        let first = alloc_typed_node(&allocator.ptr(), ptr::null_mut(), types().node.tid());
+        let last = alloc_typed_node(&allocator.ptr(), ptr::null_mut(), types().node.tid());
+        unsafe {
+            let words = buffer as *mut usize;
+            words.write(first as usize);
+            words.add(count - 1).write(last as usize);
+        }
+        let garbage = alloc_typed_node(&allocator.ptr(), ptr::null_mut(), types().node.tid());
+
+        let capture = FakeTypeInfo::struct_array(Some(slice_capture_generator));
+        let layout = allocator.ptr().allocate_closure(
+            mem::size_of::<ClosureLayout>() + SLICE_HEADER_SIZE,
+            capture.tid(),
+        ) as *mut ClosureLayout;
+        unsafe {
+            ptr::addr_of_mut!((*layout).capture_type).write(capture.tid());
+            ptr::addr_of_mut!((*layout).func).write(UserFunction::new(dummy_func));
+            ptr::addr_of_mut!((*layout).object_ptrs)
+                .cast::<usize>()
+                .write(1);
+            let capture_start = (layout as *mut u8).add(mem::size_of::<ClosureLayout>());
+            (capture_start as *mut usize).write(buffer as usize);
+            (capture_start as *mut usize).add(1).write(count);
+            (capture_start as *mut usize).add(2).write(count);
+        }
+
+        let function = FunctionObject::from_closure_layout_ptr(layout as *const ());
+        let mut root = [0u8; 16];
+        root[..8].copy_from_slice(&raw_word(function.func_address()));
+        root[8..16].copy_from_slice(&raw_word(function.env_address()));
+        let _root = register_root(&allocator.ptr(), types().function.tid(), &root);
+
+        allocator.ptr().run_gc(&[]);
+        assert!(allocator.ptr().contains(layout as *mut ()));
+        assert!(allocator.ptr().contains(buffer));
+        assert!(allocator.ptr().contains(first));
+        assert!(allocator.ptr().contains(last));
+        assert!(!allocator.ptr().contains(garbage));
+    }
+
+    #[test]
+    fn test_slice_buffer_elements_are_traced_from_the_buffer_type() {
+        let allocator = ObjectAllocator::new(Rc::new(Pager::new()));
+        let count = 8;
+        let buffer = allocator
+            .ptr()
+            .allocate_buffer(count * mem::size_of::<usize>(), types().node_ptr.tid());
+        let first = alloc_typed_node(&allocator.ptr(), ptr::null_mut(), types().node.tid());
+        let last = alloc_typed_node(&allocator.ptr(), ptr::null_mut(), types().node.tid());
+        unsafe {
+            let words = buffer as *mut usize;
+            words.write(first as usize);
+            words.add(count - 1).write(last as usize);
+        }
+        let garbage = alloc_typed_node(&allocator.ptr(), ptr::null_mut(), types().node.tid());
+        let _root = register_root(&allocator.ptr(), types().opaque_ptr.tid(), &word(buffer));
+
+        allocator.ptr().run_gc(&[]);
+        assert!(allocator.ptr().contains(buffer));
+        assert!(allocator.ptr().contains(first));
+        assert!(allocator.ptr().contains(last));
+        assert!(!allocator.ptr().contains(garbage));
+    }
+
+    #[test]
+    fn test_large_slice_buffer_elements_are_traced_from_the_element_type() {
+        let allocator = ObjectAllocator::new(Rc::new(Pager::new()));
+        let size = LARGE_ALLOCATION_THRESHOLD + 64;
+        let count = size / mem::size_of::<usize>();
+        let buffer = allocator
+            .ptr()
+            .allocate_buffer(size, types().node_ptr.tid());
+        unsafe {
+            (buffer as *mut u8).write_bytes(0, size.div_ceil(PAGE_SIZE) * PAGE_SIZE);
+        }
+        let first = alloc_typed_node(&allocator.ptr(), ptr::null_mut(), types().node.tid());
+        let last = alloc_typed_node(&allocator.ptr(), ptr::null_mut(), types().node.tid());
+        unsafe {
+            let words = buffer as *mut usize;
+            words.write(first as usize);
+            words.add(count - 1).write(last as usize);
+        }
+        let garbage = alloc_typed_node(&allocator.ptr(), ptr::null_mut(), types().node.tid());
+        let _root = register_root(&allocator.ptr(), types().opaque_ptr.tid(), &word(buffer));
+
+        allocator.ptr().run_gc(&[]);
+        assert!(allocator.ptr().contains(buffer));
+        assert!(allocator.ptr().contains(first));
+        assert!(allocator.ptr().contains(last));
+        assert!(!allocator.ptr().contains(garbage));
     }
 
     #[test]
@@ -2165,7 +2350,7 @@ mod tests {
     }
 
     #[test]
-    fn test_sweep_prunes_channel_map_and_closure_registrations() {
+    fn test_sweep_prunes_channel_and_map_registrations() {
         let allocator = ObjectAllocator::new(Rc::new(Pager::new()));
         let channel = allocator
             .ptr()
@@ -2177,15 +2362,13 @@ mod tests {
             .ptr()
             .allocate(mem::size_of::<MapObject>(), TypeId::new_invalid());
         allocator.ptr().allocate_map(mem::size_of::<MapObject>());
-        let closure = allocator.ptr().allocate_closure(32);
+        let closure = allocator.ptr().allocate_closure(32, TypeId::new_invalid());
         assert_eq!(allocator.ptr().registered_channels_len(), 1);
         assert_eq!(allocator.ptr().registered_maps_len(), 1);
-        assert_eq!(allocator.ptr().registered_closures_len(), 1);
 
         allocator.ptr().run_gc(&[]);
         assert_eq!(allocator.ptr().registered_channels_len(), 0);
         assert_eq!(allocator.ptr().registered_maps_len(), 0);
-        assert_eq!(allocator.ptr().registered_closures_len(), 0);
         assert!(!allocator.ptr().contains(channel));
         assert!(!allocator.ptr().contains(map));
         assert!(!allocator.ptr().contains(closure));
