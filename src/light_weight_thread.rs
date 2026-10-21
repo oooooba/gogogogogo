@@ -200,8 +200,16 @@ impl LightWeightThreadContext {
         self.allocate_with(size, |allocator| allocator.allocate(size, type_id))
     }
 
-    pub(crate) fn allocate_closure(&mut self, size: usize) -> *mut () {
-        self.allocate_with(size, |allocator| allocator.allocate_closure(size))
+    pub(crate) fn allocate_closure(&mut self, size: usize, capture_type: TypeId) -> *mut () {
+        self.allocate_with(size, |allocator| {
+            allocator.allocate_closure(size, capture_type)
+        })
+    }
+
+    pub(crate) fn allocate_buffer(&mut self, size: usize, element_type: TypeId) -> *mut () {
+        self.allocate_with(size, |allocator| {
+            allocator.allocate_buffer(size, element_type)
+        })
     }
 
     pub(crate) fn allocate_channel(&mut self, size: usize, elem_type: TypeId) -> *mut () {

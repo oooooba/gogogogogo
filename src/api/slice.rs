@@ -111,14 +111,14 @@ struct StackFrameSliceAppend<'a> {
 #[unsafe(no_mangle)]
 pub extern "C" fn gox5_slice_append(ctx: &mut LightWeightThreadContext) -> FunctionObject {
     let frame = ctx.stack_frame::<StackFrameSliceAppend>();
-    let _type_id = frame.type_id;
+    let type_id = frame.type_id;
     let lhs = frame.lhs;
     let rhs = frame.rhs;
 
-    let elem_size = _type_id.size();
+    let elem_size = type_id.size();
     let rhs_bytes = slice_extend_bytes(&rhs, elem_size);
     let result = reallocate_slice(&lhs, elem_size, rhs_bytes, |size| {
-        ctx.allocate(size, TypeId::new_invalid())
+        ctx.allocate_buffer(size, type_id)
     });
 
     let frame = ctx.stack_frame_mut::<StackFrameSliceAppend>();
@@ -400,7 +400,7 @@ pub extern "C" fn gox5_slice_new(ctx: &mut LightWeightThreadContext) -> Function
 
     let elem_size = type_id.size();
     let buffer_size = capacity.wrapping_mul(elem_size);
-    let ptr = ctx.allocate(buffer_size, TypeId::new_invalid());
+    let ptr = ctx.allocate_buffer(buffer_size, type_id);
     let result = SliceObject::new(ptr, length, capacity);
 
     let frame = ctx.stack_frame_mut::<StackFrameSliceNew>();

@@ -33,8 +33,8 @@ pub extern "C" fn gox5_closure_new(ctx: &mut LightWeightThreadContext) -> Functi
     let wc_count = unsafe { ptr::read(wc_ptr as *const usize) };
     let wc_data_size = wc_count * mem::size_of::<*const ()>();
 
-    let ptr =
-        ctx.allocate_closure(mem::size_of::<ClosureLayout>() + wc_data_size) as *mut ClosureLayout;
+    let ptr = ctx.allocate_closure(mem::size_of::<ClosureLayout>() + wc_data_size, capture_type)
+        as *mut ClosureLayout;
 
     unsafe {
         ptr::addr_of_mut!((*ptr).capture_type).write(capture_type);
