@@ -256,7 +256,7 @@ mod tests {
         let locals = unsafe { root_frame.add(mem::size_of::<StackFrameCommon>()) as *mut usize };
         ctx.push_gc_root(
             root_frame as usize,
-            locals as usize,
+            locals.cast::<u8>(),
             capacity * mem::size_of::<usize>(),
             TypeId::new_invalid(),
             crate::type_id::GC_SLOT_POINTER,
@@ -284,10 +284,10 @@ mod tests {
         // argument buffer.
         let func = FunctionObject::from_user_function(UserFunction::new(test_deferred));
         let args: Vec<*const ()> = vec![
-            0x1111 as *const (),
-            0x2222 as *const (),
-            0x3333 as *const (),
-            0x4444 as *const (),
+            std::ptr::without_provenance::<()>(0x1111),
+            std::ptr::without_provenance::<()>(0x2222),
+            std::ptr::without_provenance::<()>(0x3333),
+            std::ptr::without_provenance::<()>(0x4444),
         ];
         let prev_stack_pointer = ctx.stack_pointer();
         ctx.grow_stack(mem::size_of::<StackFrameCommon>());

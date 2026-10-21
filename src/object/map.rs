@@ -51,7 +51,7 @@ pub(crate) struct MapObject {
     /// `MapObject::new` never writes, and reading uninitialized bytes is
     /// undefined behaviour. An address inside the table is enough, because the
     /// collector resolves an interior address to the allocation holding it.
-    table_base: Cell<usize>,
+    table_base: Cell<*mut u8>,
 }
 
 impl MapObject {
@@ -64,7 +64,7 @@ impl MapObject {
             key_type,
             value_type,
             iteration_snapshot: None,
-            table_base: Cell::new(0),
+            table_base: Cell::new(std::ptr::null_mut()),
         }
     }
 
@@ -134,17 +134,19 @@ impl MapObject {
         self.map.clear();
         self.iteration_snapshot = None;
         // Clearing gives the table back, so there is nothing left to keep.
-        self.table_base.set(0);
+        self.table_base.set(std::ptr::null_mut());
     }
 
     /// Visits every key and value box (map entries plus the iteration
     /// snapshot) with the types the map was created with, so the collector can
     /// mark them precisely.
     /// The address the collector uses to keep this map's table alive.
-    pub(crate) fn table_address(&self) -> Option<usize> {
-        match self.table_base.get() {
-            0 => None,
-            address => Some(address),
+    pub(crate) fn table_address(&self) -> Option<*mut u8> {
+        let address = self.table_base.get();
+        if address.is_null() {
+            None
+        } else {
+            Some(address)
         }
     }
 
@@ -153,7 +155,7 @@ impl MapObject {
     /// emptying a table does not move it, so the old address is kept.
     fn refresh_table_base(&self) {
         if let Some((key, _)) = self.map.iter().next() {
-            self.table_base.set(key as *const Key as usize);
+            self.table_base.set(key as *const Key as *mut u8);
         }
     }
 
@@ -170,7 +172,7 @@ impl MapObject {
             ptr::addr_of_mut!((*ptr).key_type).write(key_type);
             ptr::addr_of_mut!((*ptr).value_type).write(value_type);
             ptr::addr_of_mut!((*ptr).iteration_snapshot).write(None);
-            ptr::addr_of_mut!((*ptr).table_base).write(Cell::new(0));
+            ptr::addr_of_mut!((*ptr).table_base).write(Cell::new(std::ptr::null_mut()));
         }
     }
 
@@ -182,28 +184,28 @@ impl MapObject {
             ptr::addr_of_mut!((*ptr).key_type).write(source.key_type);
             ptr::addr_of_mut!((*ptr).value_type).write(source.value_type);
             ptr::addr_of_mut!((*ptr).iteration_snapshot).write(source.iteration_snapshot.clone());
-            ptr::addr_of_mut!((*ptr).table_base).write(Cell::new(0));
+            ptr::addr_of_mut!((*ptr).table_base).write(Cell::new(std::ptr::null_mut()));
         }
         // The clone got a table of its own, so it needs its own address.
         unsafe { (*ptr).refresh_table_base() };
     }
 
-    pub(crate) fn gc_keep(&self, mut visit: impl FnMut(TypeId, usize, TypeId, usize)) {
+    pub(crate) fn gc_keep(&self, mut visit: impl FnMut(TypeId, *mut u8, TypeId, *mut u8)) {
         for (key, value) in self.map.iter() {
             visit(
                 self.key_type,
-                key.ptr.0 as usize,
+                key.ptr.0.cast::<u8>(),
                 self.value_type,
-                value.0 as usize,
+                value.0.cast::<u8>(),
             );
         }
         if let Some(snapshot) = &self.iteration_snapshot {
             for (key, value) in snapshot {
                 visit(
                     self.key_type,
-                    key.0 as usize,
+                    key.0.cast::<u8>(),
                     self.value_type,
-                    value.0 as usize,
+                    value.0.cast::<u8>(),
                 );
             }
         }
@@ -284,7 +286,7 @@ mod tests {
     }
 
     fn test_type_id() -> TypeId {
-        TypeId::from_raw(test_type_info() as *const TypeInfo as usize)
+        TypeId::from_ptr(test_type_info())
     }
 
     fn make_isize_ptr(allocator: &ObjectAllocatorPtr, value: isize) -> ObjectPtr {

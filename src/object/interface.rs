@@ -71,7 +71,9 @@ impl Interface {
 
     pub fn panic_nil_error() -> Self {
         let receiver = ObjectPtr(&PANIC_NIL_ERROR_DUMMY as *const u8 as *mut ());
-        let type_id = TypeId::from_raw(&PANIC_NIL_ERROR_TYPE_ID_DUMMY as *const u8 as usize);
+        let type_id = TypeId::from_ptr(
+            &PANIC_NIL_ERROR_TYPE_ID_DUMMY as *const u8 as *const crate::type_id::TypeInfo,
+        );
         Self { receiver, type_id }
     }
 
@@ -80,7 +82,10 @@ impl Interface {
     }
 
     pub fn is_panic_nil_error(&self) -> bool {
-        self.type_id == TypeId::from_raw(&PANIC_NIL_ERROR_TYPE_ID_DUMMY as *const u8 as usize)
+        self.type_id
+            == TypeId::from_ptr(
+                &PANIC_NIL_ERROR_TYPE_ID_DUMMY as *const u8 as *const crate::type_id::TypeInfo,
+            )
     }
 
     pub fn receiver(&self) -> &ObjectPtr {
@@ -166,12 +171,16 @@ mod tests {
     fn test_interface_new() {
         let dummy: u8 = 0;
         let receiver = ObjectPtr(&dummy as *const u8 as *mut ());
-        let type_id = TypeId::from_raw(42);
+        let type_id =
+            TypeId::from_ptr(std::ptr::without_provenance::<crate::type_id::TypeInfo>(42));
         let iface = Interface::new(receiver, type_id);
         assert!(!iface.is_nil());
         assert!(!iface.is_panic_nil_error());
         assert!(!iface.receiver().is_null());
-        assert_eq!(*iface.type_id(), TypeId::from_raw(42));
+        assert_eq!(
+            *iface.type_id(),
+            TypeId::from_ptr(std::ptr::without_provenance::<crate::type_id::TypeInfo>(42))
+        );
     }
 
     #[test]
@@ -190,7 +199,8 @@ mod tests {
     fn test_interface_panic_print_with_receiver() {
         let dummy: u8 = 0;
         let receiver = ObjectPtr(&dummy as *const u8 as *mut ());
-        let type_id = TypeId::from_raw(42);
+        let type_id =
+            TypeId::from_ptr(std::ptr::without_provenance::<crate::type_id::TypeInfo>(42));
         let iface = Interface::new(receiver, type_id);
         iface.panic_print();
     }
@@ -199,7 +209,8 @@ mod tests {
     fn test_interface_clone() {
         let dummy: u8 = 0;
         let receiver = ObjectPtr(&dummy as *const u8 as *mut ());
-        let type_id = TypeId::from_raw(42);
+        let type_id =
+            TypeId::from_ptr(std::ptr::without_provenance::<crate::type_id::TypeInfo>(42));
         let iface = Interface::new(receiver, type_id);
         let cloned = iface.clone();
         assert_eq!(*cloned.type_id(), *iface.type_id());

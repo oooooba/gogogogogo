@@ -181,14 +181,24 @@ fn popcount(words: &[usize], count: usize) -> usize {
     total
 }
 
+/// What `pointer_bitmap_visitor` gets through `arg`: the arena bitmap it
+/// writes and the arena mapping that makes the reported addresses relative
+/// again.
+struct BitmapVisitorArg {
+    bitmap: *mut usize,
+    region: *mut u8,
+}
+
 extern "C" fn pointer_bitmap_visitor(
-    offset: usize,
+    offset: *mut u8,
     size: usize,
     _typ: TypeId,
     kind: i32,
     arg: *mut ffi::c_void,
 ) {
-    let bitmap = unsafe { slice::from_raw_parts_mut(arg as *mut usize, POINTER_BITMAP_WORDS) };
+    let arg = unsafe { &*(arg as *const BitmapVisitorArg) };
+    let bitmap = unsafe { slice::from_raw_parts_mut(arg.bitmap, POINTER_BITMAP_WORDS) };
+    let offset = offset.addr() - arg.region.addr();
     let end = offset.saturating_add(size);
     match kind {
         GC_SLOT_POINTER | GC_SLOT_MAP => {
@@ -235,6 +245,7 @@ extern "C" fn pointer_bitmap_visitor(
 
 fn build_slot_pointer_bitmap(
     bitmap: &mut [usize],
+    region: *mut u8,
     slot_offset: usize,
     slot_size: usize,
     type_id: TypeId,
@@ -258,10 +269,14 @@ fn build_slot_pointer_bitmap(
         TypeKind::Function => set_bit(bitmap, slot_offset / WORD_SIZE + 1),
         TypeKind::StructArray => {
             if let Some(get_member_offset_runs) = type_id.get_member_offset_runs() {
+                let mut arg = BitmapVisitorArg {
+                    bitmap: bitmap.as_mut_ptr(),
+                    region,
+                };
                 get_member_offset_runs(
                     pointer_bitmap_visitor,
-                    slot_offset,
-                    bitmap.as_mut_ptr() as *mut ffi::c_void,
+                    region.with_addr(region.addr() + slot_offset),
+                    &mut arg as *mut BitmapVisitorArg as *mut ffi::c_void,
                 );
             }
         }
@@ -271,19 +286,20 @@ fn build_slot_pointer_bitmap(
 
 fn reserve_slot(
     arena: &mut Arena,
-    base: usize,
     index: usize,
     type_id: TypeId,
     total_size: &mut usize,
 ) -> *mut () {
     let slot_size = 1usize << arena.class;
     set_bit(arena.allocation_words_mut(), index);
-    let slot = (base + index * slot_size) as *mut u8;
+    let slot = unsafe { arena.region.cast::<u8>().add(index * slot_size) };
     unsafe {
         ptr::write_bytes(slot, 0, slot_size);
     }
+    let region = arena.region.cast::<u8>();
     build_slot_pointer_bitmap(
         arena.pointer_words_mut(),
+        region,
         index * slot_size,
         slot_size,
         type_id,
@@ -377,11 +393,11 @@ impl ObjectAllocatorInner {
             let arena = self.arenas.get_mut(&base).unwrap();
             let pos = arena.allocation_pos;
             let index = find_first_zero(arena.allocation_words(), pos, slot_count).unwrap();
-            return reserve_slot(arena, base, index, type_id, &mut self.total_size);
+            return reserve_slot(arena, index, type_id, &mut self.total_size);
         }
         let base = self.create_arena(class);
         let arena = self.arenas.get_mut(&base).unwrap();
-        reserve_slot(arena, base, 0, type_id, &mut self.total_size)
+        reserve_slot(arena, 0, type_id, &mut self.total_size)
     }
 
     fn create_arena(&mut self, class: usize) -> usize {
@@ -549,7 +565,7 @@ impl ObjectAllocatorInner {
                 "global object of size {} was registered without a type descriptor",
                 span.size
             );
-            self.mark_value(span.type_id, span.ptr as usize);
+            self.mark_value(span.type_id, span.ptr.cast::<u8>());
         }
         self.global_spans = global_spans;
         for context in contexts {
@@ -570,13 +586,13 @@ impl ObjectAllocatorInner {
         }
     }
 
-    fn mark_raw_word(&mut self, address: usize) {
-        let word = unsafe { ptr::read_unaligned(address as *const usize) };
+    fn mark_raw_word(&mut self, address: *mut u8) {
+        let word = unsafe { ptr::read_unaligned(address.cast::<*mut u8>()) };
         self.mark_word(word);
     }
 
-    fn mark_word(&mut self, word: usize) {
-        if word == 0 {
+    fn mark_word(&mut self, word: *mut u8) {
+        if word.is_null() {
             return;
         }
         if let Some(object_address) = self.containing_object(word) {
@@ -584,7 +600,7 @@ impl ObjectAllocatorInner {
         }
     }
 
-    fn mark_value(&mut self, typ: TypeId, addr: usize) {
+    fn mark_value(&mut self, typ: TypeId, addr: *mut u8) {
         match typ.kind() {
             TypeKind::None | TypeKind::NoPointer => {}
             TypeKind::String => self.mark_raw_word(addr),
@@ -600,54 +616,60 @@ impl ObjectAllocatorInner {
         }
     }
 
-    fn mark_pointer_field(&mut self, addr: usize, pointed_to: TypeId) {
-        let word = unsafe { ptr::read_unaligned(addr as *const usize) };
-        if word == 0 {
+    fn mark_pointer_field(&mut self, addr: *mut u8, pointed_to: TypeId) {
+        let word = unsafe { ptr::read_unaligned(addr.cast::<*mut u8>()) };
+        if word.is_null() {
             return;
         }
         if let Some(object_address) = self.containing_object(word) {
             self.mark_object(object_address);
             if pointed_to != TypeId::new_invalid() {
-                self.mark_value_at(word, pointed_to);
+                self.mark_value_at(object_address.with_addr(word.addr()), pointed_to);
             }
         }
     }
 
-    fn mark_value_at(&mut self, address: usize, typ: TypeId) {
+    fn mark_value_at(&mut self, address: *mut u8, typ: TypeId) {
         let size = value_size(typ);
         if size == 0 {
             return;
         }
         if let Some(end) = self.allocation_end(address)
-            && address + size <= end
+            && address.addr() + size <= end
         {
             self.mark_value(typ, address);
         }
     }
 
-    fn allocation_end(&self, address: usize) -> Option<usize> {
-        let arena_base = address & !(ARENA_SIZE - 1);
+    fn allocation_end(&self, address: *mut u8) -> Option<usize> {
+        let addr = address.addr();
+        let arena_base = addr & !(ARENA_SIZE - 1);
         if let Some(arena) = self.arenas.get(&arena_base) {
             let slot_size = 1usize << arena.class;
-            let index = (address - arena_base) / slot_size;
+            let index = (addr - arena_base) / slot_size;
             if index < (ARENA_SIZE >> arena.class) && get_bit(arena.allocation_words(), index) {
                 return Some(arena_base + (index + 1) * slot_size);
             }
             return None;
         }
-        if let Some((&base, object)) = self.allocated_objects.range(..=address).next_back()
-            && address < base + object.span.size
+        if let Some((&base, object)) = self.allocated_objects.range(..=addr).next_back()
+            && addr < base + object.span.size
         {
             return Some(base + object.span.size);
         }
         None
     }
 
-    fn mark_slice_header(&mut self, addr: usize, elem_type: TypeId) {
+    fn mark_slice_header(&mut self, addr: *mut u8, elem_type: TypeId) {
         let word_size = mem::size_of::<usize>();
-        let data = unsafe { ptr::read_unaligned(addr as *const usize) };
-        let len = unsafe { ptr::read_unaligned((addr + word_size) as *const usize) };
-        if data == 0 || len == 0 {
+        let data = unsafe { ptr::read_unaligned(addr.cast::<*mut u8>()) };
+        let len = unsafe {
+            ptr::read_unaligned(
+                addr.cast::<usize>()
+                    .add(word_size / mem::size_of::<usize>()),
+            )
+        };
+        if data.is_null() || len == 0 {
             return;
         }
         let Some(object_address) = self.containing_object(data) else {
@@ -663,108 +685,113 @@ impl ObjectAllocatorInner {
             return;
         }
         let span = len.saturating_mul(elem_size);
-        let mut end = data.saturating_add(span);
+        let mut end = data.addr().saturating_add(span);
         if let Some(allocation_end) = self.allocation_end(object_address) {
             end = end.min(allocation_end);
         }
-        if end <= data {
+        if end <= data.addr() {
             return;
         }
-        self.scan_value_range(elem_type, data, end);
+        let scan_base = object_address.with_addr(data.addr());
+        self.scan_value_range(elem_type, scan_base, scan_base.with_addr(end));
     }
 
-    fn scan_value_range(&mut self, elem: TypeId, start: usize, end: usize) {
+    fn scan_value_range(&mut self, elem: TypeId, start: *mut u8, end: *mut u8) {
+        let step_addr = |addr: *mut u8, step: usize| addr.with_addr(addr.addr() + step);
         match elem.kind() {
             TypeKind::None | TypeKind::NoPointer => {}
             TypeKind::String => {
                 let mut addr = start;
-                while addr < end {
+                while addr.addr() < end.addr() {
                     self.mark_raw_word(addr);
-                    addr += STRING_SIZE;
+                    addr = step_addr(addr, STRING_SIZE);
                 }
             }
             TypeKind::Pointer => {
                 let pointed_to = elem.pointed_to();
                 let mut addr = start;
-                while addr < end {
+                while addr.addr() < end.addr() {
                     self.mark_pointer_field(addr, pointed_to);
-                    addr += mem::size_of::<usize>();
+                    addr = step_addr(addr, mem::size_of::<usize>());
                 }
             }
             TypeKind::Slice => {
                 let elem_of_elem = elem.pointed_to();
                 let mut addr = start;
-                while addr < end {
+                while addr.addr() < end.addr() {
                     self.mark_slice_header(addr, elem_of_elem);
-                    addr += SLICE_HEADER_SIZE;
+                    addr = step_addr(addr, SLICE_HEADER_SIZE);
                 }
             }
             TypeKind::Interface => {
                 let mut addr = start;
-                while addr < end {
+                while addr.addr() < end.addr() {
                     self.mark_interface_value(addr);
-                    addr += mem::size_of::<Interface>();
+                    addr = step_addr(addr, mem::size_of::<Interface>());
                 }
             }
             TypeKind::Function => {
                 let mut addr = start;
-                while addr + mem::size_of::<FunctionObject>() <= end {
+                while addr.addr() + mem::size_of::<FunctionObject>() <= end.addr() {
                     self.mark_function_field(addr);
-                    addr += mem::size_of::<FunctionObject>();
+                    addr = step_addr(addr, mem::size_of::<FunctionObject>());
                 }
             }
             TypeKind::Map => {
                 let mut addr = start;
-                while addr < end {
+                while addr.addr() < end.addr() {
                     self.mark_map_slot(addr);
-                    addr += mem::size_of::<usize>();
+                    addr = step_addr(addr, mem::size_of::<usize>());
                 }
             }
             TypeKind::StructArray => {
                 if let Some(get_member_offset_runs) = elem.get_member_offset_runs() {
                     let step = elem.size();
                     let mut addr = start;
-                    while addr < end {
+                    while addr.addr() < end.addr() {
                         let inner = self as *mut ObjectAllocatorInner as *mut ffi::c_void;
                         get_member_offset_runs(mark_typed_visitor, addr, inner);
-                        addr = addr.saturating_add(step);
+                        addr = step_addr(addr, step);
                     }
                 }
             }
         }
     }
 
-    fn mark_interface_value(&mut self, addr: usize) {
+    fn mark_interface_value(&mut self, addr: *mut u8) {
         let word_size = mem::size_of::<usize>();
-        let receiver = unsafe { ptr::read_unaligned(addr as *const usize) };
-        if receiver == 0 {
+        let receiver = unsafe { ptr::read_unaligned(addr.cast::<*mut u8>()) };
+        if receiver.is_null() {
             return;
         }
         let Some(object_address) = self.containing_object(receiver) else {
             return;
         };
         self.mark_object(object_address);
-        let type_word = unsafe { ptr::read_unaligned((addr + word_size) as *const usize) };
-        let concrete = TypeId::from_raw(type_word);
+        let concrete = unsafe { ptr::read_unaligned(addr.add(word_size).cast::<TypeId>()) };
         if concrete.is_valid() {
-            self.mark_value_at(receiver, concrete);
+            self.mark_value_at(object_address.with_addr(receiver.addr()), concrete);
         }
     }
 
-    fn mark_function_field(&mut self, addr: usize) {
+    fn mark_function_field(&mut self, addr: *mut u8) {
         let env = unsafe {
-            ptr::read_unaligned((addr + mem::offset_of!(FunctionObject, 1)) as *const usize)
+            ptr::read_unaligned(
+                addr.cast::<u8>()
+                    .add(mem::offset_of!(FunctionObject, 1))
+                    .cast::<*mut u8>(),
+            )
         };
-        if env != 0
+        if !env.is_null()
             && let Some(closure_address) = self.containing_object(env)
         {
             self.mark_object(closure_address);
         }
     }
 
-    fn mark_map_slot(&mut self, addr: usize) {
-        let word = unsafe { ptr::read_unaligned(addr as *const usize) };
-        if word == 0 {
+    fn mark_map_slot(&mut self, addr: *mut u8) {
+        let word = unsafe { ptr::read_unaligned(addr.cast::<*mut u8>()) };
+        if word.is_null() {
             return;
         }
         if let Some(object_address) = self.containing_object(word) {
@@ -772,7 +799,7 @@ impl ObjectAllocatorInner {
         }
     }
 
-    fn mark_struct_array(&mut self, addr: usize, typ: TypeId) {
+    fn mark_struct_array(&mut self, addr: *mut u8, typ: TypeId) {
         if let Some(get_member_offset_runs) = typ.get_member_offset_runs() {
             let inner = self as *mut ObjectAllocatorInner as *mut ffi::c_void;
             get_member_offset_runs(mark_typed_visitor, addr, inner);
@@ -784,7 +811,7 @@ impl ObjectAllocatorInner {
         pointer_bitmap: NonNull<[usize; POINTER_BITMAP_WORDS]>,
         index: usize,
         slot_size: usize,
-        slot_base: usize,
+        slot_base: *mut u8,
     ) {
         let pointer_bitmap = unsafe { pointer_bitmap.as_ref() };
         let words = slot_size / WORD_SIZE;
@@ -792,14 +819,15 @@ impl ObjectAllocatorInner {
         let mut k = 0;
         while k < words {
             if get_bit(pointer_bitmap, first + k) {
-                self.mark_raw_word(slot_base + k * WORD_SIZE);
+                self.mark_raw_word(slot_base.with_addr(slot_base.addr() + k * WORD_SIZE));
             }
             k += 1;
         }
     }
 
-    fn mark_object(&mut self, object_address: usize) {
-        let arena_base = object_address & !(ARENA_SIZE - 1);
+    fn mark_object(&mut self, object_address: *mut u8) {
+        let addr = object_address.addr();
+        let arena_base = addr & !(ARENA_SIZE - 1);
         let arena_info = self
             .arenas
             .get(&arena_base)
@@ -807,7 +835,7 @@ impl ObjectAllocatorInner {
         if let Some((class, pointer_bitmap, mut mark_bitmap)) = arena_info {
             let slot_size = 1usize << class;
             let slot_count = ARENA_SIZE >> class;
-            let index = (object_address - arena_base) / slot_size;
+            let index = (addr - arena_base) / slot_size;
             if index >= slot_count {
                 return;
             }
@@ -818,37 +846,37 @@ impl ObjectAllocatorInner {
                 }
                 set_bit(mark_bitmap, index);
             }
-            let slot_base = arena_base + index * slot_size;
-            if self.allocated_channels.contains_key(&slot_base) {
+            let slot_base = object_address.with_addr(arena_base + index * slot_size);
+            if self.allocated_channels.contains_key(&(slot_base.addr())) {
                 self.mark_channel_scan(slot_base);
                 return;
             }
-            if self.allocated_maps.contains(&slot_base) {
+            if self.allocated_maps.contains(&slot_base.addr()) {
                 self.mark_map_scan(slot_base);
                 return;
             }
-            if self.allocated_closures.contains(&slot_base) {
+            if self.allocated_closures.contains(&slot_base.addr()) {
                 self.mark_closure_scan(slot_base);
                 return;
             }
             self.mark_slot_pointer_bitmap(pointer_bitmap, index, slot_size, slot_base);
             return;
         }
-        if let Some(object) = self.allocated_objects.get_mut(&object_address) {
+        if let Some(object) = self.allocated_objects.get_mut(&addr) {
             if object.marked {
                 return;
             }
             object.marked = true;
             let type_id = object.type_id;
-            if self.allocated_channels.contains_key(&object_address) {
+            if self.allocated_channels.contains_key(&addr) {
                 self.mark_channel_scan(object_address);
                 return;
             }
-            if self.allocated_maps.contains(&object_address) {
+            if self.allocated_maps.contains(&addr) {
                 self.mark_map_scan(object_address);
                 return;
             }
-            if self.allocated_closures.contains(&object_address) {
+            if self.allocated_closures.contains(&addr) {
                 self.mark_closure_scan(object_address);
                 return;
             }
@@ -858,60 +886,62 @@ impl ObjectAllocatorInner {
         }
     }
 
-    fn mark_object_without_interior(&mut self, object_address: usize) {
-        let arena_base = object_address & !(ARENA_SIZE - 1);
+    fn mark_object_without_interior(&mut self, object_address: *mut u8) {
+        let addr = object_address.addr();
+        let arena_base = addr & !(ARENA_SIZE - 1);
         if let Some(arena) = self.arenas.get_mut(&arena_base) {
             let slot_size = 1usize << arena.class;
-            let index = (object_address - arena_base) / slot_size;
+            let index = (addr - arena_base) / slot_size;
             if index < (ARENA_SIZE >> arena.class) {
                 set_bit(arena.mark_words_mut(), index);
             }
             return;
         }
-        if let Some(object) = self.allocated_objects.get_mut(&object_address) {
+        if let Some(object) = self.allocated_objects.get_mut(&addr) {
             object.marked = true;
         }
     }
 
-    fn mark_closure_scan(&mut self, base: usize) {
-        let capture_type_word = unsafe {
+    fn mark_closure_scan(&mut self, base: *mut u8) {
+        let capture_type = unsafe {
             ptr::read_unaligned(
-                (base + mem::offset_of!(ClosureLayout, capture_type)) as *const usize,
+                base.cast::<u8>()
+                    .add(mem::offset_of!(ClosureLayout, capture_type))
+                    .cast::<TypeId>(),
             )
         };
-        let capture_start = base + mem::size_of::<ClosureLayout>();
-        let capture_type = TypeId::from_raw(capture_type_word);
+        let capture_start = base.with_addr(base.addr() + mem::size_of::<ClosureLayout>());
         if let Some(get_member_offset_runs) = capture_type.get_member_offset_runs() {
             let inner = self as *mut ObjectAllocatorInner as *mut ffi::c_void;
             get_member_offset_runs(mark_typed_visitor, capture_start, inner);
         }
     }
 
-    fn mark_channel_scan(&mut self, base: usize) {
+    fn mark_channel_scan(&mut self, base: *mut u8) {
         let elem_type = self
             .allocated_channels
-            .get(&base)
+            .get(&base.addr())
             .copied()
             .unwrap_or(TypeId::new_invalid());
-        let channel = unsafe { &*(base as *const ChannelObject) };
+        let channel = unsafe { &*base.cast::<ChannelObject>() };
         if let Some(buffer) = channel.buffer()
             && let Some(object_address) = self.containing_object(buffer)
         {
             self.mark_object(object_address);
         }
         channel.gc_keep(|object_ptr| {
-            let address = object_ptr.0 as usize;
+            let address = object_ptr.0.cast::<u8>();
             if let Some(object_address) = self.containing_object(address) {
                 self.mark_object(object_address);
                 if elem_type != TypeId::new_invalid() {
-                    self.mark_value_at(address, elem_type);
+                    self.mark_value_at(object_address.with_addr(address.addr()), elem_type);
                 }
             }
         });
     }
 
-    fn mark_map_scan(&mut self, base: usize) {
-        let map = unsafe { &*(base as *const MapObject) };
+    fn mark_map_scan(&mut self, base: *mut u8) {
+        let map = unsafe { &*base.cast::<MapObject>() };
         if let Some(address) = map.table_address()
             && let Some(object_address) = self.containing_object(address)
         {
@@ -923,29 +953,35 @@ impl ObjectAllocatorInner {
         });
     }
 
-    fn mark_box_with_type(&mut self, address: usize, typ: TypeId) {
+    fn mark_box_with_type(&mut self, address: *mut u8, typ: TypeId) {
         if let Some(object_address) = self.containing_object(address) {
             self.mark_object(object_address);
             if typ != TypeId::new_invalid() {
-                self.mark_value_at(address, typ);
+                self.mark_value_at(object_address.with_addr(address.addr()), typ);
             }
         }
     }
 
-    fn containing_object(&self, address: usize) -> Option<usize> {
-        let arena_base = address & !(ARENA_SIZE - 1);
+    fn containing_object(&self, address: *mut u8) -> Option<*mut u8> {
+        let addr = address.addr();
+        let arena_base = addr & !(ARENA_SIZE - 1);
         if let Some(arena) = self.arenas.get(&arena_base) {
             let slot_size = 1usize << arena.class;
-            let index = (address - arena_base) / slot_size;
+            let index = (addr - arena_base) / slot_size;
             if index < (ARENA_SIZE >> arena.class) && get_bit(arena.allocation_words(), index) {
-                return Some(arena_base + index * slot_size);
+                // Rebase on the arena's own mapping: the input word may be
+                // a raw integer without provenance, so only its address is
+                // trusted; the provenance has to come from the mapping.
+                let base_ptr = arena.region.cast::<u8>();
+                return Some(base_ptr.with_addr(arena_base + index * slot_size));
             }
             return None;
         }
-        if let Some((&base, object)) = self.allocated_objects.range(..=address).next_back()
-            && address < base + object.span.size
+        if let Some((&base, object)) = self.allocated_objects.range(..=addr).next_back()
+            && addr < base + object.span.size
         {
-            return Some(base);
+            let base_ptr = object.span.ptr.cast::<u8>();
+            return Some(base_ptr.with_addr(base));
         }
         None
     }
@@ -968,14 +1004,14 @@ impl ObjectAllocatorInner {
 }
 
 impl ObjectAllocatorInner {
-    fn mark_defer_stack_slot(&mut self, offset: usize) {
-        let mut word = unsafe { ptr::read_unaligned(offset as *const usize) };
-        while word != 0 {
+    fn mark_defer_stack_slot(&mut self, offset: *mut u8) {
+        let mut word = unsafe { ptr::read_unaligned(offset.cast::<*mut u8>()) };
+        while !word.is_null() {
             let Some(entry_address) = self.containing_object(word) else {
                 break;
             };
             let (func_address, args_address, args_type, next) = {
-                let entry = unsafe { &*(entry_address as *const DeferStackEntry) };
+                let entry = unsafe { &*entry_address.cast::<DeferStackEntry>() };
                 (
                     entry.func_address(),
                     entry.args_words_address(),
@@ -984,63 +1020,60 @@ impl ObjectAllocatorInner {
                 )
             };
             self.mark_object(entry_address);
-            self.mark_function_field(func_address);
+            self.mark_function_field(func_address.cast::<u8>());
             if let Some(get_member_offset_runs) = args_type.get_member_offset_runs() {
                 let inner = self as *mut ObjectAllocatorInner as *mut ffi::c_void;
-                get_member_offset_runs(mark_typed_visitor, args_address, inner);
+                get_member_offset_runs(mark_typed_visitor, args_address.cast::<u8>(), inner);
             }
-            word = next;
+            word = next.cast::<u8>();
         }
     }
 
-    fn mark_typed_offset(&mut self, offset: usize, size: usize, typ: TypeId, kind: i32) {
+    fn mark_typed_offset(&mut self, offset: *mut u8, size: usize, typ: TypeId, kind: i32) {
         let word_size = mem::size_of::<usize>();
+        let end = offset.with_addr(offset.addr().saturating_add(size));
+        let step = |addr: *mut u8, step: usize| addr.with_addr(addr.addr() + step);
         match kind {
             GC_SLOT_POINTER => {
                 let pointed_to = typ;
                 let mut address = offset;
-                let end = offset.saturating_add(size);
-                while address + word_size <= end {
+                while address.addr() + word_size <= end.addr() {
                     self.mark_pointer_field(address, pointed_to);
-                    address += word_size;
+                    address = step(address, word_size);
                 }
             }
             GC_SLOT_SLICE => {
                 let mut address = offset;
-                let end = offset.saturating_add(size);
-                while address + SLICE_HEADER_SIZE <= end {
+                while address.addr() + SLICE_HEADER_SIZE <= end.addr() {
                     self.mark_slice_header(address, typ);
-                    address += SLICE_HEADER_SIZE;
+                    address = step(address, SLICE_HEADER_SIZE);
                 }
             }
             GC_SLOT_INTERFACE => {
                 let mut address = offset;
-                let end = offset.saturating_add(size);
-                while address + mem::size_of::<Interface>() <= end {
+                while address.addr() + mem::size_of::<Interface>() <= end.addr() {
                     self.mark_interface_value(address);
-                    address += mem::size_of::<Interface>();
+                    address = step(address, mem::size_of::<Interface>());
                 }
             }
             GC_SLOT_STRING => {
                 let mut address = offset;
-                let end = offset.saturating_add(size);
-                while address + STRING_SIZE <= end {
+                while address.addr() + STRING_SIZE <= end.addr() {
                     self.mark_raw_word(address);
-                    address += STRING_SIZE;
+                    address = step(address, STRING_SIZE);
                 }
             }
             GC_SLOT_FUNCTION => {
                 let mut address = offset;
-                let end = offset.saturating_add(size);
-                while address + mem::size_of::<FunctionObject>() <= end {
+                while address.addr() + mem::size_of::<FunctionObject>() <= end.addr() {
                     self.mark_function_field(address);
-                    address += mem::size_of::<FunctionObject>();
+                    address = step(address, mem::size_of::<FunctionObject>());
                 }
             }
             GC_SLOT_DEFER_STACK => self.mark_defer_stack_slot(offset),
             GC_SLOT_FREE_VARS => {
-                let word = unsafe { ptr::read_unaligned(offset as *const usize) };
-                if word != 0
+                let word = unsafe { ptr::read_unaligned(offset.cast::<*mut u8>()) };
+                if !word.is_null()
                     && let Some(closure_address) = self.containing_object(word)
                 {
                     self.mark_object(closure_address);
@@ -1048,10 +1081,9 @@ impl ObjectAllocatorInner {
             }
             GC_SLOT_MAP => {
                 let mut address = offset;
-                let end = offset.saturating_add(size);
-                while address + word_size <= end {
+                while address.addr() + word_size <= end.addr() {
                     self.mark_map_slot(address);
-                    address += word_size;
+                    address = step(address, word_size);
                 }
             }
             GC_SLOT_NO_POINTER => {}
@@ -1061,7 +1093,7 @@ impl ObjectAllocatorInner {
 }
 
 extern "C" fn mark_typed_visitor(
-    offset: usize,
+    offset: *mut u8,
     size: usize,
     typ: TypeId,
     kind: i32,
@@ -1192,16 +1224,20 @@ mod tests {
     /// (which cannot capture anything).
     static NODE_TID: OnceLock<TypeId> = OnceLock::new();
 
-    extern "C" fn node_generator(visit: TypeOffsetVisitor, base: usize, arg: *mut ffi::c_void) {
+    extern "C" fn node_generator(visit: TypeOffsetVisitor, base: *mut u8, arg: *mut ffi::c_void) {
         let node = *NODE_TID.get().unwrap();
         visit(base, mem::size_of::<usize>(), node, GC_SLOT_POINTER, arg);
     }
 
     /// A struct whose only pointer-bearing member is the frame's first local.
-    extern "C" fn offset8_generator(visit: TypeOffsetVisitor, base: usize, arg: *mut ffi::c_void) {
+    extern "C" fn offset8_generator(
+        visit: TypeOffsetVisitor,
+        base: *mut u8,
+        arg: *mut ffi::c_void,
+    ) {
         let node = *NODE_TID.get().unwrap();
         visit(
-            base + FRAME_LOCAL_OFFSET,
+            base.with_addr(base.addr() + FRAME_LOCAL_OFFSET),
             mem::size_of::<usize>(),
             node,
             GC_SLOT_POINTER,
@@ -1212,11 +1248,11 @@ mod tests {
     /// A frame-shaped type whose only member is an interface value.
     extern "C" fn interface_frame_generator(
         visit: TypeOffsetVisitor,
-        base: usize,
+        base: *mut u8,
         arg: *mut ffi::c_void,
     ) {
         visit(
-            base + FRAME_LOCAL_OFFSET,
+            base.with_addr(base.addr() + FRAME_LOCAL_OFFSET),
             2 * mem::size_of::<usize>(),
             TypeId::new_invalid(),
             GC_SLOT_INTERFACE,
@@ -1227,11 +1263,11 @@ mod tests {
     /// A frame-shaped type whose only member is a slice header.
     extern "C" fn slice_frame_generator(
         visit: TypeOffsetVisitor,
-        base: usize,
+        base: *mut u8,
         arg: *mut ffi::c_void,
     ) {
         visit(
-            base + FRAME_LOCAL_OFFSET,
+            base.with_addr(base.addr() + FRAME_LOCAL_OFFSET),
             SLICE_HEADER_SIZE,
             *NODE_TID.get().unwrap(),
             GC_SLOT_SLICE,
@@ -1239,33 +1275,39 @@ mod tests {
         );
     }
 
-    extern "C" fn mixed_generator(visit: TypeOffsetVisitor, base: usize, arg: *mut ffi::c_void) {
+    extern "C" fn mixed_generator(visit: TypeOffsetVisitor, base: *mut u8, arg: *mut ffi::c_void) {
         let node = *NODE_TID.get().unwrap();
         visit(base, mem::size_of::<usize>(), node, GC_SLOT_POINTER, arg);
-        visit(base + 8, SLICE_HEADER_SIZE, node, GC_SLOT_SLICE, arg);
         visit(
-            base + 32,
+            base.with_addr(base.addr() + 8),
+            SLICE_HEADER_SIZE,
+            node,
+            GC_SLOT_SLICE,
+            arg,
+        );
+        visit(
+            base.with_addr(base.addr() + 32),
             STRING_SIZE,
             TypeId::new_invalid(),
             GC_SLOT_STRING,
             arg,
         );
         visit(
-            base + 48,
+            base.with_addr(base.addr() + 48),
             2 * mem::size_of::<usize>(),
             TypeId::new_invalid(),
             GC_SLOT_INTERFACE,
             arg,
         );
         visit(
-            base + 64,
+            base.with_addr(base.addr() + 64),
             mem::size_of::<FunctionObject>(),
             TypeId::new_invalid(),
             GC_SLOT_FUNCTION,
             arg,
         );
         visit(
-            base + 80,
+            base.with_addr(base.addr() + 80),
             mem::size_of::<usize>(),
             TypeId::new_invalid(),
             GC_SLOT_POINTER,
@@ -1274,7 +1316,11 @@ mod tests {
     }
 
     /// A struct whose only pointer-bearing member is a map value.
-    extern "C" fn map_slot_generator(visit: TypeOffsetVisitor, base: usize, arg: *mut ffi::c_void) {
+    extern "C" fn map_slot_generator(
+        visit: TypeOffsetVisitor,
+        base: *mut u8,
+        arg: *mut ffi::c_void,
+    ) {
         visit(
             base,
             mem::size_of::<usize>(),
@@ -1288,13 +1334,13 @@ mod tests {
     /// object base and one past the first 512 bytes.
     extern "C" fn far_pointer_generator(
         visit: TypeOffsetVisitor,
-        base: usize,
+        base: *mut u8,
         arg: *mut ffi::c_void,
     ) {
         let node = *NODE_TID.get().unwrap();
         visit(base, mem::size_of::<usize>(), node, GC_SLOT_POINTER, arg);
         visit(
-            base + 520,
+            base.with_addr(base.addr() + 520),
             mem::size_of::<usize>(),
             node,
             GC_SLOT_POINTER,
@@ -1305,12 +1351,12 @@ mod tests {
     /// A frame-shaped type whose pointer-bearing member is the defer stack.
     extern "C" fn defer_stack_generator(
         visit: TypeOffsetVisitor,
-        base: usize,
+        base: *mut u8,
         arg: *mut ffi::c_void,
     ) {
         // The defer stack is a member of the frame, wherever it sits in it.
         visit(
-            base + mem::offset_of!(crate::StackFrameCommon, defer_stack),
+            base.with_addr(base.addr() + mem::offset_of!(crate::StackFrameCommon, defer_stack)),
             mem::size_of::<crate::DeferStack>(),
             TypeId::new_invalid(),
             GC_SLOT_DEFER_STACK,
@@ -1459,7 +1505,7 @@ mod tests {
             pointed_to: TypeId::new_invalid(),
             get_member_offset_runs: None,
         });
-        TypeId::from_raw(info as *const TypeInfo as usize)
+        TypeId::from_ptr(info)
     }
 
     /// The little-endian bytes of a pointer, as a root slot.
@@ -1503,6 +1549,27 @@ mod tests {
         let mut storage = [0u8; ROOT_SLOT_SIZE];
         storage[..bytes.len()].copy_from_slice(bytes);
         let address = Box::leak(Box::new(storage));
+        allocator.register_global_object(address.as_mut_ptr() as *mut (), ROOT_SLOT_SIZE, typ);
+        RootGuard(address)
+    }
+
+    /// Registers an interface value as a global root: `receiver` in the
+    /// first word, the concrete `concrete` TypeId in the second. The type
+    /// word is stored as the pointer it is because the collector
+    /// dereferences it; the write happens before the storage is
+    /// registered, so the registered pointer covers it.
+    fn register_interface_root(
+        allocator: &ObjectAllocatorPtr,
+        typ: TypeId,
+        receiver: *mut (),
+        concrete: TypeId,
+    ) -> RootGuard {
+        let mut storage = [0u8; ROOT_SLOT_SIZE];
+        storage[..8].copy_from_slice(&word(receiver));
+        let address = Box::leak(Box::new(storage));
+        unsafe {
+            ptr::write_unaligned(address.as_mut_ptr().add(8).cast::<TypeId>(), concrete);
+        }
         allocator.register_global_object(address.as_mut_ptr() as *mut (), ROOT_SLOT_SIZE, typ);
         RootGuard(address)
     }
@@ -1696,14 +1763,15 @@ mod tests {
             &[],
             FunctionObject::new_null(),
         );
-        let frame_address = ctx.stack_pointer() as usize;
+        let frame_sp = ctx.stack_pointer();
+        let frame_address = frame_sp as usize;
         let target = alloc_node(&allocator.ptr(), ptr::null_mut());
         unsafe {
             (ctx.stack_pointer() as *mut usize).write(target as usize);
         }
         ctx.push_gc_root(
             frame_address,
-            frame_address,
+            frame_sp.cast::<u8>(),
             mem::size_of::<usize>(),
             TypeId::new_invalid(),
             GC_SLOT_POINTER,
@@ -1900,10 +1968,12 @@ mod tests {
         let allocator = ObjectAllocator::new(Rc::new(Pager::new()));
         let leaf = alloc_node(&allocator.ptr(), ptr::null_mut());
         let box_ptr = alloc_node(&allocator.ptr(), leaf);
-        let mut value = [0u8; 16];
-        value[..8].copy_from_slice(&word(box_ptr));
-        value[8..16].copy_from_slice(&raw_word(types().node.tid().to_raw()));
-        let _root = register_root(&allocator.ptr(), types().interface.tid(), &value);
+        let _root = register_interface_root(
+            &allocator.ptr(),
+            types().interface.tid(),
+            box_ptr,
+            types().node.tid(),
+        );
 
         allocator.ptr().run_gc(&[]);
         assert!(allocator.ptr().contains(box_ptr));
@@ -1914,10 +1984,12 @@ mod tests {
     fn test_interface_global_with_pointer_free_receiver() {
         let allocator = ObjectAllocator::new(Rc::new(Pager::new()));
         let box_ptr = allocator.ptr().allocate(8, TypeId::new_invalid());
-        let mut value = [0u8; 16];
-        value[..8].copy_from_slice(&word(box_ptr));
-        value[8..16].copy_from_slice(&raw_word(types().opaque_16.tid().to_raw()));
-        let _root = register_root(&allocator.ptr(), types().interface.tid(), &value);
+        let _root = register_interface_root(
+            &allocator.ptr(),
+            types().interface.tid(),
+            box_ptr,
+            types().opaque_16.tid(),
+        );
 
         allocator.ptr().run_gc(&[]);
         assert!(allocator.ptr().contains(box_ptr));
@@ -2317,10 +2389,11 @@ mod tests {
             FunctionObject::new_null(),
         );
         ctx.stack_frame_mut::<StackFrameCommon>().frame_type = types().defer_frame.tid();
-        let defer_stack =
-            ctx.stack_pointer() as usize + mem::offset_of!(StackFrameCommon, defer_stack);
+        let defer_stack = unsafe {
+            (ctx.stack_pointer() as *mut u8).add(mem::offset_of!(StackFrameCommon, defer_stack))
+        };
         unsafe {
-            (defer_stack as *mut usize).write(entry as usize);
+            (defer_stack as *mut *mut DeferStackEntry).write(entry);
         }
 
         allocator.ptr().run_gc(&[&ctx]);

@@ -38,7 +38,7 @@ pub(crate) struct GcRoot {
     /// when that frame is popped.
     pub(crate) frame_address: usize,
     /// Address of the pointer word.
-    pub(crate) address: usize,
+    pub(crate) address: *mut u8,
     /// Extent in bytes of the value at `address`.
     pub(crate) size: usize,
     /// Type the value at `address` is traced with; invalid for a pointer whose
@@ -255,7 +255,7 @@ impl LightWeightThreadContext {
     pub(crate) fn push_gc_root(
         &mut self,
         frame_address: usize,
-        address: usize,
+        address: *mut u8,
         size: usize,
         type_id: TypeId,
         kind: i32,
@@ -290,8 +290,8 @@ impl LightWeightThreadContext {
 
     /// Address of the bottom of this goroutine's stack region, which is also
     /// the start of the allocator object backing it.
-    pub(crate) fn stack_base(&self) -> usize {
-        self.initial_stack_pointer as usize
+    pub(crate) fn stack_base(&self) -> *mut u8 {
+        self.initial_stack_pointer.cast()
     }
 
     /// Gives the pages this goroutine's stack region was mapped from back to
@@ -299,7 +299,7 @@ impl LightWeightThreadContext {
     /// nothing may read the stack. The region was never an allocation of the
     /// object allocator, so no collector can unmap it a second time.
     pub(crate) fn reclaim_stack_pages(&self) {
-        let stack_base = self.initial_stack_pointer as *mut ();
+        let stack_base = self.stack_base().cast();
         self.global_context().process(|global_context| {
             global_context.pager().deallocate(stack_base, STACK_PAGES);
         });
@@ -309,7 +309,7 @@ impl LightWeightThreadContext {
     pub(crate) fn stack_frames(&self) -> StackFrames {
         StackFrames {
             base: self.stack_base(),
-            next: self.stack_pointer as usize,
+            next: self.stack_pointer.cast(),
             finished: false,
         }
     }
@@ -361,7 +361,7 @@ impl LightWeightThreadContext {
 /// What the GC needs to know about one live stack frame.
 pub(crate) struct StackFrameDescriptor {
     /// Address of the frame, i.e. of its StackFrameCommon.
-    pub(crate) address: usize,
+    pub(crate) address: *mut u8,
     /// Stack map source of the frame, invalid when the frame carries none.
     pub(crate) frame_type: TypeId,
 }
@@ -369,8 +369,8 @@ pub(crate) struct StackFrameDescriptor {
 /// Iterator over the frames of a goroutine stack, innermost first. The bottom
 /// frame links to itself, which terminates the walk.
 pub(crate) struct StackFrames {
-    base: usize,
-    next: usize,
+    base: *mut u8,
+    next: *mut u8,
     finished: bool,
 }
 
@@ -378,12 +378,12 @@ impl Iterator for StackFrames {
     type Item = StackFrameDescriptor;
 
     fn next(&mut self) -> Option<StackFrameDescriptor> {
-        if self.finished || self.next < self.base {
+        if self.finished || self.next.addr() < self.base.addr() {
             return None;
         }
         // Every frame starts with a StackFrameCommon, so reading it stays
         // inside the frame.
-        let common = unsafe { &*(self.next as *const crate::StackFrameCommon) };
+        let common = unsafe { &*self.next.cast::<crate::StackFrameCommon>() };
         let descriptor = StackFrameDescriptor {
             address: self.next,
             frame_type: common.frame_type,
@@ -393,8 +393,8 @@ impl Iterator for StackFrames {
         // the stack base (a generated frame can occupy `base`, not `base + 8`),
         // so a `prev` equal to the base is a valid pointer, not a stray word;
         // only the `prev == self.next` self-link terminates the walk.
-        let prev = common.prev_stack_pointer as usize;
-        if prev >= self.base && prev != self.next {
+        let prev = common.prev_stack_pointer.cast::<u8>();
+        if prev.addr() >= self.base.addr() && prev.addr() != self.next.addr() {
             self.next = prev;
         } else {
             self.finished = true;
@@ -446,7 +446,7 @@ mod tests {
             ctx.reclaim_stack_pages();
             let ret = unsafe {
                 libc::mprotect(
-                    stack_base as *mut libc::c_void,
+                    stack_base.cast::<libc::c_void>(),
                     STACK_PAGES * crate::pager::PAGE_SIZE,
                     libc::PROT_READ | libc::PROT_WRITE,
                 )
@@ -503,14 +503,15 @@ mod tests {
         let prev_sp = ctx.stack_pointer();
         let frame_extent = mem::size_of::<StackFrameCommon>() + 128;
         ctx.grow_stack(frame_extent);
-        let frame_address = ctx.stack_pointer() as usize;
+        let frame_sp = ctx.stack_pointer();
+        let frame_address = frame_sp as usize;
         ctx.push_frame(frame_extent, prev_sp, None, &[], FunctionObject::new_null());
         // A frame pushed without a stack map is not rooted by itself.
         assert!(ctx.gc_roots().is_empty());
         // A caller that stores a pointer there roots the one word explicitly.
         ctx.push_gc_root(
             frame_address,
-            frame_address + 8,
+            frame_sp.cast::<u8>().with_addr(frame_sp.addr() + 8),
             mem::size_of::<usize>(),
             TypeId::new_invalid(),
             0,
@@ -548,8 +549,8 @@ mod tests {
         let (mut ctx, _gc) = create_ctx();
         let prev_sp = ctx.stack_pointer();
         ctx.grow_stack(mem::size_of::<StackFrameCommon>() + 128);
-        let arg1 = 0xaaaa as *const ();
-        let arg2 = 0xbbbb as *const ();
+        let arg1 = std::ptr::without_provenance::<()>(0xaaaa);
+        let arg2 = std::ptr::without_provenance::<()>(0xbbbb);
         ctx.push_frame(
             mem::size_of::<StackFrameCommon>() + 128,
             prev_sp,

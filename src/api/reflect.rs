@@ -152,17 +152,17 @@ impl StringObject {
 struct StackFrameReflectTypeKind<'a> {
     common: StackFrameCommon,
     result_ptr: &'a mut usize,
-    type_id: usize,
+    type_id: TypeId,
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn gox5_reflect_type_kind(ctx: &mut LightWeightThreadContext) -> FunctionObject {
     let frame = ctx.stack_frame::<StackFrameReflectTypeKind>();
 
-    let kind = if frame.type_id == 0 {
+    let kind = if frame.type_id.is_null() {
         KIND_INVALID
     } else {
-        let tid = TypeId::from_raw(frame.type_id);
+        let tid = frame.type_id;
         let cname = tid.name().to_str().unwrap_or("").to_string();
         mapping_for_name(&cname).0
     };
@@ -177,7 +177,7 @@ pub extern "C" fn gox5_reflect_type_kind(ctx: &mut LightWeightThreadContext) -> 
 struct StackFrameReflectTypeString<'a> {
     common: StackFrameCommon,
     result_ptr: &'a mut StringObject,
-    type_id: usize,
+    type_id: TypeId,
 }
 
 #[unsafe(no_mangle)]
@@ -187,10 +187,10 @@ pub extern "C" fn gox5_reflect_type_string(ctx: &mut LightWeightThreadContext) -
         frame.type_id
     };
 
-    let name = if type_id == 0 {
+    let name = if type_id.is_null() {
         StringObject::new(ptr::null(), 0)
     } else {
-        let tid = TypeId::from_raw(type_id);
+        let tid = type_id;
         let cname = tid.name().to_str().unwrap_or("").to_string();
         if let Some(m) = mapping_for_basic(&cname) {
             StringObject::from_static(m.go_name)
@@ -229,11 +229,11 @@ mod tests {
 
     struct TypeIdGuard {
         blob: *mut [u64],
-        tid: usize,
+        tid: TypeId,
     }
 
     impl TypeIdGuard {
-        fn tid(&self) -> usize {
+        fn tid(&self) -> TypeId {
             self.tid
         }
     }
@@ -258,13 +258,12 @@ mod tests {
                 .cast::<StringObject>()
                 .write(s);
         }
-        // Box::leak exposes the allocation's provenance, which miri requires so
-        // the runtime can re-derive a &TypeInfo from the raw type_id integer.
         // Keep only a raw pointer (not the &'static mut) for later reclaim, to
-        // avoid a conflicting live reference during the read.
+        // avoid a conflicting live reference during the read. The TypeId keeps
+        // the pointer itself, so its provenance survives the round trip.
         let leaked: &'static mut [u64] = Box::leak(raw);
         let blob = leaked as *mut [u64];
-        let tid = leaked.as_ptr() as usize;
+        let tid = TypeId::from_ptr(leaked.as_ptr().cast::<crate::type_id::TypeInfo>());
         TypeIdGuard { blob, tid }
     }
 
@@ -376,7 +375,7 @@ mod tests {
         );
 
         let frame = ctx.stack_frame_mut::<StackFrameReflectTypeKind>();
-        frame.type_id = 0;
+        frame.type_id = TypeId::new_invalid();
         frame.result_ptr = unsafe { &mut *result_raw };
 
         let result = gox5_reflect_type_kind(&mut ctx);

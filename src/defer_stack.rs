@@ -1,4 +1,3 @@
-use std::mem;
 use std::ptr;
 
 use crate::FunctionObject;
@@ -59,16 +58,16 @@ impl DeferStackEntry {
         self.args_type
     }
 
-    pub(crate) fn next_address(&self) -> usize {
-        self.next.map_or(0, |next| next.as_ptr() as usize)
+    pub(crate) fn next_address(&self) -> *mut DeferStackEntry {
+        self.next.map_or(std::ptr::null_mut(), |next| next.as_ptr())
     }
 
-    pub(crate) fn func_address(&self) -> usize {
-        self as *const Self as usize + mem::offset_of!(Self, func)
+    pub(crate) fn func_address(&self) -> *mut crate::FunctionObject {
+        std::ptr::addr_of!(self.func).cast_mut()
     }
 
-    pub(crate) fn args_words_address(&self) -> usize {
-        self.args().as_ptr() as usize
+    pub(crate) fn args_words_address(&self) -> *mut *const () {
+        self.args().as_ptr().cast_mut()
     }
 }
 

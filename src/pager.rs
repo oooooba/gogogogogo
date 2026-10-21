@@ -54,11 +54,11 @@ impl Pager {
                     libc::perror(message.as_ptr());
                     panic!();
                 }
-                let usable_start = ((base_addr as usize + PAGE_SIZE + align - 1) & !(align - 1))
-                    as *mut libc::c_void;
-                let metadata = (usable_start as usize - PAGE_SIZE) as *mut usize;
-                metadata.write(base_addr as usize);
-                metadata.add(1).write(total_pages);
+                let usable_start =
+                    base_addr.with_addr((base_addr.addr() + PAGE_SIZE + align - 1) & !(align - 1));
+                let metadata = usable_start.cast::<u8>().sub(PAGE_SIZE);
+                metadata.cast::<*mut libc::c_void>().write(base_addr);
+                metadata.cast::<usize>().add(1).write(total_pages);
                 usable_start
             }
         };
@@ -94,16 +94,19 @@ impl Pager {
                     libc::perror(message.as_ptr());
                     panic!();
                 }
-                let usable_start = ((base_addr as usize + PAGE_SIZE + align - 1) & !(align - 1))
-                    as *mut libc::c_void;
-                let lower_slack = usable_start as usize - base_addr as usize - PAGE_SIZE;
+                let usable_start =
+                    base_addr.with_addr((base_addr.addr() + PAGE_SIZE + align - 1) & !(align - 1));
+                let lower_slack = usable_start.addr() - base_addr.addr() - PAGE_SIZE;
                 if lower_slack > 0 {
                     libc::munmap(base_addr, lower_slack);
                 }
-                let guard_end = usable_start as usize + PAGE_SIZE * (num_pages + 1);
-                let map_end = base_addr as usize + PAGE_SIZE * total_pages;
-                if guard_end < map_end {
-                    libc::munmap(guard_end as *mut libc::c_void, map_end - guard_end);
+                let guard_end = usable_start.cast::<u8>().add(PAGE_SIZE * (num_pages + 1));
+                let map_end = base_addr.cast::<u8>().add(PAGE_SIZE * total_pages);
+                if guard_end.addr() < map_end.addr() {
+                    libc::munmap(
+                        guard_end.cast::<libc::c_void>(),
+                        map_end.addr() - guard_end.addr(),
+                    );
                 }
                 let ret = libc::mprotect(
                     usable_start,
@@ -134,14 +137,14 @@ impl Pager {
             .expect("a region of pages was given back twice");
         #[cfg(miri)]
         unsafe {
-            let metadata = (ptr as usize - PAGE_SIZE) as *const usize;
-            let base_addr = metadata.read();
-            let total_pages = metadata.add(1).read();
-            libc::munmap(base_addr as *mut libc::c_void, PAGE_SIZE * total_pages);
+            let metadata = ptr.cast::<u8>().sub(PAGE_SIZE);
+            let base_addr = metadata.cast::<*mut libc::c_void>().read();
+            let total_pages = metadata.cast::<usize>().add(1).read();
+            libc::munmap(base_addr, PAGE_SIZE * total_pages);
         }
         #[cfg(not(miri))]
         unsafe {
-            let base_addr = (ptr as usize - PAGE_SIZE) as *mut libc::c_void;
+            let base_addr = ptr.cast::<u8>().sub(PAGE_SIZE).cast::<libc::c_void>();
             libc::munmap(base_addr, PAGE_SIZE * (num_pages + GUARD_PAGES));
         }
         self.allocated_pages.set(remaining);
