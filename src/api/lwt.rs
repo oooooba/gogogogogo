@@ -1,3 +1,4 @@
+use crate::api::panic::raise_runtime_error;
 use std::mem;
 use std::process;
 
@@ -140,10 +141,20 @@ struct StackFrameLwtSpawnInvoke<'a> {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn gox5_lwt_spawn_invoke(ctx: &mut LightWeightThreadContext) -> FunctionObject {
+    if ctx
+        .stack_frame::<StackFrameLwtSpawnInvoke>()
+        .interface
+        .is_nil()
+    {
+        return raise_runtime_error(
+            ctx,
+            "runtime error: invalid memory address or nil pointer dereference",
+        );
+    }
     spawn(ctx, |ctx| {
         let frame = ctx.stack_frame::<StackFrameLwtSpawnInvoke>();
         let method = frame.interface.search(frame.method_name.clone());
-        let entry_func = method.unwrap();
+        let entry_func = method.unwrap_or_else(|| panic!("interface method not found"));
         let result_size = frame.result_size;
         let args = unsafe {
             let sp = ctx.stack_pointer() as *const u8;

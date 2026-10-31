@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 
 	"go/token"
@@ -86,7 +87,7 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 			fmt.Fprintf(ctx.stream, "%s rhs = %s.raw;\n", createRawTypeName(instr.Y.Type()), createValueRelName(instr.Y))
 			switch instr.Y.Type().Underlying().(*types.Basic).Kind() {
 			case types.Int, types.Int8, types.Int16, types.Int32, types.Int64:
-				fmt.Fprintln(ctx.stream, "assert(rhs>=0);")
+				fmt.Fprintf(ctx.stream, "if (rhs < 0) { %s }\n", panicCall("runtime error: negative shift amount"))
 			}
 			raw = "(((size_t)rhs) < sizeof(unsignedLhs) * 8) ? (unsignedLhs << rhs) : 0"
 		case token.SHR:
@@ -110,9 +111,15 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 			fmt.Fprintf(ctx.stream, "%s rhs = %s.raw;\n", createRawTypeName(instr.Y.Type()), createValueRelName(instr.Y))
 			switch instr.Y.Type().Underlying().(*types.Basic).Kind() {
 			case types.Int, types.Int8, types.Int16, types.Int32, types.Int64:
-				fmt.Fprintln(ctx.stream, "assert(rhs>=0);")
+				fmt.Fprintf(ctx.stream, "if (rhs < 0) { %s }\n", panicCall("runtime error: negative shift amount"))
 			}
 			raw = fmt.Sprintf("((size_t)rhs) < %s ? (%s) : (%s)", bitLen, calcExpr, overflowExpr)
+		case token.QUO, token.REM:
+			if isIntegerPanicType(instr.Type()) {
+				fmt.Fprintf(ctx.stream, "if (%s.raw == 0) { %s }\n", createValueRelName(instr.Y),
+					panicCall("runtime error: integer divide by zero"))
+			}
+			raw = fmt.Sprintf("%s.raw %s %s.raw", createValueRelName(instr.X), instr.Op.String(), createValueRelName(instr.Y))
 		default:
 			if isSignedIntegerType(instr.Type()) && (instr.Op == token.SUB || instr.Op == token.MUL) {
 				// See the token.ADD case: wrap signed arithmetic via unsigned.
@@ -587,6 +594,8 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 	case *ssa.FieldAddr:
 		index := instr.Field
 		name := createFieldName(instr.X.Type().Underlying().(*types.Pointer).Elem().Underlying().(*types.Struct).Field(index), index)
+		fmt.Fprintf(ctx.stream, "if (%s.raw == NULL) { %s }\n", createValueRelName(instr.X),
+			panicCall("runtime error: invalid memory address or nil pointer dereference"))
 		fmt.Fprintf(ctx.stream, "%s* raw = &(%s.raw->%s);\n", createTypeName(instr.Type().(*types.Pointer).Elem()), createValueRelName(instr.X), name)
 		fmt.Fprintf(ctx.stream, "%s = %s;\n", createValueRelName(instr), wrapInObject("raw", instr.Type()))
 
@@ -594,9 +603,11 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 		fmt.Fprintf(ctx.stream, "uintptr_t index = %s.raw;\n", createValueRelName(instr.Index))
 		switch t := instr.X.Type().Underlying().(type) {
 		case *types.Array:
+			ctx.emitIndexBoundsCheck("index", instr.Index.Type(), fmt.Sprintf("%d", t.Len()))
 			fmt.Fprintf(ctx.stream, "%s val = %s.raw[index];\n", createTypeName(t.Elem()), createValueRelName(instr.X))
 		case *types.Basic:
 			if t.Kind() == types.String || t.Kind() == types.UntypedString {
+				ctx.emitIndexBoundsCheck("index", instr.Index.Type(), fmt.Sprintf("%s.len", createValueRelName(instr.X)))
 				fmt.Fprintf(ctx.stream, "%s val = { .raw = (uint8_t)%s.raw[index] };\n", createTypeName(instr.Type()), createValueRelName(instr.X))
 			} else {
 				panic(fmt.Sprintf("%s, %s, %s", instr, instr.X, t))
@@ -610,9 +621,14 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 		fmt.Fprintf(ctx.stream, "uintptr_t index = %s.raw;\n", createValueRelName(instr.Index))
 		switch t := instr.X.Type().Underlying().(type) {
 		case *types.Slice:
+			ctx.emitIndexBoundsCheck("index", instr.Index.Type(), fmt.Sprintf("%s.typed.size", createValueRelName(instr.X)))
 			fmt.Fprintf(ctx.stream, "%s* raw = &((%s.typed.ptr)[index]);\n", createTypeName(t.Elem()), createValueRelName(instr.X))
 		case *types.Pointer:
-			fmt.Fprintf(ctx.stream, "%s* raw = &(%s.raw->raw[index]);\n", createTypeName(t.Elem().Underlying().(*types.Array).Elem()), createValueRelName(instr.X))
+			array := t.Elem().Underlying().(*types.Array)
+			fmt.Fprintf(ctx.stream, "if (%s.raw == NULL) { %s }\n", createValueRelName(instr.X),
+				panicCall("runtime error: invalid memory address or nil pointer dereference"))
+			ctx.emitIndexBoundsCheck("index", instr.Index.Type(), fmt.Sprintf("%d", array.Len()))
+			fmt.Fprintf(ctx.stream, "%s* raw = &(%s.raw->raw[index]);\n", createTypeName(array.Elem()), createValueRelName(instr.X))
 		default:
 			panic(fmt.Sprintf("%s, %s, %s", instr, instr.X, t))
 		}
@@ -634,7 +650,9 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 		case *types.Basic:
 			switch xt.Kind() {
 			case types.String, types.UntypedString:
-				raw := fmt.Sprintf("%s.raw[%s.raw]", createValueRelName(instr.X), createValueRelName(instr.Index))
+				fmt.Fprintf(ctx.stream, "uintptr_t index = %s.raw;\n", createValueRelName(instr.Index))
+				ctx.emitIndexBoundsCheck("index", instr.Index.Type(), fmt.Sprintf("%s.len", createValueRelName(instr.X)))
+				raw := fmt.Sprintf("%s.raw[index]", createValueRelName(instr.X))
 				fmt.Fprintf(ctx.stream, "%s = %s;\n", createValueRelName(instr), wrapInObject(raw, instr.Type()))
 			default:
 				panic(fmt.Sprintf("%s", instr))
@@ -667,6 +685,10 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 		}
 
 	case *ssa.MakeChan:
+		if isSignedPanicType(instr.Size.Type()) {
+			fmt.Fprintf(ctx.stream, "if ((intptr_t)(%s.raw) < 0) { %s }\n", createValueRelName(instr.Size),
+				panicCall("makechan: size out of range"))
+		}
 		result := fmt.Sprintf("%s.raw", createValueRelName(instr))
 		ctx.switchFunctionToCallRuntimeApi("gox5_channel_new", "StackFrameChannelNew", createInstructionName(instr), &result, nil,
 			paramArgPair{param: "type_id", arg: wrapInTypeId(instr.Type().Underlying().(*types.Chan).Elem())},
@@ -736,6 +758,14 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 		)
 
 	case *ssa.MakeSlice:
+		if isSignedPanicType(instr.Len.Type()) {
+			fmt.Fprintf(ctx.stream, "if ((intptr_t)(%s.raw) < 0) { %s }\n", createValueRelName(instr.Len),
+				panicCall("runtime error: makeslice: len out of range"))
+		}
+		if isSignedPanicType(instr.Cap.Type()) {
+			fmt.Fprintf(ctx.stream, "if ((intptr_t)(%s.raw) < 0) { %s }\n", createValueRelName(instr.Cap),
+				panicCall("runtime error: makeslice: cap out of range"))
+		}
 		result := createValueRelName(instr)
 		ptr := fmt.Sprintf("%s.raw", result)
 		ctx.switchFunctionToCallRuntimeApi("gox5_slice_new", "StackFrameSliceNew", createInstructionName(instr), &ptr, nil,
@@ -861,14 +891,24 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 				panic(fmt.Sprintf("%s (%T)", t, t))
 			}
 			result := createValueRelName(instr)
+			lowExpr := "0"
+			var lowType types.Type = types.Typ[types.Int]
 			low := "-1"
 			if instr.Low != nil {
-				low = fmt.Sprintf("%s.raw", createValueRelName(instr.Low))
+				lowExpr = fmt.Sprintf("%s.raw", createValueRelName(instr.Low))
+				lowType = instr.Low.Type()
+				low = lowExpr
 			}
+			highExpr := fmt.Sprintf("%s.len", createValueRelName(instr.X))
+			var highType types.Type = types.Typ[types.Int]
 			high := "-1"
 			if instr.High != nil {
-				high = fmt.Sprintf("%s.raw", createValueRelName(instr.High))
+				highExpr = fmt.Sprintf("%s.raw", createValueRelName(instr.High))
+				highType = instr.High.Type()
+				high = highExpr
 			}
+			ctx.emitSlice2BoundsCheck(lowExpr, lowType, highExpr, highType,
+				fmt.Sprintf("%s.len", createValueRelName(instr.X)), "length")
 			ctx.switchFunctionToCallRuntimeApi("gox5_string_substr", "StackFrameStringSubstr", createInstructionName(instr), &result, nil,
 				paramArgPair{param: "base", arg: createValueRelName(instr.X)},
 				paramArgPair{param: "low", arg: low},
@@ -877,41 +917,60 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 		} else {
 			result := createValueRelName(instr)
 			startIndex := "0"
+			var lowType types.Type = types.Typ[types.Int]
 			if instr.Low != nil {
 				startIndex = fmt.Sprintf("%s.raw", createValueRelName(instr.Low))
+				lowType = instr.Low.Type()
 			}
 
 			switch t := instr.X.Type().Underlying().(type) {
 			case *types.Pointer:
-				// (*[N]T)[i:j:k] -- array to slice: built inline. No heap buffer is
-				// created, so the GC needs no update; the array itself is scanned
-				// through its own registration.
 				elemType := t.Elem().Underlying().(*types.Array)
 				length := fmt.Sprintf("%d", elemType.Len())
 				endIndex := length
+				var endType types.Type = types.Typ[types.Int]
+				if instr.Max != nil {
+					endIndex = fmt.Sprintf("%s.raw", createValueRelName(instr.Max))
+					endType = instr.Max.Type()
+				}
 				if instr.High != nil {
 					endIndex = fmt.Sprintf("%s.raw", createValueRelName(instr.High))
+					endType = instr.High.Type()
 				}
 				capacity := length
 				if instr.Max != nil {
 					capacity = fmt.Sprintf("%s.raw", createValueRelName(instr.Max))
+					ctx.emitSlice3BoundsCheck(startIndex, lowType, endIndex, endType,
+						capacity, instr.Max.Type(), length, "length")
+				} else {
+					ctx.emitSlice2BoundsCheck(startIndex, lowType, endIndex, endType, length, "length")
 				}
+				fmt.Fprintf(ctx.stream, "if (%s.raw == NULL) { %s }\n", createValueRelName(instr.X),
+					panicCall("runtime error: invalid memory address or nil pointer dereference"))
 				fmt.Fprintf(ctx.stream, "%s = %s;\n", result, wrapInObject("0", instr.Type()))
 				fmt.Fprintf(ctx.stream, "%s.typed.ptr = %s.raw->raw + %s;\n", result, createValueRelName(instr.X), startIndex)
 				fmt.Fprintf(ctx.stream, "%s.typed.size = %s - %s;\n", result, endIndex, startIndex)
 				fmt.Fprintf(ctx.stream, "%s.typed.capacity = %s - %s;\n", result, capacity, startIndex)
 			case *types.Slice:
 				endIndex := fmt.Sprintf("%s.typed.size", createValueRelName(instr.X))
+				var endType types.Type = types.Typ[types.Int]
+				if instr.Max != nil {
+					endIndex = fmt.Sprintf("%s.raw", createValueRelName(instr.Max))
+					endType = instr.Max.Type()
+				}
 				if instr.High != nil {
 					endIndex = fmt.Sprintf("%s.raw", createValueRelName(instr.High))
+					endType = instr.High.Type()
 				}
 				capacity := fmt.Sprintf("%s.typed.capacity", createValueRelName(instr.X))
 				if instr.Max != nil {
 					capacity = fmt.Sprintf("%s.raw", createValueRelName(instr.Max))
+					ctx.emitSlice3BoundsCheck(startIndex, lowType, endIndex, endType,
+						capacity, instr.Max.Type(), fmt.Sprintf("%s.typed.capacity", createValueRelName(instr.X)), "capacity")
+				} else {
+					ctx.emitSlice2BoundsCheck(startIndex, lowType, endIndex, endType,
+						fmt.Sprintf("%s.typed.capacity", createValueRelName(instr.X)), "capacity")
 				}
-				// Slice sub-slicing is routed through the runtime so the GC can
-				// observe how far the buffer's accessible prefix extends; an
-				// extended sub-slice (s[:cap]) makes tail elements reachable.
 				ptr := fmt.Sprintf("%s.raw", result)
 				ctx.switchFunctionToCallRuntimeApi("gox5_slice_sub", "StackFrameSliceSub", createInstructionName(instr), &ptr, nil,
 					paramArgPair{param: "base", arg: fmt.Sprintf("%s.raw", createValueRelName(instr.X))},
@@ -932,7 +991,10 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 		arrType := arrPtrType.Elem().Underlying().(*types.Array)
 		n := arrType.Len()
 		if n != 0 {
-			fmt.Fprintf(ctx.stream, "if (%s.typed.size < %d) { assert(false && \"slice length too short to convert to array pointer\"); }\n", createValueRelName(instr.X), n)
+			fmt.Fprintf(ctx.stream, "if (%s.typed.size < %d) { %s }\n", createValueRelName(instr.X), n,
+				panicCall("runtime error: cannot convert slice with length %lld to array or pointer to array with length %lld",
+					fmt.Sprintf("(long long)(%s.typed.size)", createValueRelName(instr.X)),
+					fmt.Sprintf("%d", n)))
 		}
 		fmt.Fprintf(ctx.stream, "%s = %s;\n", createValueRelName(instr), wrapInObject(fmt.Sprintf("(%s*)%s.typed.ptr", createTypeName(arrPtrType.Elem()), createValueRelName(instr.X)), instr.Type()))
 
@@ -987,6 +1049,10 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 			s := wrapInObject(fmt.Sprintf("~(%s.raw)", createValueRelName(instr.X)), instr.Type())
 			fmt.Fprintf(ctx.stream, "%s = %s;\n", createValueRelName(instr), s)
 		} else {
+			if instr.Op == token.MUL {
+				fmt.Fprintf(ctx.stream, "if (%s.raw == NULL) { %s }\n", createValueRelName(instr.X),
+					panicCall("runtime error: invalid memory address or nil pointer dereference"))
+			}
 			s := fmt.Sprintf("%s (%s.raw)", instr.Op.String(), createValueRelName(instr.X))
 			if instr.Op != token.MUL {
 				s = wrapInObject(s, instr.Type())
@@ -998,4 +1064,145 @@ func (ctx *Context) emitInstruction(instruction ssa.Instruction) {
 		panic(fmt.Sprintf("unknown instruction: %s", instruction.String()))
 	}
 	fmt.Fprintf(ctx.stream, "\t}\n")
+}
+
+func isIntegerPanicType(typ types.Type) bool {
+	b, ok := typ.Underlying().(*types.Basic)
+	if !ok {
+		return false
+	}
+	switch b.Kind() {
+	case types.Int, types.Int8, types.Int16, types.Int32, types.Int64,
+		types.Uint, types.Uint8, types.Uint16, types.Uint32, types.Uint64, types.Uintptr:
+		return true
+	}
+	return false
+}
+
+func isSignedPanicType(typ types.Type) bool {
+	b, ok := typ.Underlying().(*types.Basic)
+	if !ok {
+		return false
+	}
+	switch b.Kind() {
+	case types.Int, types.Int8, types.Int16, types.Int32, types.Int64, types.UntypedInt:
+		return true
+	}
+	return false
+}
+
+func panicArgument(expr string, typ types.Type) (string, string) {
+	if isSignedPanicType(typ) {
+		return "%lld", fmt.Sprintf("(long long)(intptr_t)(%s)", expr)
+	}
+	return "%llu", fmt.Sprintf("(unsigned long long)(uintptr_t)(%s)", expr)
+}
+
+func panicCall(format string, args ...string) string {
+	return fmt.Sprintf("return gox5_panic_runtime_error(ctx, (StackFrameCommon*)(frame + 1), %q%s);",
+		format, func() string {
+			if len(args) == 0 {
+				return ""
+			}
+			return ", " + strings.Join(args, ", ")
+		}())
+}
+
+func (ctx *Context) emitIndexBoundsCheck(indexExpr string, indexType types.Type, lengthExpr string) {
+	format, arg := panicArgument(indexExpr, indexType)
+	fmt.Fprintf(ctx.stream, "if ((uintptr_t)(%s) >= (uintptr_t)(%s)) {\n", indexExpr, lengthExpr)
+	if isSignedPanicType(indexType) {
+		fmt.Fprintf(ctx.stream, "if ((intptr_t)(%s) < 0) { %s }\n", indexExpr,
+			panicCall("runtime error: index out of range ["+format+"]", arg))
+	}
+	fmt.Fprintf(ctx.stream, "%s\n",
+		panicCall("runtime error: index out of range ["+format+"] with length %lld",
+			arg, fmt.Sprintf("(long long)(%s)", lengthExpr)))
+	fmt.Fprintf(ctx.stream, "}\n")
+}
+
+func (ctx *Context) emitSlice2BoundsCheck(lowExpr string, lowType types.Type, highExpr string, highType types.Type, boundExpr string, noun string) {
+	highFormat, highArg := panicArgument(highExpr, highType)
+	lowFormat, lowArg := panicArgument(lowExpr, lowType)
+	if highExpr != "0" {
+		skipHigh := false
+		if m := regexp.MustCompile(`^[0-9]+$`).FindString(boundExpr); m != "" {
+			var v int64
+			fmt.Sscanf(m, "%d", &v)
+			if v >= 0 {
+				skipHigh = true
+			}
+		}
+		if !skipHigh {
+			fmt.Fprintf(ctx.stream, "if ((unsigned long long)(%s) > (unsigned long long)(%s)) {\n", highExpr, boundExpr)
+			if isSignedPanicType(highType) {
+				fmt.Fprintf(ctx.stream, "if ((intptr_t)(%s) < 0) { %s }\n", highExpr,
+					panicCall("runtime error: slice bounds out of range [:"+highFormat+"]", highArg))
+			}
+			fmt.Fprintf(ctx.stream, "%s\n",
+				panicCall("runtime error: slice bounds out of range [:"+highFormat+"] with "+noun+" %lld",
+					highArg, fmt.Sprintf("(long long)(%s)", boundExpr)))
+			fmt.Fprintf(ctx.stream, "}\n")
+		}
+	}
+	if lowExpr != "0" {
+		skipLow := false
+		if m := regexp.MustCompile(`^[0-9]+$`).FindString(highExpr); m != "" {
+			var v int64
+			fmt.Sscanf(m, "%d", &v)
+			if v <= 255 {
+				skipLow = true
+			}
+		}
+		if !skipLow {
+			fmt.Fprintf(ctx.stream, "if ((unsigned long long)(%s) > (unsigned long long)(%s)) {\n", lowExpr, highExpr)
+			if isSignedPanicType(lowType) {
+				fmt.Fprintf(ctx.stream, "if ((intptr_t)(%s) < 0) { %s }\n", lowExpr,
+					panicCall("runtime error: slice bounds out of range ["+lowFormat+":]", lowArg))
+			}
+			fmt.Fprintf(ctx.stream, "%s\n",
+				panicCall("runtime error: slice bounds out of range ["+lowFormat+":"+highFormat+"]",
+					lowArg, highArg))
+			fmt.Fprintf(ctx.stream, "}\n")
+		}
+	}
+}
+
+func (ctx *Context) emitSlice3BoundsCheck(lowExpr string, lowType types.Type, highExpr string, highType types.Type, maxExpr string, maxType types.Type, boundExpr string, noun string) {
+	maxFormat, maxArg := panicArgument(maxExpr, maxType)
+	highFormat, highArg := panicArgument(highExpr, highType)
+	lowFormat, lowArg := panicArgument(lowExpr, lowType)
+	if maxExpr != "0" {
+		fmt.Fprintf(ctx.stream, "if ((unsigned long long)(%s) > (unsigned long long)(%s)) {\n", maxExpr, boundExpr)
+		if isSignedPanicType(maxType) {
+			fmt.Fprintf(ctx.stream, "if ((intptr_t)(%s) < 0) { %s }\n", maxExpr,
+				panicCall("runtime error: slice bounds out of range [::"+maxFormat+"]", maxArg))
+		}
+		fmt.Fprintf(ctx.stream, "%s\n",
+			panicCall("runtime error: slice bounds out of range [::"+maxFormat+"] with "+noun+" %lld",
+				maxArg, fmt.Sprintf("(long long)(%s)", boundExpr)))
+		fmt.Fprintf(ctx.stream, "}\n")
+	}
+	if highExpr != "0" {
+		fmt.Fprintf(ctx.stream, "if ((unsigned long long)(%s) > (unsigned long long)(%s)) {\n", highExpr, maxExpr)
+		if isSignedPanicType(highType) {
+			fmt.Fprintf(ctx.stream, "if ((intptr_t)(%s) < 0) { %s }\n", highExpr,
+				panicCall("runtime error: slice bounds out of range [:"+highFormat+":]", highArg))
+		}
+		fmt.Fprintf(ctx.stream, "%s\n",
+			panicCall("runtime error: slice bounds out of range [:"+highFormat+":"+maxFormat+"]",
+				highArg, maxArg))
+		fmt.Fprintf(ctx.stream, "}\n")
+	}
+	if lowExpr != "0" {
+		fmt.Fprintf(ctx.stream, "if ((unsigned long long)(%s) > (unsigned long long)(%s)) {\n", lowExpr, highExpr)
+		if isSignedPanicType(lowType) {
+			fmt.Fprintf(ctx.stream, "if ((intptr_t)(%s) < 0) { %s }\n", lowExpr,
+				panicCall("runtime error: slice bounds out of range ["+lowFormat+"::]", lowArg))
+		}
+		fmt.Fprintf(ctx.stream, "%s\n",
+			panicCall("runtime error: slice bounds out of range ["+lowFormat+":"+highFormat+":]",
+				lowArg, highArg))
+		fmt.Fprintf(ctx.stream, "}\n")
+	}
 }

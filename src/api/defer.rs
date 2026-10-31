@@ -5,6 +5,7 @@ use crate::FunctionObject;
 use crate::LightWeightThreadContext;
 use crate::StackFrameCommon;
 use crate::UserFunction;
+use crate::api::panic::raise_runtime_error;
 use crate::defer_stack::DeferStackEntry;
 use crate::object::interface::Interface;
 use crate::object::string::StringObject;
@@ -87,10 +88,20 @@ struct StackFrameDeferRegisterInvoke<'a> {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn gox5_defer_register_invoke(ctx: &mut LightWeightThreadContext) -> FunctionObject {
+    if ctx
+        .stack_frame::<StackFrameDeferRegisterInvoke>()
+        .interface
+        .is_nil()
+    {
+        return raise_runtime_error(
+            ctx,
+            "runtime error: invalid memory address or nil pointer dereference",
+        );
+    }
     register(ctx, |ctx| {
         let frame = ctx.stack_frame::<StackFrameDeferRegisterInvoke>();
         let method = frame.interface.search(frame.method_name.clone());
-        let func = method.unwrap();
+        let func = method.unwrap_or_else(|| panic!("interface method not found"));
         let result_size = frame.result_size;
         let args = unsafe {
             let sp = ctx.stack_pointer() as *const u8;

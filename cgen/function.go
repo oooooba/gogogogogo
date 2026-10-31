@@ -556,7 +556,7 @@ func (ctx *Context) emitPhiAssign(dest string, instr *ssa.Phi) {
 		fmt.Fprintf(ctx.stream, "\tif (ctx->prev_func.func_ptr == %s) { %s = %s; } else\n",
 			ctx.latestNameMap[basicBlock.Preds[i]], dest, createValueRelName(edge))
 	}
-	fmt.Fprintln(ctx.stream, "\t{ assert(false); }")
+	fmt.Fprintln(ctx.stream, "\t{ fprintf(stderr, \"fatal error: invalid phi predecessor\\n\"); abort(); }")
 }
 
 func (ctx *Context) emitBlockPhis(basicBlock *ssa.BasicBlock) {

@@ -212,6 +212,10 @@ impl ChannelObject {
         self.is_closed = true;
     }
 
+    pub fn is_closed(&self) -> bool {
+        self.is_closed
+    }
+
     pub fn can_complete_send(&self, id: usize) -> bool {
         match self.channel_type {
             ChannelType::Buffered(ref channel) => channel.can_complete_send(),

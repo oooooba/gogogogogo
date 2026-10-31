@@ -231,7 +231,7 @@ func handleSharedDefinition(program *ssa.Program, assertedInterfaceTypes map[str
 		if createFunctionName(function) == "f_24_runtime_2E_mcall" {
 			return
 		}
-		fmt.Fprintf(ctx.stream, "FunctionObject %s(LightWeightThreadContext* ctx){ (void)ctx; assert(false); return (FunctionObject){.func={NULL},.env=NULL}; }", createFunctionName(function))
+		fmt.Fprintf(ctx.stream, "FunctionObject %s(LightWeightThreadContext* ctx){ return gox5_panic_unimplemented(ctx, %q); }", createFunctionName(function), createFunctionName(function))
 	})
 
 	ctx.emitSignature(nil)
@@ -271,7 +271,7 @@ func handleSharedDefinition(program *ssa.Program, assertedInterfaceTypes map[str
 			return
 		}
 		if isFunctionBodySkipped(function) {
-			fmt.Fprintf(ctx.stream, "%sFunctionObject %s(LightWeightThreadContext* ctx){ (void)ctx; assert(false); return (FunctionObject){.func={NULL},.env=NULL}; }\n", functionStorageClass(function), createFunctionName(function))
+			fmt.Fprintf(ctx.stream, "%sFunctionObject %s(LightWeightThreadContext* ctx){ return gox5_panic_unimplemented(ctx, %q); }\n", functionStorageClass(function), createFunctionName(function), createFunctionName(function))
 			ctx.emitReceiverBoundThunkGlue(function, functionStorageClass(function))
 			return
 		}

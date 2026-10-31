@@ -6,6 +6,7 @@ use crate::LightWeightThreadContext;
 use crate::StackFrameCommon;
 use crate::UserFunction;
 use crate::object::interface::Interface;
+use crate::object::string::StringObject;
 
 #[repr(C)]
 struct StackFramePanicRaise {
@@ -54,6 +55,24 @@ extern "C" fn panic_raise_body(ctx: &mut LightWeightThreadContext) -> FunctionOb
             }
         }
     }
+}
+
+pub(crate) fn raise_runtime_error(
+    ctx: &mut LightWeightThreadContext,
+    message: &str,
+) -> FunctionObject {
+    let data = Interface::new_runtime_error(ctx, message);
+    ctx.enter_panic(data);
+    FunctionObject::from_user_function(UserFunction::new(panic_raise_body))
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn gox5_panic_runtime_message(
+    ctx: &mut LightWeightThreadContext,
+    message: StringObject,
+) -> FunctionObject {
+    let message = String::from_utf8_lossy(message.as_bytes()).into_owned();
+    raise_runtime_error(ctx, &message)
 }
 
 #[unsafe(no_mangle)]

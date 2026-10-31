@@ -621,7 +621,7 @@ func (ctx *Context) emitConstant(cst *ssa.Const) {
 	} else if cst.Value == nil {
 		typeName := createTypeName(cst.Type())
 		valueName := createValueName(cst)
-		fmt.Fprintf(ctx.stream, "__attribute__((unused)) static const %s %s; // %s\n", typeName, valueName, cst)
+		fmt.Fprintf(ctx.stream, "__attribute__((unused)) static %s %s; // %s\n", typeName, valueName, cst)
 		return
 	} else {
 		if basic, ok := cst.Type().Underlying().(*types.Basic); ok && (basic.Kind() == types.String || basic.Kind() == types.UntypedString) {
@@ -633,7 +633,7 @@ func (ctx *Context) emitConstant(cst *ssa.Const) {
 
 	typeName := createTypeName(cst.Type())
 	valueName := createValueName(cst)
-	fmt.Fprintf(ctx.stream, "__attribute__((unused)) static const %s %s = %s; // %s\n", typeName, valueName, value, cst)
+	fmt.Fprintf(ctx.stream, "__attribute__((unused)) static %s %s = %s; // %s\n", typeName, valueName, value, cst)
 }
 
 func (ctx *Context) emitEqualFunctionDeclaration(typ types.Type) {

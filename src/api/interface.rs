@@ -6,6 +6,7 @@ use crate::FunctionObject;
 use crate::LightWeightThreadContext;
 use crate::ObjectPtr;
 use crate::StackFrameCommon;
+use crate::api::panic::raise_runtime_error;
 use crate::object::interface::Interface;
 use crate::object::string::StringObject;
 use crate::type_id::TypeId;
@@ -67,10 +68,21 @@ pub extern "C" fn gox5_interface_convert_to_concrete_type(
             slice::from_raw_parts(frame.interface.receiver().0 as *const u8, object_size)
         };
         dst.copy_from_slice(src);
+    } else if frame.success.is_null() {
+        let message = if frame.interface.is_nil() {
+            format!(
+                "interface conversion: interface {{}} is nil, not {}",
+                Interface::panic_type_name(&frame.to_type)
+            )
+        } else {
+            format!(
+                "interface conversion: interface {{}} is {}, not {}",
+                Interface::panic_type_name(frame.interface.type_id()),
+                Interface::panic_type_name(&frame.to_type)
+            )
+        };
+        return raise_runtime_error(ctx, &message);
     } else {
-        if frame.success.is_null() {
-            unimplemented!()
-        }
         dst.fill(0);
     }
 
@@ -108,10 +120,21 @@ pub extern "C" fn gox5_interface_convert_to_interface(
 
     if success {
         *frame.value.as_mut::<Interface>() = frame.interface.clone();
+    } else if frame.success.is_null() {
+        let message = if frame.interface.is_nil() {
+            format!(
+                "interface conversion: interface {{}} is nil, not {}",
+                Interface::panic_type_name(&frame.to_type)
+            )
+        } else {
+            format!(
+                "interface conversion: interface {{}} is {}, not {}",
+                Interface::panic_type_name(frame.interface.type_id()),
+                Interface::panic_type_name(&frame.to_type)
+            )
+        };
+        return raise_runtime_error(ctx, &message);
     } else {
-        if frame.success.is_null() {
-            unimplemented!()
-        }
         *frame.value.as_mut::<Interface>() = Interface::nil();
     }
 
@@ -138,11 +161,21 @@ pub extern "C" fn gox5_interface_invoke(ctx: &mut LightWeightThreadContext) -> F
     // frame is popped. Everything the frame is needed for has to be read out
     // first, because the copy allocates and may run the garbage collector,
     // which needs &mut LightWeightThreadContext.
-    let (next_func, result_pointer) = {
+    let (method, result_pointer, interface_is_nil) = {
         let frame = ctx.stack_frame::<StackFrameInterfaceInvoke>();
         let method = frame.interface.search(frame.method_name.clone());
         let result_pointer = frame.result_ptr.as_deref().map(|p| p as *const ());
-        (method.unwrap(), result_pointer)
+        (method, result_pointer, frame.interface.is_nil())
+    };
+    let next_func = match method {
+        Some(method) => method,
+        None if interface_is_nil => {
+            return raise_runtime_error(
+                ctx,
+                "runtime error: invalid memory address or nil pointer dereference",
+            );
+        }
+        None => return raise_runtime_error(ctx, "runtime error: interface method not found"),
     };
 
     let args_wc_ptr = unsafe {

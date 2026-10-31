@@ -4,6 +4,7 @@ use crate::FunctionObject;
 use crate::LightWeightThreadContext;
 use crate::ObjectPtr;
 use crate::StackFrameCommon;
+use crate::api::panic::raise_runtime_error;
 use crate::object::interface::Interface;
 use crate::object::map::MapObject;
 use crate::type_id::TypeId;
@@ -225,7 +226,7 @@ pub extern "C" fn gox5_map_set(ctx: &mut LightWeightThreadContext) -> FunctionOb
     let frame = ctx.stack_frame::<StackFrameMapSet>();
 
     if frame.map.is_null() {
-        unimplemented!()
+        return raise_runtime_error(ctx, "assignment to entry in nil map");
     }
 
     let mut map = frame.map.clone();

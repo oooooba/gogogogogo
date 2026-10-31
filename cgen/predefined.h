@@ -3,6 +3,7 @@
 #include <complex.h>
 #include <fcntl.h>
 #include <math.h>
+#include <stdarg.h>
 #include <stdatomic.h>
 #include <stdbool.h>
 #include <stddef.h>
@@ -400,10 +401,18 @@ typedef struct {
     void *pointer;
 } StackFrameCheckNonNil;
 
+FunctionObject gox5_panic_runtime_message(LightWeightThreadContext *ctx,
+                                          StringObject message);
+
 __attribute__((unused)) static FunctionObject
 gox5_check_non_nil(LightWeightThreadContext *ctx) {
     StackFrameCheckNonNil *frame = (void *)ctx->stack_pointer;
-    assert(frame->pointer != NULL);
+    if (frame->pointer == NULL) {
+        static const char message[] =
+            "runtime error: invalid memory address or nil pointer dereference";
+        return gox5_panic_runtime_message(
+            ctx, (StringObject){message, sizeof(message) - 1});
+    }
     *((void **)frame->result_ptr) = frame->pointer;
     ctx->stack_pointer = frame->common.prev_stack_pointer;
     return frame->common.resume_func;
@@ -703,6 +712,48 @@ typedef struct {
     Interface *result_ptr;
 } StackFramePanicRecover;
 DECLARE_RUNTIME_API(panic_recover, StackFramePanicRecover);
+
+__attribute__((unused)) static FunctionObject
+gox5_panic_runtime_error(LightWeightThreadContext *ctx,
+                         StackFrameCommon *next_frame, const char *format,
+                         ...) {
+    StackFramePanicRaise *frame = (StackFramePanicRaise *)next_frame;
+    frame->common.resume_func = (FunctionObject){0};
+    frame->common.prev_stack_pointer = ctx->stack_pointer;
+    frame->common.free_vars = NULL;
+    frame->common.deferred_list = NULL;
+    frame->common.frame_type = (TypeId){0};
+    frame->common.frame_size = sizeof(StackFramePanicRaise);
+
+    char message[512];
+    va_list args;
+    va_start(args, format);
+    vsnprintf(message, sizeof(message), format, args);
+    va_end(args);
+
+    ctx->stack_pointer = (StackFrameCommon *)frame;
+    return gox5_panic_runtime_message(ctx,
+                                      (StringObject){message, strlen(message)});
+}
+
+__attribute__((unused)) static FunctionObject
+gox5_panic_unimplemented(LightWeightThreadContext *ctx, const char *name) {
+    StackFrameCommon *frame = ctx->stack_pointer;
+    uintptr_t frame_size = frame->frame_size;
+    if (frame_size < sizeof(StackFramePanicRaise)) {
+        frame_size = sizeof(StackFramePanicRaise);
+    }
+    return gox5_panic_runtime_error(
+        ctx, (StackFrameCommon *)((char *)frame + frame_size),
+        "runtime error: call to unimplemented function %s", name);
+}
+
+__attribute__((unused)) static FunctionObject
+gox5_fatal_error(LightWeightThreadContext *ctx, const char *message) {
+    (void)ctx;
+    fprintf(stderr, "%s\n", message);
+    exit(1);
+}
 
 typedef struct {
     StackFrameCommon common;
