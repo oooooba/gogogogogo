@@ -287,12 +287,12 @@ func (ctx *Context) emitPackage(pkg *ssa.Package) {
 	ctx.traverseFunction(pkg, func(function *ssa.Function) {
 		if function.Blocks == nil {
 			if function.Pkg == nil {
-				fmt.Fprintf(ctx.stream, "%sFunctionObject %s(LightWeightThreadContext* ctx){ (void)ctx; assert(false); return (FunctionObject){.func={NULL},.env=NULL}; }\n", functionStorageClass(function), createFunctionName(function))
+				fmt.Fprintf(ctx.stream, "%sFunctionObject %s(LightWeightThreadContext* ctx){ return gox5_panic_unimplemented(ctx, %q); }\n", functionStorageClass(function), createFunctionName(function), createFunctionName(function))
 			}
 			return
 		}
 		if isFunctionBodySkipped(function) {
-			fmt.Fprintf(ctx.stream, "%sFunctionObject %s(LightWeightThreadContext* ctx){ (void)ctx; assert(false); return (FunctionObject){.func={NULL},.env=NULL}; }\n", functionStorageClass(function), createFunctionName(function))
+			fmt.Fprintf(ctx.stream, "%sFunctionObject %s(LightWeightThreadContext* ctx){ return gox5_panic_unimplemented(ctx, %q); }\n", functionStorageClass(function), createFunctionName(function), createFunctionName(function))
 			ctx.emitReceiverBoundThunkGlue(function, functionStorageClass(function))
 			return
 		}

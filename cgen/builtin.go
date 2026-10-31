@@ -580,8 +580,7 @@ func (ctx *Context) emitSpecialRuntimeCall(callee *ssa.Function, instr *ssa.Call
 				fmt.Fprintf(ctx.stream, "\treturn %s;\n", wrapInFunctionObject(createInstructionName(instr)))
 				return true
 			case "throw", "fatal":
-				fmt.Fprintf(ctx.stream, "assert(false);\n")
-				fmt.Fprintf(ctx.stream, "\treturn %s;\n", wrapInFunctionObject(createInstructionName(instr)))
+				fmt.Fprintf(ctx.stream, "return gox5_fatal_error(ctx, %q);\n", "fatal error: runtime "+originFuncName)
 				return true
 			}
 		}

@@ -6,6 +6,7 @@ use crate::LightWeightThreadContext;
 use crate::ObjectPtr;
 use crate::StackFrameCommon;
 use crate::UserFunction;
+use crate::api::panic::raise_runtime_error;
 use crate::object::channel::ChannelObject;
 use crate::object::channel::ReceiveStatus;
 use crate::type_id::TypeId;
@@ -177,6 +178,12 @@ struct StackFrameChannelClose {
 #[unsafe(no_mangle)]
 pub extern "C" fn gox5_channel_close(ctx: &mut LightWeightThreadContext) -> FunctionObject {
     let frame = ctx.stack_frame::<StackFrameChannelClose>();
+    if frame.channel.is_null() {
+        return raise_runtime_error(ctx, "close of nil channel");
+    }
+    if frame.channel.as_ref::<ChannelObject>().is_closed() {
+        return raise_runtime_error(ctx, "close of closed channel");
+    }
     let mut channel = frame.channel.clone();
     let channel = channel.as_mut::<ChannelObject>();
     let id = ctx.id();
@@ -231,6 +238,10 @@ struct StackFrameChannelSend {
 #[unsafe(no_mangle)]
 pub extern "C" fn gox5_channel_send(ctx: &mut LightWeightThreadContext) -> FunctionObject {
     let frame = ctx.stack_frame::<StackFrameChannelSend>();
+
+    if !frame.channel.is_null() && frame.channel.as_ref::<ChannelObject>().is_closed() {
+        return raise_runtime_error(ctx, "send on closed channel");
+    }
 
     let mut channel = frame.channel.clone();
     let channel = channel.as_mut::<ChannelObject>();
