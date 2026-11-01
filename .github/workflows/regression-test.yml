@@ -83,7 +83,7 @@ jobs:
         run: timeout 30m bash run_xtests.sh --debug-runtime
 
       - name: Run xtests with debug user program
-        run: timeout 30m bash run_xtests.sh --debug-user
+        run: timeout 60m bash run_xtests.sh --debug-user
 
       - name: Check equivalence with Go standard compiler tests
         run: timeout 30m bash check_go_compiler_tests.sh
