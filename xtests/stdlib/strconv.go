@@ -147,7 +147,9 @@ func main() {
 
 	chki("IntSize", strconv.IntSize, 64)
 
-	println("bad:", bad)
+	if bad > 0 {
+		panic(bad)
+	}
 }
 
 func unquoteOr(s string) string {

@@ -140,5 +140,7 @@ func main() {
 	_, rerr := pr2.Read(rbuf)
 	chkb("PipeClosedReadErr", rerr == io.EOF, true)
 
-	println("bad:", bad)
+	if bad > 0 {
+		panic(bad)
+	}
 }

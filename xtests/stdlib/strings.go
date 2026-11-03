@@ -40,7 +40,7 @@ func main() {
 	chki("IndexAnyNo", strings.IndexAny("hello", "xyz"), -1)
 	chki("IndexFunc", strings.IndexFunc("hello", func(r rune) bool { return r == 'l' }), 2)
 	chki("IndexFuncNo", strings.IndexFunc("hello", func(r rune) bool { return r == 'z' }), -1)
-	chki("LastIndex", strings.LastIndex("hello hello", "lo"), 8)
+	chki("LastIndex", strings.LastIndex("hello hello", "lo"), 9)
 	chki("LastIndexNo", strings.LastIndex("hello", "xyz"), -1)
 	chki("LastIndexEmpty", strings.LastIndex("hello", ""), 5)
 	chki("LastIndexByte", strings.LastIndexByte("hello hello", 'l'), 9)
@@ -85,7 +85,7 @@ func main() {
 	chk("Repeat", strings.Repeat("ab", 3), "ababab")
 	chk("RepeatEmpty", strings.Repeat("ab", 0), "")
 	chk("RepeatEmptySep", strings.Repeat("", 3), "")
-	chk("Replace", strings.Replace("aaa", "a", "b", 2), "bbaa")
+	chk("Replace", strings.Replace("aaa", "a", "b", 2), "bba")
 	chk("ReplaceAll", strings.ReplaceAll("aaa", "a", "b"), "bbb")
 	chk("ReplaceNo", strings.Replace("hello", "z", "x", -1), "hello")
 
@@ -139,5 +139,7 @@ func main() {
 	chk("Replacer", r.Replace("old a"), "new b")
 	chk("ReplacerAll", r.Replace("a old"), "b new")
 
-	println("bad:", bad)
+	if bad > 0 {
+		panic(bad)
+	}
 }

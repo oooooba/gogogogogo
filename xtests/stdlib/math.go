@@ -612,5 +612,7 @@ func main() {
 	chkint("LGsm05", lg1(-0.5), -1)
 	chkint("LGs55", lg1(5.5), 1)
 	chkint("LGsm25", lg1(-2.5), -1)
-	println("bad:", bad)
+	if bad > 0 {
+		panic(bad)
+	}
 }

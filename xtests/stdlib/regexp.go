@@ -101,9 +101,9 @@ func main() {
 	chk("Expand", string(re.ExpandString(nil, "($1)"+".($2)", "x=7", idx7)), "(x).(7)")
 
 	parts := re.Split("a=1,b=2", -1)
-	chki("SplitLen", len(parts), 2)
-	chk("Split0", parts[0], "a")
-	chk("Split1", parts[1], ",b=2")
+	chki("SplitLen", len(parts), 3)
+	chk("Split0", parts[0], "")
+	chk("Split1", parts[1], ",")
 	chk("SplitNo", re.Split("plain", -1)[0], "plain")
 	chki("SplitTLen", len(re.Split("a=1,b=2,c=3", 2)), 2)
 	chki("SplitNoSep", len(re.Split("plain", -1)), 1)
@@ -142,5 +142,7 @@ func main() {
 	chkb("PosixClass", re7.MatchString("Words"), true)
 	chkb("PosixClassNo", re7.MatchString("123"), false)
 
-	println("bad:", bad)
+	if bad > 0 {
+		panic(bad)
+	}
 }

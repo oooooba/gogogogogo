@@ -117,5 +117,7 @@ func main() {
 	chki("CSource_Perm3", cp[3], 2)
 	chki("CSource_Perm4", cp[4], 3)
 
-	println("bad:", bad)
+	if bad > 0 {
+		panic(bad)
+	}
 }

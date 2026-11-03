@@ -54,5 +54,7 @@ func main() {
 	fmt.Println(1, 2, 3)
 	fmt.Println("done", 3.14, true)
 
-	println("bad:", bad)
+	if bad > 0 {
+		panic(bad)
+	}
 }

@@ -74,5 +74,7 @@ func main() {
 	chk("Canceled", context.Canceled.Error(), "context canceled")
 	chk("DeadlineExceeded", context.DeadlineExceeded.Error(), "context deadline exceeded")
 
-	println("bad:", bad)
+	if bad > 0 {
+		panic(bad)
+	}
 }

@@ -48,5 +48,7 @@ func main() {
 	name3 := runtime.FuncForPC(v3.Pointer()).Name()
 	check(&bad, "NameBeta", name3 == "main.beta")
 
-	println("bad:", bad)
+	if bad > 0 {
+		panic(bad)
+	}
 }

@@ -242,5 +242,7 @@ func main() {
 	chkint("IsNaN2", b2i(cmplx.IsNaN(1+1i)), 0)
 	chkint("IsNaN3", b2i(cmplx.IsNaN(cmplx.Sqrt(-1))), 0)
 
-	println("bad:", bad)
+	if bad > 0 {
+		panic(bad)
+	}
 }

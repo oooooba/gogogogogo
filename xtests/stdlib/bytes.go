@@ -273,5 +273,7 @@ func main() {
 	}
 	chki("FieldsSeqCount", fc, 2)
 
-	println("bad:", bad)
+	if bad > 0 {
+		panic(bad)
+	}
 }

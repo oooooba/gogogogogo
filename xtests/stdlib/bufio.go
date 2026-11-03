@@ -165,5 +165,7 @@ func main() {
 	chk("ErrInvalidUnreadRune", bufio.ErrInvalidUnreadRune.Error(), "bufio: invalid use of UnreadRune")
 	chk("ErrNegativeCount", bufio.ErrNegativeCount.Error(), "bufio: negative count")
 
-	println("bad:", bad)
+	if bad > 0 {
+		panic(bad)
+	}
 }
